@@ -1,0 +1,61 @@
+# users/views.py
+from drf_spectacular.utils import extend_schema
+from rest_framework.generics import ListAPIView
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status, permissions
+
+from apps.users.services import UserService
+from apps.users.serializers import SellerCreateSerializer, UserResponseSerializer
+from apps.users.selectors import UserSelector
+from apps.users.serializers import UserSerializer
+
+
+@extend_schema(
+    tags=['User'],
+    summary="- Seller yaratish uchun API",
+)
+class UsersListView(ListAPIView):
+    queryset = UserSelector.list_users()
+    serializer_class = UserSerializer
+    permission_classes = (permissions.AllowAny,)
+    pagination_class = None
+
+
+
+
+@extend_schema(
+    tags=['User'],
+    summary="- ID orqali bitta Userni ko'rish uchun API.",
+)
+class UsersDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_class = UserSerializer
+
+    def get(self, request, pk):
+        user = UserSelector.get_user_by_id(user_id=pk)
+        serializer = self.serializer_class(user)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=['User'],
+    summary="- Seller yaratish uchun API",
+)
+class SellerCreateAPIView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_classes = SellerCreateSerializer
+
+    def post(self, request):
+        serializer = self.serializer_classes(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            user = UserService.create_user(serializer.validated_data)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=400)
+
+        return Response(
+            UserResponseSerializer(user).data,
+            status=status.HTTP_201_CREATED
+        )
