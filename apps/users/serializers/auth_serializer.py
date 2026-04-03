@@ -14,13 +14,6 @@ class AdminLoginSerializer(serializers.Serializer):
     phone_number = serializers.CharField()
     password = serializers.CharField(write_only=True)
 
-    def validate_password(self, value):
-        try:
-            validate_password(value)
-        except DjangoValidationError as e:
-            raise serializers.ValidationError(e.messages)
-        return value
-
     def validate(self, attrs):
         phone_number = attrs.get('phone_number')
         password = attrs.get('password')

@@ -51,7 +51,7 @@ CACHES = {
 
 # EXPIRE_TIME = 3
 #
-# FRONTEND_URL = config("FRONTEND_URL")
+FRONTEND_URL = config("FRONTEND_URL")
 #
 # DOMAIN = config("DOMAIN")
 #
