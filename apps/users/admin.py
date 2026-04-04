@@ -10,10 +10,10 @@ class UserAdmin(BaseUserAdmin):
 
     ordering = ("-created_at",)
     list_display = (
-        "id", "full_name", "phone_number", "email", "role", "is_active",
+        "id", "full_name", "phone_number", "email", "is_active",
     )
     list_filter = (
-        "role", "is_staff", "is_superuser", "is_active", "created_at",
+        "is_staff", "is_superuser", "is_active", "created_at",
     )
     search_fields = (
         "phone_number", "email", "full_name",
@@ -27,7 +27,7 @@ class UserAdmin(BaseUserAdmin):
             "fields": ("full_name", "email")
         }),
         (_("Role & Permissions"), {
-            "fields": ("role", "is_active", "is_staff", "is_superuser")
+            "fields": ("is_active", "is_staff", "is_superuser")
         }),
         (_("Important dates"), {
             "fields": ("last_login", "created_at", "updated_at")
@@ -38,7 +38,7 @@ class UserAdmin(BaseUserAdmin):
         (None, {
             "classes": ("wide",),
             "fields": (
-                "full_name", "phone_number", "email", "role", "password1", "password2",
+                "full_name", "phone_number", "email", "password1", "password2",
                 "is_staff", "is_superuser", "is_active",
             ),
         }),

@@ -25,4 +25,6 @@ DEFAULT_APPS = [
 LOCAL_APPS = [
     "apps.users",
     "apps.common",
+    "apps.store",
+    "apps.contract",
 ]
