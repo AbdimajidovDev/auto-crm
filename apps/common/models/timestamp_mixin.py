@@ -7,3 +7,4 @@ class TimestampMixin(models.Model):
 
     class Meta:
         abstract = True
+        # db_table = "timestamp_mixin"
