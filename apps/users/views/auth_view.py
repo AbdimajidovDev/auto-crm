@@ -35,7 +35,7 @@ class AdminLoginAPIView(APIView):
             response = Response({
                 "success": True,
                 "user_id": user.id,
-                "role": user.role,
+                # "role": user.role,
                 "full_name": user.full_name,
                 "phone_number": user.phone_number,
             }, status=status.HTTP_200_OK)
