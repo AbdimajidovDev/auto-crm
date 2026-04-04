@@ -13,11 +13,6 @@ from apps.users.models.managers import UserManager
 
 class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
 
-    class UserRole(models.TextChoices):
-        SUPER_USER = "su", "Super User"
-        SELLER = "s", "Seller"
-
-    role = models.CharField(max_length=2, choices=UserRole.choices, default=UserRole.SELLER)
     full_name = models.CharField(max_length=128, null=True)
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
     email = models.EmailField(unique=True, db_index=True, blank=True, null=True)
@@ -34,15 +29,20 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
         super().clean()
         errors = {}
 
-        if self.role  == self.UserRole.SUPER_USER:
+        if self.is_superuser and not self.email:
             if not self.email:
-                errors["email"] = "Super Admin uchun email majburiy."
+                errors["email"] = "Superuser uchun email majburiy."
 
         if errors:
             raise ValidationError(errors)
 
     def __str__(self):
         return f"{self.full_name} - ({self.phone_number})"
+
+    class Meta:
+        # db_table = "user"
+        verbose_name = "User"
+        verbose_name_plural = "Users"
 
     def get_tokens(self):
         refresh = RefreshToken.for_user(self)

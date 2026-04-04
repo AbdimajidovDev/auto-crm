@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ("id", "role", "full_name", "phone_number", "email", "is_active", "created_at", "updated_at")
+        fields = ("id", "full_name", "phone_number", "email", "is_active", "created_at", "updated_at")
 
 
 class SellerCreateSerializer(serializers.Serializer):
@@ -42,4 +42,4 @@ class SellerCreateSerializer(serializers.Serializer):
 class UserResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "phone_number", "full_name", "role"]
+        fields = ["id", "phone_number", "full_name"]
