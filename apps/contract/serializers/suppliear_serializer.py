@@ -1,7 +1,11 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
+
 from apps.contract.models import Supplier
 
 from django.utils import translation
+
+from apps.users.validations import check_valid_phone
 
 
 class SupplierGetSerializer(serializers.ModelSerializer):
@@ -53,7 +57,18 @@ class SupplierCreateSerializer(serializers.ModelSerializer):
             "address_uz_cyrl",
         ]
 
-    def validate_inn(self, value):
-        if Supplier.objects.filter(inn=value).exists():
+    def validate_inn(self, inn):
+        if Supplier.objects.filter(inn=inn).exists():
             raise serializers.ValidationError("Supplier with this INN already exists")
-        return value
+
+        if not inn.isdigit():
+            raise ValidationError("Incorrect INN")
+
+        return inn
+
+    def validate(self, data):
+        phone_number = data.get('phone_number')
+
+        check_valid_phone(phone_number)
+        return data
+

@@ -1,7 +1,7 @@
 from django.utils import translation
 from rest_framework import serializers
 from apps.store.models import Store
-
+from apps.users.validations import check_valid_phone
 
 
 class StoreSellerSerializer(serializers.Serializer):
@@ -42,8 +42,11 @@ class StoreCreateSerializer(serializers.Serializer):
     longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=False)
 
     def validate(self, attrs):
+        phone_number = attrs.get("phone_number")
         lat = attrs.get("latitude")
         lon = attrs.get("longitude")
+
+        check_valid_phone(phone_number)
 
         if (lat is None) != (lon is None):
             raise serializers.ValidationError(
