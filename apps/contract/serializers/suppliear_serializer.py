@@ -40,6 +40,14 @@ class SupplierGetSerializer(serializers.ModelSerializer):
     #
 
 
+class SupplierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Supplier
+        fields = (
+            'id', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl',
+             'address_uz', 'address_uz_cyrl', 'phone_number', 'inn', 'is_active',
+        )
+
 class SupplierCreateSerializer(serializers.ModelSerializer):
 
     class Meta:

@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404
 from apps.contract.models import Supplier
 from apps.contract.serializers import (
     SupplierCreateSerializer,
-    SupplierGetSerializer,
+    SupplierGetSerializer, SupplierSerializer,
 )
 from apps.contract.services import SupplierService
 
@@ -67,7 +67,7 @@ class SupplierDetailAPIView(APIView):
     )
     def get(self, request, pk):
         supplier = get_object_or_404(Supplier, pk=pk)
-        serializer = SupplierGetSerializer(supplier, context={"request": request})
+        serializer = SupplierSerializer(supplier, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @extend_schema(
