@@ -34,4 +34,4 @@ class StoreUserService:
         if StoreUser.objects.filter(user=user, store=store).exists():
             raise ValidationError("User allaqachon ushbu storega biriktirilgan")
 
-        return StoreUserRepository.create(user=user, store=store)
+        return StoreUserRepository.create_store_user(user=user, store=store)

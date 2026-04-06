@@ -38,27 +38,14 @@ class StoreCreateAPIView(APIView):
     def post(self, request):
 
         serializer = self.serializer_class(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        try:
-            store = StoreService.create_store_with_owner(
+        if serializer.is_valid(raise_exception=True):
+            store = StoreService.create_store(
                 user=request.user,
                 data=serializer.validated_data
             )
 
-        except ValidationError as e:
-            return Response({"detail": e.message}, status=400)
-
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=400)
-
-        # except Exception as e:
-        #     return Response(
-        #         {"detail": str(e)},
-        #         status=status.HTTP_400_BAD_REQUEST
-        #     )
-
-        return Response(
-            StoreResponseSerializer(store).data,
-            status=status.HTTP_201_CREATED
-        )
+            return Response(
+                StoreResponseSerializer(store).data,
+                status=status.HTTP_201_CREATED
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

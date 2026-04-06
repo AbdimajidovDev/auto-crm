@@ -15,10 +15,11 @@ from apps.store.services import StoreUserService
 )
 class StoreUserAttachAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    serializer_class = StoreUserAssignSerializer
 
     def post(self, request):
 
-        serializer = StoreUserAssignSerializer(data=request.data)
+        serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         store_user = StoreUserService.attach_user(
