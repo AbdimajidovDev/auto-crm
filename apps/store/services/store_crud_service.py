@@ -1,28 +1,24 @@
 from django.db import transaction
-from django.core.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError
 
-from apps.store.repositories import StoreRepository, StoreUserRepository
-from apps.store.models import StoreUser
+from apps.store.repositories import StoreRepository
 
 
 class StoreService:
 
     @staticmethod
     @transaction.atomic
-    def create_store_with_owner(*, user, data: dict):
+    def create_store(*, user, data: dict):
 
-        # 🔴 BUSINESS VALIDATION
+        # 🔴 AUTH
         if not user.is_authenticated:
             raise ValidationError("Foydalanuvchi autentifikatsiyadan o'tmagan")
 
-        # 🔴 STORE CREATE
-        store = StoreRepository.create_store(**data)
+        # 🔴 ONLY SUPERUSER
+        if not user.is_superuser:
+            raise ValidationError("Faqat tizim egasi do‘kon yarata oladi")
 
-        # 🔴 OWNER ASSIGN
-        StoreUserRepository.create_store_user(
-            user=user,
-            store=store,
-            role=StoreUser.Role.OWNER
-        )
+        # 🔴 CREATE STORE
+        store = StoreRepository.create_store(**data)
 
         return store
