@@ -1,4 +1,5 @@
 from django.contrib import admin
+from modeltranslation.admin import TranslationAdmin
 
 from apps.store.models import Store, StoreUser
 
@@ -7,9 +8,9 @@ from apps.store.models import Store, StoreUser
 
 
 @admin.register(Store)
-class StoreAdmin(admin.ModelAdmin):
+class StoreAdmin(TranslationAdmin):
     list_display = ('name', 'phone_number', "type", "address", "latitude", "longitude")
-    search_fields = ('name', "phone_number")
+    search_fields = ('name_uz', 'name_uz_cyrl', "phone_number")
     list_filter = ('type',)
 
 

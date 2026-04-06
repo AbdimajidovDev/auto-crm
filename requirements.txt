@@ -6,3 +6,4 @@ djangorestframework-simplejwt==5.5.1
 phonenumbers==9.0.27
 django-cors-headers==4.9.0
 django-jazzmin==3.0.4
+django-modeltranslation==0.20.2

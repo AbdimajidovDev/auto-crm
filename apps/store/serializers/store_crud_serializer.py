@@ -1,3 +1,4 @@
+from django.utils import translation
 from rest_framework import serializers
 from apps.store.models import Store
 
@@ -8,7 +9,9 @@ class StoreSellerSerializer(serializers.Serializer):
     full_name = serializers.CharField(source="user.full_name")
     phone_number = serializers.CharField(source="user.phone_number")
 
+
 class StoreListSerializer(serializers.ModelSerializer):
+
     sellers = serializers.SerializerMethodField()
 
     class Meta:
@@ -27,9 +30,11 @@ class StoreListSerializer(serializers.ModelSerializer):
 
 
 class StoreCreateSerializer(serializers.Serializer):
-    name = serializers.CharField(max_length=255)
+    name_uz = serializers.CharField(max_length=255)
+    name_uz_cyrl = serializers.CharField(max_length=255)
     phone_number = serializers.CharField(max_length=20)
-    address = serializers.CharField()
+    address_uz = serializers.CharField()
+    address_uz_cyrl = serializers.CharField()
 
     type = serializers.ChoiceField(choices=Store.StoreType.choices)
 

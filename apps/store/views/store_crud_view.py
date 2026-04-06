@@ -23,7 +23,7 @@ class StoreListAPIView(APIView):
 
     def get(self, request):
         shops = StoreSelector.store_list()
-        serializer = self.serializer_classes(shops, many=True)
+        serializer = self.serializer_classes(shops, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 

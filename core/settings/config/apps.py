@@ -6,14 +6,12 @@ THIRD_PARTY_APPS = [
     'rest_framework_simplejwt',
     # 'rest_framework_simplejwt.token_blacklist',
     # 'django_filters',
-    # "parler",
-    # "parler_rest",
     # 'django_celery_beat',
 ]
 
 DEFAULT_APPS = [
     'jazzmin',
-    # # 'modeltranslation',
+    'modeltranslation',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
