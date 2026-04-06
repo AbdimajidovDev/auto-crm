@@ -1,6 +1,8 @@
 # users/serializers.py
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
+
+from apps.store.models import Store
 from apps.users.models import User
 from apps.users.validations import check_valid_phone
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -17,6 +19,7 @@ class SellerCreateSerializer(serializers.Serializer):
     phone_number = serializers.CharField(write_only=True)
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
+    store_id = serializers.IntegerField(write_only=True)
 
     def validate_password(self, value):
         try:
@@ -40,6 +43,21 @@ class SellerCreateSerializer(serializers.Serializer):
 
 
 class UserResponseSerializer(serializers.ModelSerializer):
+    store = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["id", "phone_number", "full_name"]
+        fields = ["id", "phone_number", "full_name", "store"]
+
+    def get_store(self, obj):
+        store_link = (
+            obj.store_links
+            .filter(is_active=True)
+            .select_related("store")
+            .first()
+        )
+
+        if not store_link:
+            return None
+
+        return store_link.store.name

@@ -51,7 +51,10 @@ class SellerCreateAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         try:
-            user = UserService.create_user(serializer.validated_data)
+            user = UserService.create_seller_with_store(
+                request_user=request.user,
+                data=serializer.validated_data
+            )
         except ValueError as e:
             return Response({"detail": str(e)}, status=400)
 
