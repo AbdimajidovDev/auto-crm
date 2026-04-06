@@ -6,5 +6,5 @@ urlpatterns = [
     path('', StoreListAPIView.as_view()),
     path('create/', StoreCreateAPIView.as_view()),
 
-    path('user-attach/', StoreUserAttachAPIView.as_view()),
+    # path('user-attach/', StoreUserAttachAPIView.as_view()),
 ]
