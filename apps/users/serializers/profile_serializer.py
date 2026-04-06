@@ -10,11 +10,11 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "full_name", "phone_number", "email", "history")
+        fields = ("id", "is_superuser", "full_name", "phone_number", "email", "history")
 
         extra_kwargs = {
             "id": {"read_only": True},
-            # "role": {'read_only': True},
+            "is_superuser": {'read_only': True},
             "phone_number": {'read_only': True},
             "email": {'read_only': True},
         }
