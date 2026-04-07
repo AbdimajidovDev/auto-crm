@@ -7,8 +7,8 @@ from apps.products.views.category_crud_view import (
 )
 from apps.products.views.product_crud_view import (
     ProductCreateAPIView,
-    ProductByBarcodeAPIView,
     ProductListAPIView,
+    BatchByBarcodeAPIView, ProductDetailAPIView,
 )
 
 
@@ -22,5 +22,7 @@ urlpatterns = [
     # Product
     path("", ProductListAPIView.as_view()),
     path("create/", ProductCreateAPIView.as_view()),
-    path("barcode/<str:barcode>/", ProductByBarcodeAPIView.as_view()),
+    path("<int:pk>/", ProductDetailAPIView.as_view()),
+
+    path("barcode/<str:barcode>/", BatchByBarcodeAPIView.as_view()),
 ]
