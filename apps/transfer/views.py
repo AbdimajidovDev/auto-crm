@@ -4,8 +4,23 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.core.exceptions import ValidationError
 
-from apps.transfer.serializers import TransferCreateSerializer
+from apps.transfer.models import StockTransfer
+from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer
 from apps.transfer.services import TransferService
+
+
+@extend_schema(
+    tags=["Transfer"],
+    summary="- Transfer yaratish.",
+)
+class TransferListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = TransferListSerializer
+
+    def get(self, request):
+        transfers = StockTransfer.objects.all()
+        serializer = self.serializer_class(transfers, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @extend_schema(

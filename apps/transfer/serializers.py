@@ -6,6 +6,17 @@ from apps.products.models import ProductBatch, Product
 from rest_framework import serializers
 from apps.store.models import Store
 from apps.products.models import ProductBatch
+from apps.transfer.models import StockTransfer
+
+
+class TransferListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockTransfer
+        fields = (
+            'id', 'from_store', 'to_store', 'quantity', 'purchase_price', 'selling_price',
+            'status', 'created_by', 'approved_by', 'approved_at'
+        )
+
 
 
 class TransferCreateSerializer(serializers.Serializer):
