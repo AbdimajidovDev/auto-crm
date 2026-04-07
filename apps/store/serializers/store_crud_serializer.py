@@ -61,3 +61,18 @@ class StoreResponseSerializer(serializers.ModelSerializer):
         model = Store
         fields = "__all__"
 
+
+class StoreDetailSerializer(serializers.ModelSerializer):
+    sellers = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Store
+        fields = (
+            'id', 'name_uz', 'name_uz_cyrl', 'phone_number', 'address_uz', 'address_uz_cyrl',
+            'type', 'latitude', 'longitude', 'is_active', 'sellers'
+        )
+
+    def get_sellers(self, obj):
+        store_users = obj.user_links.filter(is_active=True).select_related("user")
+
+        return StoreSellerSerializer(store_users, many=True).data

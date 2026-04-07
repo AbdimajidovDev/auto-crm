@@ -1,7 +1,13 @@
+from rest_framework.generics import get_object_or_404
+
 from apps.store.models import StoreUser, Store
 
 
 class StoreSelector:
+
+    @staticmethod
+    def get_store(pk):
+        return get_object_or_404(Store, pk=pk)
 
     @staticmethod
     def user_has_store(user):
