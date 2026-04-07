@@ -1,5 +1,7 @@
+from django.db.models import ProtectedError
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -68,7 +70,18 @@ class CategoryDetailAPIView(APIView):
             return Response(self.serializer_class(obj).data, status=201)
         return  Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    # def delete(self, request, pk):
-    #     category = get_object_or_404(Category, pk=pk)
-    #     category.delete()
-    #     return Response(status=status.HTTP_204_NO_CONTENT)
+    @extend_schema(
+        tags=["Category"],
+        summary="- Kategoriyani o'chirish.",
+    )
+    def delete(self, request, pk):
+        category = get_object_or_404(Category, pk=pk)
+        try:
+            category.delete()
+        except ProtectedError:
+            raise ValidationError({
+                "detail": "Bu categoryga bog‘langan productlar mavjud. Avval ularni o‘chiring yoki productni boshqa categoryga biriktiring!"
+            })
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
