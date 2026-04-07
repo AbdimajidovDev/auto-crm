@@ -19,3 +19,11 @@ class CategorySerializer(serializers.ModelSerializer):
         fields = (
             'id', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl', 'image'
         )
+
+
+class CategoryDetailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = (
+            'id', 'slug', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl', 'image'
+        )
