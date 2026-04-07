@@ -1,30 +1,62 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 
-from apps.products.models import Product
-from apps.products.serializers.category_crud_serializer import CategorySerializer
+from apps.products.models import Product, ProductImage, ProductBatch
 
+
+
+class ProductImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductImage
+        fields = ('image', 'product')
+
+
+class ProductBatchSerializer(serializers.ModelSerializer):
+    store_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductBatch
+        fields = (
+            'id', 'product', 'store', 'store_name', 'quantity',
+            'purchase_price', 'selling_price', 'barcode', 'shtrix_code'
+        )
+
+    def get_store_name(self, obj):
+        return obj.store.name if obj.store else None
 
 
 class ProductListSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Product
-        fields = "__all__"
+    images = ProductImageSerializer(many=True, read_only=True)
+    category_name = serializers.SerializerMethodField()
+    batches = ProductBatchSerializer(many=True, read_only=True)
 
-
-class ProductCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = (
-            'id', 'category', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl',
-            'quantity', 'price', 'image',  'created_at'
+            'id', 'category', 'category_name', 'name', 'description', 'is_active', 'created_at', 'images', 'batches'
         )
-        # exclude = ["barcode", "shtrix_code"]
 
-    def validate(self, data):
-        if data.get("price") <= 0:
-            raise serializers.ValidationError("Invalid price")
+    def get_category_name(self, obj):
+        return obj.category.name if obj.category else None
 
-        return data
+
+class ProductCreateSerializer(serializers.ModelSerializer):
+    images = serializers.ListField(
+        child=serializers.ImageField(),
+        write_only=True,
+        required=False
+    )
+
+    class Meta:
+        model = Product
+        fields = (
+            'id', 'category', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl', 'images'
+        )
+
+    def validate_images(self, images):
+        if len(images) > 7:
+            raise ValidationError("Max 7 images allowed")
+
 
 
 
@@ -34,8 +66,9 @@ class ProductGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = (
-            "id", "name", "description", "price", "category", "category_name", "barcode", "shtrix_code", "image", "created_at"
+            "id", "name", "description", "category", "category_name", "created_at"
         )
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category else None
+
