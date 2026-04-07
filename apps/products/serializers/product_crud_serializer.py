@@ -44,20 +44,53 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(
         child=serializers.ImageField(),
         write_only=True,
-        required=False
+        required=False,
+        default=list
     )
 
     class Meta:
         model = Product
         fields = (
-            'id', 'category', 'name_uz', 'name_uz_cyrl', 'description_uz', 'description_uz_cyrl', 'images'
+            'id',
+            'category',
+            'name_uz',
+            'name_uz_cyrl',
+            'description_uz',
+            'description_uz_cyrl',
+            'images'
         )
+
+    def to_internal_value(self, data):
+        """
+        🔥 UNIVERSAL PARSER:
+        images, images[], images[0] hammasini ushlaydi
+        """
+        files = []
+
+        # DRF QueryDict bo‘lsa
+        if hasattr(data, "getlist"):
+            files.extend(data.getlist("images"))
+            files.extend(data.getlist("images[]"))
+
+        # fallback (images[0], images[1] ...)
+        for key in data:
+            if key.startswith("images["):
+                files.append(data.get(key))
+
+        if files:
+            data.setlist("images", files)
+
+        return super().to_internal_value(data)
 
     def validate_images(self, images):
         if len(images) > 7:
-            raise ValidationError("Max 7 images allowed")
+            raise serializers.ValidationError("Max 7 images allowed")
 
+        for img in images:
+            if img.size > 5 * 1024 * 1024:
+                raise serializers.ValidationError("Image size must be < 5MB")
 
+        return images
 
 
 class ProductGetSerializer(serializers.ModelSerializer):
