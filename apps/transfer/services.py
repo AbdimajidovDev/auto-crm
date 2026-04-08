@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
-from django.core.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError
 
 from apps.products.models import ProductBatch
 from apps.transfer.models import StockTransfer
