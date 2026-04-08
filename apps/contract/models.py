@@ -28,3 +28,55 @@ class Supplier(TimestampMixin):
 
     def __str__(self):
         return self.name
+
+
+
+class StockEntry(TimestampMixin):
+    supplier = models.ForeignKey(
+        "contract.Supplier",
+        on_delete=models.PROTECT,
+        related_name="entries"
+    )
+
+    store = models.ForeignKey(
+        "store.Store",
+        on_delete=models.PROTECT,
+        related_name="entries"
+    )
+
+    created_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True
+    )
+
+    class Meta:
+        db_table = "stock_entry"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"#{self.pk}. {self.supplier} - {self.store}"
+
+
+class StockEntryItem(models.Model):
+    entry = models.ForeignKey(
+        StockEntry,
+        on_delete=models.CASCADE,
+        related_name="items"
+    )
+
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT
+    )
+
+    quantity = models.PositiveIntegerField()
+
+    purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
+    selling_price = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        db_table = "stock_entry_item"
+
+    def __str__(self):
+        return f"{self.entry.supplier.name} - {self.product.name}"

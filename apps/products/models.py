@@ -24,7 +24,7 @@ class Category(TimestampMixin):
 
     class Meta:
         db_table = 'category'
-        ordering = ['name']
+        # ordering = ['name']
         verbose_name_plural = 'Categories'
 
 
@@ -40,7 +40,7 @@ class Product(TimestampMixin):
 
     class Meta:
         db_table = 'product'
-        ordering = ['name']
+        # ordering = ['name']
 
 
 class ProductImage(models.Model):

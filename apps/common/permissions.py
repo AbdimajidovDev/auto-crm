@@ -7,14 +7,16 @@ class IsStoreMember(BasePermission):
         return request.store_user is not None
 
 
-class IsStoreOwner(BasePermission):
+class IsSuperUser(BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.is_superuser
 
 
 class IsSeller(BasePermission):
     def has_permission(self, request, view):
+        user = request.store_user
         return (
-            request.store_user
-            and request.store_user.role in ["m", "s"]
+            user
+            and user.is_authenticated
+            and user.role in ["m", "s"]
         )
