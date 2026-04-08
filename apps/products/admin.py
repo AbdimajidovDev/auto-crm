@@ -1,9 +1,14 @@
 from django.contrib import admin
+from modeltranslation.admin import TranslationAdmin
 
-from apps.products.models import Product, ProductImage, ProductBatch
+from apps.products.models import Product, ProductImage, ProductBatch, Category
 
 
 # Register your models here.
+
+@admin.register(Category)
+class CategoryAdmin(TranslationAdmin):
+    list_display = ('id', 'slug', 'name', 'description')
 
 
 class ProductImageInline(admin.StackedInline):
@@ -12,7 +17,7 @@ class ProductImageInline(admin.StackedInline):
 
 
 @admin.register(Product)
-class ProductListAdmin(admin.ModelAdmin):
+class ProductListAdmin(TranslationAdmin):
     list_display = ('id', 'name', 'category', 'created_at')
     search_fields = ('name',)
     list_filter = ('category',)
