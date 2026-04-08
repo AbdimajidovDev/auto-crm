@@ -1,10 +1,8 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
-from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.common.permissions import IsStoreOwner
 from apps.store.serializers import StoreUserAssignSerializer
 from apps.store.services import StoreUserService
 
