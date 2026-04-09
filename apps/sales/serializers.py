@@ -48,6 +48,7 @@ class PaymentInputSerializer(serializers.Serializer):
 
         if amount <= 0:
             raise ValidationError("To'lov ijoboy bo'lishi kerak")
+        return data
 
 
 class SaleCreateSerializer(serializers.Serializer):
