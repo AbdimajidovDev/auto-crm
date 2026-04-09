@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.products.models import ProductBatch
+from apps.products.utils.barcode_utility import generate_unique_barcode, generate_barcode_image
 from apps.transfer.models import StockTransfer
 
 
@@ -60,7 +61,7 @@ class TransferService:
             })
 
         # 🔻 deduct
-        ProductBatch.objects.filter(id=source_batch.id).update(
+        ProductBatch.objects.filter(id=source_batch.pk).update(
             quantity=F("quantity") - transfer.quantity
         )
 
@@ -72,19 +73,23 @@ class TransferService:
 
         if target_batch:
             # 🔥 MERGE + PRICE UPDATE
-            ProductBatch.objects.filter(id=target_batch.id).update(
+            ProductBatch.objects.filter(id=target_batch.pk).update(
                 quantity=F("quantity") + transfer.quantity,
                 purchase_price=transfer.purchase_price,
                 selling_price=transfer.selling_price
             )
         else:
             # ➕ CREATE
+            barcode = generate_unique_barcode()
+
             ProductBatch.objects.create(
                 product=transfer.product,
                 store=transfer.to_store,
                 quantity=transfer.quantity,
                 purchase_price=transfer.purchase_price,
                 selling_price=transfer.selling_price,
+                barcode=barcode,
+                shtrix_code =generate_barcode_image(barcode)
             )
 
         # ✅ status update
@@ -94,6 +99,21 @@ class TransferService:
         transfer.save()
 
         return transfer
+
+    @staticmethod
+    def reject_transfer(*, transfer_id, user):
+        transfer = StockTransfer.objects.get(id=transfer_id)
+
+        if transfer.status != StockTransfer.Status.PENDING:
+            raise ValidationError("Transfer allaqachon yakunlangan")
+
+        transfer.status = StockTransfer.Status.REJECTED
+        transfer.approved_by = user
+        transfer.approved_at = timezone.now()
+        transfer.save()
+
+        return transfer
+
 
     # 🔹 2. APPROVE (CORE LOGIC)
     # @staticmethod
@@ -151,17 +171,3 @@ class TransferService:
     #     return transfer
 
     # 🔹 3. REJECT
-
-    @staticmethod
-    def reject_transfer(*, transfer_id, user):
-        transfer = StockTransfer.objects.get(id=transfer_id)
-
-        if transfer.status != StockTransfer.Status.PENDING:
-            raise ValidationError("Transfer allaqachon yakunlangan")
-
-        transfer.status = StockTransfer.Status.REJECTED
-        transfer.approved_by = user
-        transfer.approved_at = timezone.now()
-        transfer.save()
-
-        return transfer

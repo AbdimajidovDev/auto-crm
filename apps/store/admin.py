@@ -9,13 +9,13 @@ from apps.store.models import Store, StoreUser
 
 @admin.register(Store)
 class StoreAdmin(TranslationAdmin):
-    list_display = ('name', 'phone_number', "type", "address", "latitude", "longitude")
+    list_display = ('id', 'name', 'phone_number', "type", "address", "latitude", "longitude")
     search_fields = ('name_uz', 'name_uz_cyrl', "phone_number")
     list_filter = ('type',)
 
 
 @admin.register(StoreUser)
 class StoreUserAdmin(admin.ModelAdmin):
-    list_display = ("role", "user", "store", "is_active", "created_at")
+    list_display = ('id', "role", "user", "store", "is_active", "created_at")
     list_filter = ('is_active', "role")
     search_fields = ('user__full_name', 'user__email', 'user__phone_number', 'store__name')

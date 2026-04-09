@@ -9,7 +9,7 @@ from apps.contract.models import Supplier, StockEntry, StockEntryItem
 
 @admin.register(Supplier)
 class SupplierAdmin(TranslationAdmin):
-    list_display = ('name', 'phone_number', "inn", "address", "is_active")
+    list_display = ('id', 'name', 'phone_number', "inn", "address", "is_active")
     list_filter = ('is_active',)
     search_fields = ('name', "phone_number")
 
