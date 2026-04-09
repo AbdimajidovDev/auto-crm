@@ -1,0 +1,65 @@
+from django.db import models
+from django.conf import settings
+
+from apps.common.models.timestamp_mixin import TimestampMixin
+
+
+class Sale(models.Model):
+
+    class Status(models.TextChoices):
+        PAID = "paid", "Paid"
+        PARTIAL = "partial", "Partial"
+        DEBT = "debt", "Debt"
+
+    store = models.ForeignKey('store.Store', on_delete=models.CASCADE)
+    customer = models.ForeignKey(
+        'users.Customer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
+    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    status = models.CharField(max_length=10, choices=Status.choices)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class SaleItem(models.Model):
+    sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    total_price = models.DecimalField(max_digits=12, decimal_places=2)
+
+
+
+class Payment(TimestampMixin):
+
+    class Type(models.TextChoices):
+        CASH = "cash", "Cash"
+        CARD = "card", "Card"
+
+    sale = models.ForeignKey(
+        "sales.Sale",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="payments"
+    )
+
+    customer = models.ForeignKey(
+        "users.Customer",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="payments"
+    )
+
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    type = models.CharField(max_length=5, choices=Type.choices)
+    
