@@ -27,4 +27,6 @@ LOCAL_APPS = [
     "apps.contract",
     "apps.products",
     "apps.transfer",
+    "apps.sales",
+    "apps.debts",
 ]

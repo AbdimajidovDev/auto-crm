@@ -3,6 +3,8 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.translation import gettext_lazy as _
 
 from .models import User
+from .models.customers import Customer
+from ..debts.models import CustomerDebt
 
 
 @admin.register(User)
@@ -50,3 +52,7 @@ class UserAdmin(BaseUserAdmin):
 # @admin.register(VerificationOTP)
 # class VerificationOTPAdmin(admin.ModelAdmin):
 #     list_display = ('id', 'user', 'code', 'expires_at', 'is_used')
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+    list_display = ('id', 'full_name', 'phone_number', 'created_at')
