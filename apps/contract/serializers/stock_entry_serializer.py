@@ -1,8 +1,7 @@
 from rest_framework import serializers
 from apps.store.models import Store
-from apps.contract.models import Supplier, StockEntry
-from apps.products.models import Product
-
+from apps.contract.models import Supplier, StockEntry, StockEntryItem
+from apps.products.models import Product, ProductBatch
 
 
 class StockEntryItemSerializer(serializers.Serializer):
@@ -44,8 +43,42 @@ class StockEntryCreateSerializer(serializers.Serializer):
         return data
 
 
+
+class StockEntryItemListSerializer(serializers.ModelSerializer):
+    barcode = serializers.SerializerMethodField()
+    shtrix_code = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockEntryItem
+        fields = (
+            'id', 'product', 'quantity',
+            'purchase_price', 'selling_price',
+            'barcode', 'shtrix_code'
+        )
+
+    def get_barcode(self, obj):
+        # Ushbu mahsulot va do'konga tegishli batchni qidiramiz
+        batch = ProductBatch.objects.filter(
+            product=obj.product,
+            store=obj.entry.store
+        ).last() # Oxirgi yaratilgan batchni olish uchun
+        return batch.barcode if batch else None
+
+    def get_shtrix_code(self, obj):
+        batch = ProductBatch.objects.filter(
+            product=obj.product,
+            store=obj.entry.store
+        ).last()
+        if batch and batch.shtrix_code:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(batch.shtrix_code.url)
+            return batch.shtrix_code.url
+        return None
+
+
 class StockEntryListSerializer(serializers.ModelSerializer):
-    items = StockEntryItemSerializer(many=True)
+    items = StockEntryItemListSerializer(many=True)
     full_name = serializers.SerializerMethodField()
     supplier_name = serializers.SerializerMethodField()
     store_name = serializers.SerializerMethodField()

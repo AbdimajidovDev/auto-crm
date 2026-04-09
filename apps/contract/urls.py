@@ -3,7 +3,9 @@ from django.urls import path
 from apps.contract.views import (
     SupplierCreateAPIView,
     SupplierDetailAPIView,
-    SupplierListAPIView, StockEntryCreateAPIView, StockEntryListAPIView,
+    SupplierListAPIView,
+    StockEntryCreateAPIView,
+    StockEntryListAPIView,
 )
 
 

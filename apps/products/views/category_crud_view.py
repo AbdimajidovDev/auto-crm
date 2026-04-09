@@ -24,7 +24,8 @@ class CategoryListAPIView(APIView):
 
     def get(self, request):
         qs = Category.objects.all()
-        return Response(self.serializer_class(qs, many=True).data)
+        serializer = self.serializer_class(qs, many=True, context={"request": request})
+        return Response(serializer.data, status=200)
 
 
 

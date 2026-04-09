@@ -3,7 +3,7 @@ from django.db.models import F
 
 from apps.products.models import ProductBatch
 from apps.contract.models import StockEntry, StockEntryItem
-from apps.products.utils.barcode_utility import generate_unique_barcode
+from apps.products.utils.barcode_utility import generate_unique_barcode, generate_barcode_image
 
 
 class StockEntryService:
@@ -42,6 +42,8 @@ class StockEntryService:
                     selling_price=selling_price
                 )
             else:
+                barcode = generate_unique_barcode()
+
                 # ➕ faqat birinchi marta create
                 ProductBatch.objects.create(
                     product=product,
@@ -49,7 +51,8 @@ class StockEntryService:
                     quantity=quantity,
                     purchase_price=purchase_price,
                     selling_price=selling_price,
-                    barcode=generate_unique_barcode()  # 🔥 faqat shu yerda
+                    barcode=barcode,
+                    shtrix_code=generate_barcode_image(barcode)
                 )
 
             item_objs.append(

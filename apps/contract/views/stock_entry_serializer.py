@@ -23,7 +23,7 @@ class StockEntryListAPIView(APIView):
 
     def get(self, request):
         qs = StockEntry.objects.all()
-        serializer = self.serializer_class(qs, many=True)
+        serializer = self.serializer_class(qs, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
