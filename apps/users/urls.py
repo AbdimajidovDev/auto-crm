@@ -37,7 +37,7 @@ urlpatterns = [
     path('auth/reset-password/<uidb64>/<token>/', ResetPasswordView.as_view()),
 
     # Customer
-    path('customer/list/', CustomerListView.as_view()),
-    path('customer/create/', CustomerCreateView.as_view()),
-    path('customer/<int:pk>/', CustomerDetailView.as_view()),
+    path('customers/list/', CustomerListView.as_view()),
+    path('customers/create/', CustomerCreateView.as_view()),
+    path('customers/<int:pk>/', CustomerDetailView.as_view()),
 ]
