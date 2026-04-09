@@ -1,4 +1,6 @@
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
+
 from .models import Sale, SaleItem, Payment
 
 
@@ -20,18 +22,32 @@ class SaleListSerializer(serializers.ModelSerializer):
         )
 
 
-
-
-
 class SaleItemInputSerializer(serializers.Serializer):
     product = serializers.IntegerField()
     quantity = serializers.IntegerField()
     price = serializers.DecimalField(max_digits=12, decimal_places=2)
 
+    def validate(self, data):
+        quantity = data['quantity']
+        price = data['price']
+
+        if quantity <= 0:
+            raise ValidationError("Miqdor ijoboy bo'lishi kerak")
+
+        if price <= 0:
+            raise ValidationError("Narx ijoboy bo'lishi kerak")
+        return data
+
 
 class PaymentInputSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=Payment.Type.choices)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+
+    def validate(self, data):
+        amount = data['amount']
+
+        if amount <= 0:
+            raise ValidationError("To'lov ijoboy bo'lishi kerak")
 
 
 class SaleCreateSerializer(serializers.Serializer):
