@@ -12,14 +12,31 @@ class SaleItemSerializer(serializers.ModelSerializer):
         )
 
 class SaleListSerializer(serializers.ModelSerializer):
+    store_name = serializers.SerializerMethodField()
+    customer_name = serializers.SerializerMethodField()
+    seller_name = serializers.SerializerMethodField()
+    debt = serializers.SerializerMethodField()
     items = SaleItemSerializer(many=True)
+
     class Meta:
         model = Sale
         fields = (
-            'id', 'store', 'seller', 'customer', 'payments',
-            'status', 'total_amount', 'paid_amount',
-            'items', 'created_at'
+            'id', 'store', 'store_name', 'seller', 'seller_name', 'customer', 'customer_name',
+            'payments', 'status', 'total_amount', 'paid_amount', 'debt', 'items', 'created_at',
         )
+
+    def get_store_name(self, obj):
+        return obj.store.name if obj.store else None
+
+    def get_customer_name(self, obj):
+        return obj.customer.full_name if obj.customer else None
+
+    def get_seller_name(self, obj):
+        return obj.seller.full_name if obj.seller else None
+
+    def get_debt(self, obj):
+        debt = obj.total_amount - obj.paid_amount
+        return debt if debt > 0 else None
 
 
 class SaleItemInputSerializer(serializers.Serializer):

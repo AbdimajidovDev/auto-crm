@@ -2,9 +2,9 @@ from django.db import transaction, models
 from django.db.models import Sum
 from rest_framework.exceptions import ValidationError
 
-from .models import CustomerDebt
-from ..sales.models import Payment
-from ..users.models.customers import Customer
+from apps.debts.models import CustomerDebt
+from apps.sales.models import Payment
+from apps.users.models.customers import Customer
 
 
 class DebtService:
@@ -49,15 +49,15 @@ class DebtService:
         customer = Customer.objects.select_for_update().get(id=customer_id)
 
         if amount <= 0:
-            raise ValidationError("Amount must be positive")
+            raise ValidationError("Miqdor ijobiy bo'lishi kerak")
 
         current_debt = DebtService.get_customer_balance(customer)
 
         if current_debt <= 0:
-            raise ValidationError("Customer has no debt")
+            raise ValidationError("Mijozning qarzi yo'q")
 
         if amount > current_debt:
-            raise ValidationError("Amount exceeds debt")
+            raise ValidationError("Miqdori qarzdan oshib ketadi")
 
         # 🔴 PAYMENT
         payment = Payment.objects.create(

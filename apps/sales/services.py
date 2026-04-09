@@ -1,8 +1,9 @@
 from django.db import transaction
-from django.core.exceptions import ValidationError
 from decimal import Decimal
 
-from .models import Sale, SaleItem, Payment
+from rest_framework.exceptions import ValidationError
+
+from apps.sales.models import Sale, SaleItem, Payment
 from apps.products.models import Product
 from apps.debts.services import DebtService
 from apps.store.models import Store
@@ -48,7 +49,7 @@ class SaleService:
             price = item["price"]
 
             if quantity <= 0:
-                raise ValidationError("Quantity invalid")
+                raise ValidationError("Miqdor yaroqsiz")
 
             total_price = price * quantity
             total_amount += total_price
@@ -70,7 +71,7 @@ class SaleService:
             amount = p["amount"]
 
             if amount <= 0:
-                raise ValidationError("Invalid payment amount")
+                raise ValidationError("To‘lov miqdori noto‘g‘ri")
 
             Payment.objects.create(
                 sale=sale,
@@ -95,7 +96,7 @@ class SaleService:
             sale.status = Sale.Status.PARTIAL
 
         else:
-            raise ValidationError("Overpayment not allowed")
+            raise ValidationError("Ortiqcha to'lovga yo'l qo'yilmaydi")
 
         sale.save()
 
