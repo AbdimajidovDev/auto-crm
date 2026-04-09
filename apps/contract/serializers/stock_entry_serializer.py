@@ -47,14 +47,21 @@ class StockEntryCreateSerializer(serializers.Serializer):
 class StockEntryListSerializer(serializers.ModelSerializer):
     items = StockEntryItemSerializer(many=True)
     full_name = serializers.SerializerMethodField()
+    supplier_name = serializers.SerializerMethodField()
+    store_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StockEntry
         fields = (
-            'id', 'supplier', 'store', 'created_by', 'full_name', 'items'
+            'id', 'supplier', 'supplier_name', 'store', 'store_name', 'created_by', 'full_name', 'items'
         )
 
     def get_full_name(self, obj):
         return obj.created_by.full_name if hasattr(obj, 'created_by') else "Shaxsiy malumotlar kiritilmagan!"
 
+    def get_supplier_name(self, obj):
+        return obj.supplier.name if hasattr(obj, 'supplier') else ""
+
+    def get_store_name(self, obj):
+        return obj.store.name if hasattr(obj, 'store') else ""
 

@@ -52,29 +52,6 @@ class StockEntryService:
                     barcode=generate_unique_barcode()  # 🔥 faqat shu yerda
                 )
 
-            # 🔒 LOCK
-            # batch = ProductBatch.objects.select_for_update().filter(
-            #     store=store,
-            #     product=product
-            # ).first()
-            #
-            # if batch:
-            #     # MERGE
-            #     ProductBatch.objects.filter(id=batch.pk).update( # id -> pk
-            #         quantity=F("quantity") + quantity,
-            #         purchase_price=purchase_price,
-            #         selling_price=selling_price
-            #     )
-            # else:
-            #     # ➕ CREATE
-            #     ProductBatch.objects.create(
-            #         product=product,
-            #         store=store,
-            #         quantity=quantity,
-            #         purchase_price=purchase_price,
-            #         selling_price=selling_price
-            #     )
-
             item_objs.append(
                 StockEntryItem(
                     entry=entry,
