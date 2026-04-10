@@ -3,12 +3,22 @@ from apps.products.models import Product
 
 from rest_framework import serializers
 from apps.store.models import Store
-from apps.transfer.models import StockTransfer
+from apps.transfer.models import StockTransfer, StockTransferItem
 
 
-class TransferItemSerializer(serializers.Serializer):
+class TransferItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
     quantity = serializers.IntegerField(min_value=1)
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = StockTransferItem
+        fields = (
+            'id', 'product', 'product_name', 'quantity', 'purchase_price', 'selling_price',
+        )
+
+    def get_product_name(self, obj):
+        return obj.product.name if obj.product else ""
 
     def validate(self, data):
         print('data', data)
@@ -32,12 +42,25 @@ class TransferItemSerializer(serializers.Serializer):
 
 class TransferListSerializer(serializers.ModelSerializer):
     items = TransferItemSerializer(many=True)
+    from_store_name = serializers.SerializerMethodField()
+    to_store_name = serializers.SerializerMethodField()
+    approved_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = StockTransfer
         fields = (
-            'id', 'from_store', 'to_store', 'status', 'created_by',
-            'approved_by', 'approved_at', 'items'
+            'id', 'from_store', 'from_store_name', 'to_store', 'to_store_name',
+            'status', 'created_by', 'approved_by', 'approved_by_name', 'approved_at', 'items'
         )
+
+    def get_from_store_name(self, obj):
+        return obj.from_store.name if obj.from_store else ""
+
+    def get_to_store_name(self, obj):
+        return obj.to_store.name if obj.to_store else ""
+
+    def get_approved_by_name(self, obj):
+        return obj.approved_by.full_name if obj.approved_by else ""
 
 
 class TransferCreateSerializer(serializers.Serializer):
