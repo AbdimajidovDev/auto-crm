@@ -11,6 +11,10 @@ class Sale(models.Model):
         PARTIAL = "partial", "Partial"
         DEBT = "debt", "Debt"
 
+    class DiscountType(models.TextChoices):
+        PERCENTAGE = "p", "Percentage (%)"
+        FIXED = "f", "Fixed Amount"
+
     store = models.ForeignKey('store.Store', on_delete=models.CASCADE)
     customer = models.ForeignKey(
         'users.Customer',
@@ -19,11 +23,25 @@ class Sale(models.Model):
         blank=True
     )
     seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-
     total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-
     status = models.CharField(max_length=10, choices=Status.choices)
+    discount_type = models.CharField(
+        max_length=10,
+        choices=DiscountType.choices,
+        null=True,
+        blank=True
+    )
+    discount_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0
+    )
+    discount_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        default=0
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
 
