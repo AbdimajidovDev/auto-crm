@@ -57,7 +57,7 @@ class DebtService:
             raise ValidationError("Mijozning qarzi yo'q")
 
         if amount > current_debt:
-            raise ValidationError("Miqdori qarzdan oshib ketadi")
+            raise ValidationError("Miqdori qarzdan oshib ketadi ")
 
         # 🔴 PAYMENT
         payment = Payment.objects.create(

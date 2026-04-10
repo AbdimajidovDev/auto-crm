@@ -36,11 +36,11 @@ class TransferCreateAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         try:
+            print('validation data:', serializer.validated_data)
             transfer = TransferService.create_transfer(
                 from_store=serializer.validated_data["from_store"],
                 to_store=serializer.validated_data["to_store"],
-                product_id=serializer.validated_data["product"],
-                quantity=serializer.validated_data["quantity"],
+                items_data=serializer.validated_data["items"],
                 user=request.user
             )
         except ValidationError as e:
