@@ -35,5 +35,8 @@ class ProductImageAdmin(admin.ModelAdmin):
 
 @admin.register(ProductBatch)
 class ProductBatchAdmin(admin.ModelAdmin):
-    list_display = ('id', 'product', 'store', 'quantity', 'purchase_price', 'selling_price', 'created_at')
+    list_display = (
+        'id', 'product__id', 'product', 'store__id', 'store', 'quantity',
+        'purchase_price', 'selling_price', 'created_at',
+    )
     list_filter = ('product',)

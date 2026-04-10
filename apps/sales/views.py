@@ -1,4 +1,5 @@
 from drf_spectacular.utils import extend_schema
+from rest_framework.generics import get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -49,3 +50,17 @@ class SaleCreateAPIView(APIView):
             "paid": sale.paid_amount,
             "status": sale.status
         }, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=['Sales'],
+    summary="ID orqali Sotuv malumotlarini olish",
+)
+class SaleDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = SaleListSerializer
+
+    def get(self, request, pk):
+        qs = get_object_or_404(Sale, pk=pk)
+        serializer = self.serializer_class(qs)
+        return Response(serializer.data, status=status.HTTP_200_OK)

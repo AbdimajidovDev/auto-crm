@@ -22,7 +22,8 @@ class SaleListSerializer(serializers.ModelSerializer):
         model = Sale
         fields = (
             'id', 'store', 'store_name', 'seller', 'seller_name', 'customer', 'customer_name',
-            'payments', 'status', 'total_amount', 'paid_amount', 'debt', 'items', 'created_at',
+            'payments', 'status', 'total_amount', 'paid_amount', 'debt',
+            'discount_type', 'discount_value', 'discount_amount', 'items', 'created_at',
         )
 
     def get_store_name(self, obj):
@@ -68,18 +69,29 @@ class PaymentInputSerializer(serializers.Serializer):
         return data
 
 
+
 class SaleCreateSerializer(serializers.Serializer):
     store = serializers.IntegerField(required=False)
     customer = serializers.IntegerField(required=False, allow_null=True)
+
+    # Chegirma uchun yangi maydonlar
+    discount_type = serializers.ChoiceField(choices=Sale.DiscountType.choices, required=False, allow_null=True)
+    discount_value = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
 
     items = SaleItemInputSerializer(many=True)
     payments = PaymentInputSerializer(many=True)
 
     def validate(self, data):
+
         if not data["items"]:
             raise serializers.ValidationError("Items bo‘sh bo‘lmasligi kerak")
 
         if not data["payments"]:
             raise serializers.ValidationError("Payment bo‘sh bo‘lmasligi kerak")
+
+        # Foizli chegirma 100% dan oshmasligi kerak
+        if data.get("discount_type") == Sale.DiscountType.PERCENTAGE:
+            if data.get("discount_value", 0) > 100:
+                raise serializers.ValidationError("Chegirma foizi 100 dan oshmasligi kerak")
 
         return data
