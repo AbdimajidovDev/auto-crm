@@ -16,6 +16,7 @@ class TransferItemSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'product', 'product_name', 'quantity', 'purchase_price', 'selling_price',
         )
+        read_only_fields = ('id','product_name', 'purchase_price', 'selling_price',)
 
     def get_product_name(self, obj):
         return obj.product.name if obj.product else ""
