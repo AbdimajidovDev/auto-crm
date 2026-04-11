@@ -34,11 +34,12 @@ class SupplierPaymentAPIView(APIView):
     serializer_class = SupplierPaymentSerializer
 
     def post(self, request):
-        serializer = SupplierPaymentSerializer(data=request.data)
+        serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         payment = SupplierPaymentService.make_payment(
             supplier=serializer.validated_data["supplier"],
+            entry=serializer.validated_data["entry"],
             amount=serializer.validated_data["amount"],
             note=serializer.validated_data.get("note"),
             user=request.user

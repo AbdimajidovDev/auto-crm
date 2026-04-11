@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.contract.models import Supplier, SupplierTransaction
+from apps.contract.models import StockEntry
 
 
 class SupplierPaymentListSerializer(serializers.ModelSerializer):
@@ -12,6 +13,7 @@ class SupplierPaymentListSerializer(serializers.ModelSerializer):
 
 class SupplierPaymentSerializer(serializers.Serializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all())
+    entry = serializers.PrimaryKeyRelatedField(queryset=StockEntry.objects.all())
     amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0.01)
     note = serializers.CharField(required=False, allow_blank=True)
 

@@ -43,10 +43,11 @@ class SupplierPaymentService:
 
     @staticmethod
     @transaction.atomic
-    def make_payment(*, supplier, amount, note, user):
+    def make_payment(*, supplier, entry, amount, note, user):
         # 1. To'lov tranzaksiyasini yaratish
         payment_transaction = SupplierTransaction.objects.create(
             supplier=supplier,
+            entry=entry,
             amount=amount,
             type=SupplierTransaction.TransactionType.PAYMENT,
             note=note or f"Taminotchiga to'lov amalga oshirildi. Mas'ul: {user.full_name}"
