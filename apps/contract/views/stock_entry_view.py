@@ -43,6 +43,7 @@ class StockEntryCreateAPIView(APIView):
             entry = StockEntryService.create_entry(
                 supplier=serializer.validated_data["supplier"],
                 store=serializer.validated_data["store"],
+                paid_amount=serializer.validated_data["paid_amount"],
                 items=serializer.validated_data["items"],
                 user=request.user
             )
