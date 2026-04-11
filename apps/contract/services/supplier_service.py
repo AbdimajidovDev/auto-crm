@@ -1,7 +1,7 @@
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
-from apps.contract.models import Supplier
+from apps.contract.models import Supplier, SupplierTransaction
 
 
 class SupplierService:
@@ -37,3 +37,22 @@ class SupplierService:
             raise ValidationError("Only superuser can delete supplier")
 
         instance.delete()
+
+
+class SupplierPaymentService:
+
+    @staticmethod
+    @transaction.atomic
+    def make_payment(*, supplier, amount, note, user):
+        # 1. To'lov tranzaksiyasini yaratish
+        payment_transaction = SupplierTransaction.objects.create(
+            supplier=supplier,
+            amount=amount,
+            type=SupplierTransaction.TransactionType.PAYMENT,
+            note=note or f"Taminotchiga to'lov amalga oshirildi. Mas'ul: {user.username}"
+        )
+
+        # 2. Agar Supplier modelida jami balance maydoni bo'lsa, uni yangilaymiz:
+        # Supplier.objects.filter(id=supplier.id).update(balance=F('balance') - amount)
+
+        return payment_transaction

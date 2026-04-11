@@ -7,8 +7,7 @@ from apps.contract.views import (
     StockEntryCreateAPIView,
     StockEntryListAPIView,
 )
-
-
+from apps.contract.views.supplier_payment_view import SupplierPaymentAPIView, SupplierPaymentListAPIView
 
 urlpatterns = [
     # Ta'minotchi
@@ -19,4 +18,6 @@ urlpatterns = [
     # Kirim
     path("entry/list/", StockEntryListAPIView.as_view()),
     path("entry/create/", StockEntryCreateAPIView.as_view()),
+    # path("supplier-payments/create/", SupplierPaymentAPIView.as_view()),
+    path("supplier-payments/list/", SupplierPaymentListAPIView.as_view()),
 ]
