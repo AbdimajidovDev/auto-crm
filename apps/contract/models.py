@@ -1,4 +1,7 @@
+from decimal import Decimal
+
 from django.db import models
+from django.db.models import Sum
 
 from apps.common.models.timestamp_mixin import TimestampMixin
 
@@ -29,6 +32,19 @@ class Supplier(TimestampMixin):
     def __str__(self):
         return self.name
 
+    def get_total_debt(self):
+        # Jami kirim qilingan qarzlar yig'indisi
+        total_in = self.transactions.filter(
+            type=SupplierTransaction.TransactionType.INVENTORY_IN
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        # Jami to'langan summalar yig'indisi
+        total_paid = self.transactions.filter(
+            type=SupplierTransaction.TransactionType.PAYMENT
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        return total_in - total_paid
+
 
 
 class StockEntry(TimestampMixin):
@@ -43,6 +59,8 @@ class StockEntry(TimestampMixin):
         on_delete=models.PROTECT,
         related_name="entries"
     )
+    total_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    paid_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
 
     created_by = models.ForeignKey(
         "users.User",
@@ -80,3 +98,19 @@ class StockEntryItem(models.Model):
 
     def __str__(self):
         return f"{self.entry.supplier.name} - {self.product.name}"
+
+
+
+class SupplierTransaction(TimestampMixin):
+    class TransactionType(models.TextChoices):
+        INVENTORY_IN = "in", "Inventory Intake (Debt Increase)"
+        PAYMENT = "pay", "Payment to Supplier (Debt Decrease)"
+
+    supplier = models.ForeignKey("contract.Supplier", on_delete=models.CASCADE, related_name="transactions")
+    entry = models.ForeignKey(StockEntry, on_delete=models.SET_NULL, null=True, blank=True)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    type = models.CharField(max_length=5, choices=TransactionType.choices)
+    note = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "supplier_transaction"

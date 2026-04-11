@@ -29,16 +29,17 @@ class StockEntryItemSerializer(serializers.Serializer):
 class StockEntryCreateSerializer(serializers.Serializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all())
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.all())
+    paid_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
     items = StockEntryItemSerializer(many=True)
 
     def validate(self, data):
+        store = data['store']
+        items = data['items']
 
-        # 🔴 faqat ombor
-        if data["store"].type != "b":
+        if store.type != "b":
             raise serializers.ValidationError("Faqat omborga kirim mumkin")
-
-        if not data["items"]:
-            raise serializers.ValidationError("Items bo‘sh bo‘lmasligi kerak")
+        if not items:
+            raise serializers.ValidationError("Mahsulotlar ro'yxati bo'sh")
 
         return data
 
@@ -86,7 +87,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockEntry
         fields = (
-            'id', 'supplier', 'supplier_name', 'store', 'store_name', 'created_by', 'full_name', 'items'
+            'id', 'supplier', 'supplier_name', 'store', 'store_name', 'paid_amount', 'created_by', 'full_name', 'items'
         )
 
     def get_full_name(self, obj):
