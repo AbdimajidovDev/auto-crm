@@ -10,7 +10,7 @@ from apps.contract.serializers import (
     StockEntryListSerializer,
 )
 from apps.contract.services import StockEntryService
-
+from apps.common.permissions import IsSuperUser
 
 
 @extend_schema(
@@ -32,7 +32,7 @@ class StockEntryListAPIView(APIView):
     summary="Omborga kirim qilish.",
 )
 class StockEntryCreateAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsSuperUser]
     serializer_class = StockEntryCreateSerializer
 
     def post(self, request):

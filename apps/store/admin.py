@@ -16,6 +16,6 @@ class StoreAdmin(TranslationAdmin):
 
 @admin.register(StoreUser)
 class StoreUserAdmin(admin.ModelAdmin):
-    list_display = ('id', "role", "user", "store", "is_active", "created_at")
+    list_display = ('id', "role", "user", "store__id", "store", "is_active", "created_at")
     list_filter = ('is_active', "role")
     search_fields = ('user__full_name', 'user__email', 'user__phone_number', 'store__name')
