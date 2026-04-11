@@ -49,7 +49,7 @@ class SupplierPaymentService:
             supplier=supplier,
             amount=amount,
             type=SupplierTransaction.TransactionType.PAYMENT,
-            note=note or f"Taminotchiga to'lov amalga oshirildi. Mas'ul: {user.username}"
+            note=note or f"Taminotchiga to'lov amalga oshirildi. Mas'ul: {user.full_name}"
         )
 
         # 2. Agar Supplier modelida jami balance maydoni bo'lsa, uni yangilaymiz:
