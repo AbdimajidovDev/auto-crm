@@ -29,4 +29,5 @@ LOCAL_APPS = [
     "apps.transfer",
     "apps.sales",
     "apps.debts",
+    "apps.reports",
 ]

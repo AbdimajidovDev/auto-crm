@@ -8,5 +8,5 @@ from apps.debts.models import CustomerDebt
 
 @admin.register(CustomerDebt)
 class CustomerDebtAdmin(admin.ModelAdmin):
-    list_display = ('customer', 'sale', 'amount')
+    list_display = ('customer', 'sale', 'type', 'amount')
 

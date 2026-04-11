@@ -1,9 +1,13 @@
 from django.contrib import admin
 
-from apps.sales.models import Sale
+from apps.sales.models import Sale, SaleItem
 
 
 # Register your models here.
+
+class SaleItemInline(admin.StackedInline):
+    model = SaleItem
+    extra = 0
 
 
 @admin.register(Sale)
@@ -12,3 +16,4 @@ class SaleAdmin(admin.ModelAdmin):
         'id', 'store', 'customer', 'seller', 'status',
         'total_amount', 'paid_amount', 'created_at'
     )
+    inlines = [SaleItemInline]

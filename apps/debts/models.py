@@ -24,7 +24,7 @@ class CustomerDebt(TimestampMixin):
         related_name='debt_records'
     )
 
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
     type = models.CharField(max_length=2, choices=Type.choices)
 
     def __str__(self):

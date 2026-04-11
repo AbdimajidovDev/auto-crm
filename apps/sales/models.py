@@ -23,8 +23,8 @@ class Sale(models.Model):
         blank=True
     )
     seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    total_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    paid_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+    paid_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     status = models.CharField(max_length=10, choices=Status.choices)
     discount_type = models.CharField(
         max_length=10,
@@ -33,12 +33,12 @@ class Sale(models.Model):
         blank=True
     )
     discount_value = models.DecimalField(
-        max_digits=12,
+        max_digits=20,
         decimal_places=2,
         default=0
     )
     discount_amount = models.DecimalField(
-        max_digits=12,
+        max_digits=20,
         decimal_places=2,
         default=0
     )
@@ -51,8 +51,8 @@ class SaleItem(models.Model):
     product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
 
     quantity = models.PositiveIntegerField()
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
-    total_price = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=20, decimal_places=2)
+    total_price = models.DecimalField(max_digits=20, decimal_places=2)
 
 
 
@@ -78,6 +78,6 @@ class Payment(TimestampMixin):
         related_name="payments"
     )
 
-    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=20, decimal_places=2)
     type = models.CharField(max_length=5, choices=Type.choices)
     
