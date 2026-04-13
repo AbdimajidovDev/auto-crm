@@ -33,6 +33,7 @@ SECRET_KEY = config('SECRET_KEY')
 # ========================   Application definition  ==========================================
 
 INSTALLED_APPS = [
+    *DAPHNE_APP,
     *DEFAULT_APPS,
     *THIRD_PARTY_APPS,
     *LOCAL_APPS,
@@ -174,6 +175,8 @@ logging.basicConfig(level=logging.INFO)
 
 # ==============================   CHANNEL Redis  ======================================
 
+ASGI_APPLICATION = "core.asgi.application"
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
@@ -182,4 +185,3 @@ CHANNEL_LAYERS = {
         },
     },
 }
-ASGI_APPLICATION = 'core.asgi.application' # 'core' papkangizdagi asgi.py
