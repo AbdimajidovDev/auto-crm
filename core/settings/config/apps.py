@@ -1,5 +1,10 @@
+DAPHNE_APP = [
+    "daphne",
+]
+
+
 THIRD_PARTY_APPS = [
-    # "channels",  # buni ham shu yerda qoldiring
+    "channels",  # buni ham shu yerda qoldiring
     # "corsheaders",
     "rest_framework",
     "drf_spectacular",
