@@ -3,7 +3,7 @@ from apps.products.models import Product
 
 from rest_framework import serializers
 from apps.store.models import Store
-from apps.transfer.models import StockTransfer, StockTransferItem
+from apps.transfer.models import StockTransfer, StockTransferItem, Notification
 
 
 class TransferItemSerializer(serializers.ModelSerializer):
@@ -77,3 +77,11 @@ class TransferCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Kamida bitta mahsulot bo'lishi shart")
 
         return data
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = (
+            'id', 'user', 'type', 'title', 'message', 'is_read', 'transfer'
+        )
