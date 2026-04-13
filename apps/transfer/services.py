@@ -8,6 +8,8 @@ from apps.products.utils.barcode_utility import generate_unique_barcode
 from apps.transfer.models import StockTransfer, StockTransferItem
 from rest_framework.exceptions import PermissionDenied
 
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 
 class TransferService:
@@ -144,6 +146,23 @@ class TransferService:
         transfer.approved_by = user
         transfer.approved_at = timezone.now()
         transfer.save()
+
+        # transfer = StockTransfer.objects.create(...)
+        #
+        # # WebSocket orqali xabar yuborish
+        # channel_layer = get_channel_layer()
+        # async_to_sync(channel_layer.group_send)(
+        #     f"store_{to_store.id}",
+        #     {
+        #         "type": "send_notification",
+        #         "message": {
+        #             "title": "Yangi transfer!",
+        #             "body": f"Sizga #{transfer.id} raqamli transfer keldi.",
+        #             "transfer_id": transfer.id
+        #         }
+        #     }
+        # )
+        # return transfer
 
         return transfer
 

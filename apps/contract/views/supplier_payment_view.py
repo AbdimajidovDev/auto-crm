@@ -8,8 +8,7 @@ from apps.contract.models import SupplierTransaction, Supplier
 from apps.contract.serializers.supplier_payment_serializer import SupplierPaymentSerializer, \
     SupplierPaymentListSerializer
 from apps.contract.services import SupplierService, SupplierPaymentService
-
-
+from apps.contract.models import StockEntry
 
 
 @extend_schema(
@@ -20,9 +19,9 @@ class SupplierPaymentListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = SupplierPaymentListSerializer
 
-    def get(self, request, pk):
-        supplier = get_object_or_404(Supplier, pk=pk)
-        qs = SupplierTransaction.objects.filter(supplier=supplier)
+    def get(self, request, entry_id):
+        entry = get_object_or_404(StockEntry, pk=entry_id)
+        qs = SupplierTransaction.objects.filter(entry=entry)
         serializer = self.serializer_class(qs, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 

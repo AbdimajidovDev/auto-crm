@@ -19,5 +19,5 @@ urlpatterns = [
     path("entry/list/", StockEntryListAPIView.as_view()),
     path("entry/create/", StockEntryCreateAPIView.as_view()),
     path("supplier-payments/create/", SupplierPaymentAPIView.as_view()),
-    path("supplier-payments/<int:pk>/", SupplierPaymentListAPIView.as_view()),
+    path("supplier-payments/<int:entry_id>/", SupplierPaymentListAPIView.as_view()),
 ]
