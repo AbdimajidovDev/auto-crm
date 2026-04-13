@@ -97,12 +97,10 @@ class BatchByBarcodeAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, barcode):
-        store_id = request.query_params.get("store_id")
 
         batch = get_object_or_404(
             ProductBatch,
             barcode=barcode,
-            store_id=store_id
         )
 
         return Response({

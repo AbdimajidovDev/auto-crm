@@ -1,9 +1,10 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
+from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.contract.models import SupplierTransaction
+from apps.contract.models import SupplierTransaction, Supplier
 from apps.contract.serializers.supplier_payment_serializer import SupplierPaymentSerializer, \
     SupplierPaymentListSerializer
 from apps.contract.services import SupplierService, SupplierPaymentService
@@ -19,8 +20,9 @@ class SupplierPaymentListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = SupplierPaymentListSerializer
 
-    def get(self, request):
-        qs = SupplierTransaction.objects.all()
+    def get(self, request, pk):
+        supplier = get_object_or_404(Supplier, pk=pk)
+        qs = SupplierTransaction.objects.filter(supplier=supplier)
         serializer = self.serializer_class(qs, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
