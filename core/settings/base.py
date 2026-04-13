@@ -171,3 +171,15 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL')
 # Logging (productionda file yoki cloud loggingga o'tkazish)
 import logging
 logging.basicConfig(level=logging.INFO)
+
+# ==============================   CHANNEL Redis  ======================================
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [("127.0.0.1", 6379)],
+        },
+    },
+}
+ASGI_APPLICATION = 'core.asgi.application' # 'core' papkangizdagi asgi.py
