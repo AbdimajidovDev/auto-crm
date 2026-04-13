@@ -5,8 +5,8 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.core.exceptions import ValidationError
 
-from apps.transfer.models import StockTransfer
-from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer
+from apps.transfer.models import StockTransfer, Notification
+from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer, NotificationSerializer
 from apps.transfer.services import TransferService
 
 
@@ -85,3 +85,14 @@ class TransferRejectAPIView(APIView):
             user=request.user
         )
         return Response({"status": "rejected"})
+
+
+@extend_schema(
+    tags=["Transfer"],
+    summary='Notification'
+)
+class NotificationListAPIView(APIView):
+    def get(self, request):
+        qs = Notification.objects.filter(user=request.user).order_by("-created_at")[:50]
+        serializer = NotificationSerializer(qs, many=True, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
