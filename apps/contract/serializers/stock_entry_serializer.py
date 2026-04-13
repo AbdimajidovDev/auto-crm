@@ -88,7 +88,8 @@ class StockEntryListSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockEntry
         fields = (
-            'id', 'supplier', 'supplier_name', 'store', 'store_name', 'paid_amount', 'debt', 'created_by', 'full_name', 'items'
+            'id', 'supplier', 'supplier_name', 'store', 'store_name',
+            'paid_amount', 'debt', 'created_by', 'full_name', 'items'
         )
 
     def get_full_name(self, obj):
@@ -101,5 +102,9 @@ class StockEntryListSerializer(serializers.ModelSerializer):
         return obj.store.name if hasattr(obj, 'store') else ""
 
     def get_debt(self, obj):
-        debt = obj.total_amount - obj.paid_amount
+        debt = (obj.total_in or 0) - (obj.total_paid or 0)
         return debt if debt > 0 else 0
+
+    # def get_debt(self, obj):
+    #     debt = obj.total_amount - obj.paid_amount
+    #     return debt if debt > 0 else 0
