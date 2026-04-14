@@ -40,7 +40,7 @@ class PayDebtAPIView(APIView):
         data = serializer.validated_data
 
         payment = DebtService.pay_debt(
-            customer_id=data["customer"],
+            sale_id=data["sale"],
             amount=data["amount"],
             payment_type=data["type"]
         )

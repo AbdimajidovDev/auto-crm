@@ -84,4 +84,7 @@ class Payment(TimestampMixin):
 
     amount = models.DecimalField(max_digits=20, decimal_places=2)
     type = models.CharField(max_length=5, choices=Type.choices)
+
+    def __str__(self):
+        return f"{self.sale.store.name} {self.customer.full_name} {str(self.amount)}"
     

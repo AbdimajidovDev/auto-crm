@@ -17,6 +17,8 @@ from apps.sales.filters import SaleFilter
 
 
 from django_filters.rest_framework import DjangoFilterBackend
+from django.db.models import Sum, Case, When, F, DecimalField, Value
+from django.db.models.functions import Coalesce
 
 
 
@@ -37,14 +39,37 @@ class SaleListAPIView(generics.ListAPIView):
 
         qs = Sale.objects.select_related(
             "store", "customer", "seller"
-        )
+        ).prefetch_related("items")
 
         # 🔐 PERMISSION
         if not user.is_superuser:
             qs = qs.filter(seller=user)
 
-        return qs.order_by("-created_at")
+        # 🔥 LEDGER BASED DEBT
+        qs = qs.annotate(
 
+            total_increase=Coalesce(Sum(
+                Case(
+                    When(
+                        debt_records__type="i",
+                        then=F("debt_records__amount")
+                    ),
+                    output_field=DecimalField()
+                )
+            ), Value(0, output_field=DecimalField())),
+
+            total_decrease=Coalesce(Sum(
+                Case(
+                    When(
+                        debt_records__type="d",
+                        then=F("debt_records__amount")
+                    ),
+                    output_field=DecimalField()
+                )
+            ), Value(0, output_field=DecimalField())),
+        )
+
+        return qs.order_by("-created_at")
 
 # class SaleListAPIView(APIView):
 #     permission_classes = [IsAuthenticated]

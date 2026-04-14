@@ -36,7 +36,7 @@ class SaleListSerializer(serializers.ModelSerializer):
         return obj.seller.full_name if obj.seller else None
 
     def get_debt(self, obj):
-        debt = obj.total_amount - obj.paid_amount
+        debt = (obj.total_increase or 0) - (obj.total_decrease or 0)
         return debt if debt > 0 else None
 
 
