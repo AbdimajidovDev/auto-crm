@@ -17,7 +17,3 @@ class StoreSelector:
     def store_list():
         return Store.objects.all()
 
-    @staticmethod
-    def get_store(store_id: int):
-        return Store.objects.filter(id=store_id, is_active=True).first()
-

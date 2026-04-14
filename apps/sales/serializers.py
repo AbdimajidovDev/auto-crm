@@ -95,3 +95,16 @@ class SaleCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError("Chegirma foizi 100 dan oshmasligi kerak")
 
         return data
+
+
+
+# ------------------------------------------------------------------------------
+
+from rest_framework import serializers
+
+
+class CustomerDebtListSerializer(serializers.Serializer):
+    store_id = serializers.IntegerField()
+    customer_id = serializers.IntegerField()
+    customer_name = serializers.CharField()
+    total_debt = serializers.DecimalField(max_digits=20, decimal_places=2)
