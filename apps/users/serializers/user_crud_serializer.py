@@ -9,13 +9,26 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 
 
 class UserSerializer(serializers.ModelSerializer):
+    store_id = serializers.SerializerMethodField()
+    store_name = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ("id", "full_name", "phone_number", "email", "is_active", "created_at", "updated_at")
+        fields = (
+            "id", "full_name", "phone_number", "email",
+            "is_active", "created_at", "updated_at", 'store_id', 'store_name',
+        )
 
     def validate_phone_number(self, phone):
         check_valid_phone(phone)
         return phone
+
+    def get_store_id(self, obj):
+        return obj.store.id
+
+    def get_store_name(self, obj):
+        return obj.store.name
+
 
 
 class SellerCreateSerializer(serializers.Serializer):

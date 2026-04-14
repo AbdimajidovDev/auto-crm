@@ -71,15 +71,6 @@ class SaleListAPIView(generics.ListAPIView):
 
         return qs.order_by("-created_at")
 
-# class SaleListAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
-#     serializer_class = SaleListSerializer
-#
-#     def get(self, request):
-#         qs = Sale.objects.all()
-#         serializer = self.serializer_class(qs, many=True, context={'request': request})
-#         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
 @extend_schema(
     tags=['Sales'],
@@ -116,11 +107,35 @@ class SaleDetailAPIView(APIView):
     serializer_class = SaleListSerializer
 
     def get(self, request, pk):
-        qs = get_object_or_404(Sale, pk=pk)
-        serializer = self.serializer_class(qs)
+        qs = Sale.objects.select_related(
+            "store", "customer", "seller"
+        ).prefetch_related("items").annotate(
+
+            total_increase=Coalesce(Sum(
+                Case(
+                    When(
+                        debt_records__type="i",
+                        then=F("debt_records__amount")
+                    ),
+                    output_field=DecimalField()
+                )
+            ), Value(0, output_field=DecimalField())),
+
+            total_decrease=Coalesce(Sum(
+                Case(
+                    When(
+                        debt_records__type="d",
+                        then=F("debt_records__amount")
+                    ),
+                    output_field=DecimalField()
+                )
+            ), Value(0, output_field=DecimalField())),
+        )
+
+        sale = get_object_or_404(qs, pk=pk)
+
+        serializer = self.serializer_class(sale)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
 
 
 # =============================================================================
