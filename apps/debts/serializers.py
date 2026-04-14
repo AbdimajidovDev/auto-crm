@@ -5,11 +5,16 @@ from apps.sales.models import Payment
 
 
 class PayDebtListSerializer(serializers.ModelSerializer):
+    customer_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Payment
         fields = (
-            'id', 'sale', 'customer', 'amount', 'type', 'created_at',
+            'id', 'sale', 'customer', 'customer_name', 'amount', 'type', 'created_at',
         )
+
+    def get_customer_name(self, obj):
+        return obj.customer.full_name if obj.customer else ''
 
 
 class PayDebtSerializer(serializers.Serializer):

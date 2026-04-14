@@ -1,3 +1,4 @@
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -50,3 +51,17 @@ class PayDebtAPIView(APIView):
             "payment_id": payment.id,
             "amount": payment.amount
         }, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=['Debts'],
+    summary="ID orqali qarzdorlik malumotlarini olish."
+)
+class PayDebtDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PayDebtListSerializer
+
+    def get(self, request, pk):
+        qs = get_object_or_404(CustomerDebt, pk=pk)
+        serializer = self.serializer_class(qs)
+        return Response(serializer.data, status=status.HTTP_200_OK)
