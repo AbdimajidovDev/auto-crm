@@ -15,17 +15,18 @@ class Sale(models.Model):
         PERCENTAGE = "p", "Percentage (%)"
         FIXED = "f", "Fixed Amount"
 
-    store = models.ForeignKey('store.Store', on_delete=models.CASCADE)
+    store = models.ForeignKey('store.Store', on_delete=models.CASCADE, db_index=True)
     customer = models.ForeignKey(
         'users.Customer',
         on_delete=models.SET_NULL,
         null=True,
-        blank=True
+        blank=True,
+        db_index=True
     )
     seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     total_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
-    status = models.CharField(max_length=10, choices=Status.choices)
+    status = models.CharField(max_length=10, choices=Status.choices, db_index=True)
     discount_type = models.CharField(
         max_length=10,
         choices=DiscountType.choices,
@@ -44,6 +45,9 @@ class Sale(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.store.name} {self.customer.full_name} {str(self.status)}"
 
 
 class SaleItem(models.Model):

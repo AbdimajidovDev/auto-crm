@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+from rest_framework.generics import get_object_or_404
+
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.products.models import ProductBatch
 from apps.debts.services import DebtService
@@ -9,6 +11,9 @@ from apps.users.models.customers import Customer
 from django.db import transaction
 from django.db.models import F
 from rest_framework.exceptions import ValidationError
+
+from apps.store.models import Store
+
 
 class SaleService:
 
@@ -24,15 +29,21 @@ class SaleService:
         if user.is_superuser:
             if "store" not in data:
                 raise ValidationError("Store required")
-            store = Store.objects.get(id=data["store"])
+            store = get_object_or_404(Store, id=data["store"])
+
+            if store.type == Store.StoreType.BASE:
+                raise ValidationError("Ombordan savdo amalga oshirish mumkin emas!")
+
         else:
             store = user.store
 
         customer = None
         if data.get("customer"):
-            customer = Customer.objects.get(id=data["customer"])
+            customer = get_object_or_404(Customer, id=data["customer"])
+            # customer = Customer.objects.get(id=data["customer"])
 
         # Sotuvni yaratish
+
         sale = Sale.objects.create(
             store=store,
             customer=customer,
