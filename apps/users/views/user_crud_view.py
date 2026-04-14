@@ -1,10 +1,11 @@
 # users/views.py
 from drf_spectacular.utils import extend_schema
-from rest_framework.generics import ListAPIView
+from rest_framework.generics import ListAPIView, get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
+from apps.users.models import User
 from apps.users.services import UserService
 from apps.users.serializers import SellerCreateSerializer, UserResponseSerializer
 from apps.users.selectors import UserSelector
@@ -33,9 +34,23 @@ class UsersDetailView(APIView):
     serializer_class = UserSerializer
 
     def get(self, request, pk):
-        user = UserSelector.get_user_by_id(user_id=pk)
+        user = get_object_or_404(User, pk=pk)
         serializer = self.serializer_class(user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request, pk):
+        user = UserSelector.get_user_by_id(user_id=pk)
+        serializer = self.serializer_class(user, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        user = UserSelector.get_user_by_id(user_id=pk)
+        user.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 
 @extend_schema(

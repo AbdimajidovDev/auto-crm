@@ -13,6 +13,10 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = ("id", "full_name", "phone_number", "email", "is_active", "created_at", "updated_at")
 
+    def validate_phone_number(self, phone):
+        check_valid_phone(phone)
+        return phone
+
 
 class SellerCreateSerializer(serializers.Serializer):
     full_name = serializers.CharField(write_only=True)

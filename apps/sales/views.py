@@ -13,6 +13,11 @@ from django.db.models import Q
 from apps.sales.utility import SalePagination, DebtPagination
 
 from apps.sales.services import CustomerDebtService
+from apps.sales.filters import SaleFilter
+
+
+from django_filters.rest_framework import DjangoFilterBackend
+
 
 
 @extend_schema(
@@ -24,55 +29,22 @@ class SaleListAPIView(generics.ListAPIView):
     serializer_class = SaleListSerializer
     pagination_class = SalePagination
 
+    filter_backends = [DjangoFilterBackend]
+    filterset_class = SaleFilter
+
     def get_queryset(self):
+        user = self.request.user
+
         qs = Sale.objects.select_related(
             "store", "customer", "seller"
-        ).all()
+        )
 
-        request = self.request
-
-        status_param = request.query_params.get("status")
-        store_id = request.query_params.get("store")
-        seller_id = request.query_params.get("seller")
-        customer_id = request.query_params.get("customer")
-
-        date_from = request.query_params.get("date_from")
-        date_to = request.query_params.get("date_to")
-
-        has_debt = request.query_params.get("has_debt")
-        search = request.query_params.get("search")
-
-        if status_param:
-            qs = qs.filter(status=status_param)
-
-        if store_id:
-            qs = qs.filter(store_id=store_id)
-
-        if seller_id:
-            qs = qs.filter(seller_id=seller_id)
-
-        if customer_id:
-            qs = qs.filter(customer_id=customer_id)
-
-        if date_from:
-            qs = qs.filter(created_at__date__gte=date_from)
-
-        if date_to:
-            qs = qs.filter(created_at__date__lte=date_to)
-
-        if has_debt == "true":
-            qs = qs.filter(status=Sale.Status.DEBT)
-
-        if has_debt == "false":
-            qs = qs.exclude(status=Sale.Status.DEBT)
-
-        if search:
-            qs = qs.filter(
-                Q(customer__first_name__icontains=search) |
-                Q(customer__last_name__icontains=search)
-            )
+        # 🔐 PERMISSION
+        if not user.is_superuser:
+            qs = qs.filter(seller=user)
 
         return qs.order_by("-created_at")
+
 
 # class SaleListAPIView(APIView):
 #     permission_classes = [IsAuthenticated]
