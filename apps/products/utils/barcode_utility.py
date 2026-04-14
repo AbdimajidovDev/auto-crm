@@ -10,7 +10,7 @@ from apps.products.models import ProductBatch
 
 def generate_unique_barcode():
     while True:
-        code = ''.join([str(random.randint(0, 9)) for _ in range(12)])
+        code = ''.join([str(random.randint(0, 9)) for _ in range(13)])
         if not ProductBatch.objects.filter(barcode=code).exists():
             return code
 
