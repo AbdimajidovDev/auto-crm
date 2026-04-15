@@ -30,12 +30,9 @@ class SaleService:
             if "store" not in data:
                 raise ValidationError("Store required")
             store = get_object_or_404(Store, id=data["store"])
-
-            if store.type == Store.StoreType.BASE:
-                raise ValidationError("Ombordan savdo amalga oshirish mumkin emas!")
-
         else:
             store = user.store
+            print('user.store', store)
 
         customer = None
         if data.get("customer"):
