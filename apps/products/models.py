@@ -63,7 +63,7 @@ class ProductBatch(TimestampMixin):
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
 
-    barcode = models.CharField(max_length=12, db_index=True, unique=True)
+    barcode = models.CharField(max_length=13, db_index=True, unique=True)
     shtrix_code = models.ImageField(upload_to=product_barcode_path)
 
 
