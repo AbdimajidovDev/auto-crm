@@ -5,6 +5,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
+from apps.store.models import StoreUser
 from apps.users.models import User
 from apps.users.services import UserService
 from apps.users.serializers import SellerCreateSerializer, UserResponseSerializer
@@ -21,6 +22,18 @@ class UsersListView(ListAPIView):
     serializer_class = UserSerializer
     permission_classes = (permissions.AllowAny,)
     pagination_class = None
+
+    def get_queryset(self):
+        from django.db.models import Prefetch
+
+        queryset = User.objects.prefetch_related(
+            Prefetch(
+                "store_links",
+                queryset=StoreUser.objects.filter(is_active=True).select_related("store"),
+                to_attr="active_store_links"
+            )
+        )
+        return queryset
 
 
 

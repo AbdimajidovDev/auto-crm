@@ -24,10 +24,14 @@ class UserSerializer(serializers.ModelSerializer):
         return phone
 
     def get_store_id(self, obj):
-        return obj.store.id
+        if hasattr(obj, "active_store_links") and obj.active_store_links:
+            return obj.active_store_links[0].store.id
+        return None
 
     def get_store_name(self, obj):
-        return obj.store.name
+        if hasattr(obj, "active_store_links") and obj.active_store_links:
+            return obj.active_store_links[0].store.name
+        return None
 
 
 
