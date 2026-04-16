@@ -32,7 +32,7 @@ class UsersListView(ListAPIView):
                 queryset=StoreUser.objects.filter(is_active=True).select_related("store"),
                 to_attr="active_store_links"
             )
-        )
+        ).filter(is_superuser=False)
         return queryset
 
 
