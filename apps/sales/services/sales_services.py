@@ -5,7 +5,7 @@ from rest_framework.generics import get_object_or_404
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.products.models import ProductBatch
 from apps.debts.services import DebtService
-from apps.store.models import Store
+from apps.store.models import Store, StoreUser
 from apps.users.models.customers import Customer
 
 from django.db import transaction
@@ -26,15 +26,22 @@ class SaleService:
         discount_value = data.get("discount_value", Decimal("0"))
 
         # 🔴 STORE LOGIC
+        # 🔴 STORE LOGIC (FIXED)
         if user.is_superuser:
-            if "store" not in data:
-                raise ValidationError("Store required")
             store = get_object_or_404(Store, id=data["store"])
-        else:
-            store = user.store
-            print('user.store', store)
 
+        else:
+            store_link = StoreUser.objects.filter(
+                user=user,
+                is_active=True
+            ).select_related("store").first()
+
+            if not store_link:
+                raise ValidationError("Siz hech qaysi do‘konga biriktirilmagansiz")
+
+            store = store_link.store
         customer = None
+
         if data.get("customer"):
             customer = get_object_or_404(Customer, id=data["customer"])
             # customer = Customer.objects.get(id=data["customer"])

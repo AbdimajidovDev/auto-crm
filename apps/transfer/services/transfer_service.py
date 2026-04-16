@@ -6,7 +6,7 @@ from rest_framework.exceptions import PermissionDenied
 
 from django.db import transaction
 from django.utils import timezone
-from django.core.exceptions import ValidationError, PermissionDenied
+from django.core.exceptions import PermissionDenied
 
 from apps.transfer.models import StockTransfer, StockTransferItem
 from apps.products.models import ProductBatch

@@ -82,7 +82,7 @@ class SaleCreateAPIView(APIView):
 
     def post(self, request):
 
-        serializer = SaleCreateSerializer(data=request.data)
+        serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         sale = SaleService.create_sale(

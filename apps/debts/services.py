@@ -27,10 +27,12 @@ class DebtService:
     def pay_debt(*, sale_id, amount, payment_type):
 
         # 🔴 LOCK SALE (critical!)
-        sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
+        # sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
+        sale = Sale.objects.select_for_update().get(id=sale_id)
+        # customer = sale.customer
 
-        if not sale.customer:
-            raise ValidationError("Sale mijozga bog'lanmagan")
+        # if not customer:
+        #     raise ValidationError("Sale mijozga bog'lanmagan")
 
         if amount <= 0:
             raise ValidationError("Miqdor ijobiy bo'lishi kerak")
@@ -60,3 +62,20 @@ class DebtService:
         )
 
         return payment
+
+    @staticmethod
+    @transaction.atomic
+    def increase_debt(*, customer, sale, amount):
+
+        if not customer:
+            raise ValidationError("Customer bo‘lishi kerak")
+
+        if amount <= 0:
+            raise ValidationError("Amount > 0 bo‘lishi kerak")
+
+        return CustomerDebt.objects.create(
+            customer=customer,
+            sale=sale,
+            amount=amount,
+            type=CustomerDebt.Type.INCREASE
+        )

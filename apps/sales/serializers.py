@@ -82,20 +82,57 @@ class SaleCreateSerializer(serializers.Serializer):
     payments = PaymentInputSerializer(many=True)
 
     def validate(self, data):
+        items = data.get('items') or []
+        payments = data.get('payments') or []
+        customer = data.get('customer')
 
-        if not data["items"]:
-            raise serializers.ValidationError("Items bo‘sh bo‘lmasligi kerak")
+        request = self.context["request"]
+        user = request.user
 
-        if not data["payments"]:
-            raise serializers.ValidationError("Payment bo‘sh bo‘lmasligi kerak")
+        # 🔴 STORE LOGIC
+        if user.is_superuser:
+            if not data.get("store"):
+                raise serializers.ValidationError({
+                    "store": "Superuser store tanlashi kerak"
+                })
+        else:
+            # 🔥 store berilsa ham ignore qilamiz
+            data["store"] = None
 
-        # Foizli chegirma 100% dan oshmasligi kerak
+
+        if not items:
+            raise serializers.ValidationError({
+                "items": "Items bo‘sh bo‘lmasligi kerak"
+            })
+
+        if not payments:
+            raise serializers.ValidationError({
+                "payments": "Payments bo‘sh bo‘lmasligi kerak"
+            })
+
+        # 🔥 Total hisoblash
+        total_items_amount = sum(
+            item['quantity'] * item['price'] for item in items
+        )
+
+        total_paid = sum(
+            payment['amount'] for payment in payments
+        )
+
+        # 🔴 Qarz logikasi
+        if total_paid < total_items_amount and not customer:
+            raise serializers.ValidationError({
+                "customer": "Qarzga savdo uchun mijoz majburiy"
+            })
+
+        # 🔴 Chegirma validatsiyasi
         if data.get("discount_type") == Sale.DiscountType.PERCENTAGE:
             if data.get("discount_value", 0) > 100:
-                raise serializers.ValidationError("Chegirma foizi 100 dan oshmasligi kerak")
+                raise serializers.ValidationError({
+                    "discount_value": "Chegirma 100% dan oshmasligi kerak"
+                })
 
         return data
-
 
 
 # ------------------------------------------------------------------------------

@@ -47,7 +47,7 @@ class Sale(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.store.name} {self.customer.full_name} {str(self.status)}"
+        return f"{self.store.name} {str(self.status)}"
 
 
 class SaleItem(models.Model):
