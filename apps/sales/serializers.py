@@ -5,11 +5,17 @@ from .models import Sale, SaleItem, Payment
 
 
 class SaleItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+
     class Meta:
         model = SaleItem
         fields = (
-            'id', 'product', 'quantity', 'unit_price', 'total_price'
+            'id', 'product', 'product_name', 'quantity', 'unit_price', 'total_price'
         )
+
+    def get_product_name(self, obj):
+        return obj.product.name if obj.product else None
+
 
 class SaleListSerializer(serializers.ModelSerializer):
     store_name = serializers.SerializerMethodField()
