@@ -1,5 +1,7 @@
 from django.db.models import Sum, Q
 from django.utils import timezone
+
+from apps.reports.services.store_scope_service import StoreScopeService
 from apps.sales.models import Sale
 from apps.debts.models import CustomerDebt
 from apps.contract.models import SupplierTransaction
@@ -44,3 +46,65 @@ class ReportService:
             "report_date": now
         }
         return data
+
+
+# services/dashboard_service.py
+
+from django.db.models import Sum, F, DecimalField, ExpressionWrapper
+from apps.sales.models import Sale
+from apps.contract.models import SupplierTransaction
+from apps.products.models import ProductBatch
+
+
+class DashboardService:
+
+    @staticmethod
+    def get_reports(user, date_from, date_to):
+
+        store_ids = StoreScopeService.get_user_stores(user)
+
+        sales = Sale.objects.filter(
+            created_at__range=(date_from, date_to)
+        )
+
+        if store_ids is not None:
+            sales = sales.filter(store_id__in=store_ids)
+
+        # 🔥 AGGREGATIONS
+        totals = sales.aggregate(
+            total_revenue=Sum("total_amount"),
+            total_paid=Sum("paid_amount"),
+        )
+
+        total_revenue = totals["total_revenue"] or 0
+        total_paid = totals["total_paid"] or 0
+
+        total_debt = total_revenue - total_paid
+
+        # Supplier debt
+        supplier = SupplierTransaction.objects.all()
+
+        if store_ids is not None:
+            supplier = supplier.filter(entry__store_id__in=store_ids)
+
+        supplier_totals = supplier.aggregate(
+            total_in=Sum("amount", filter=Q(type="in")),
+            total_paid=Sum("amount", filter=Q(type="pay")),
+        )
+
+        supplier_debt = (supplier_totals["total_in"] or 0) - (supplier_totals["total_paid"] or 0)
+
+        # Product count
+        products = ProductBatch.objects.all()
+        if store_ids is not None:
+            products = products.filter(store_id__in=store_ids)
+
+        total_products = products.count()
+
+        return {
+            "totalProducts": total_products,
+            "totalRevenue": total_revenue,
+            "totalPaid": total_paid,
+            "totalDebt": total_debt,
+            "supplierDebt": supplier_debt,
+        }
