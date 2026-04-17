@@ -23,6 +23,15 @@ class TopProductsService:
             store_id
         )
 
+        qs = qs.select_related("product", "sale").only(
+            "product__id",
+            "product__name",
+            "quantity",
+            "sale__store_id",
+            "sale__created_at"
+        )
+
+
         data = (
             qs.values("product_id", "product__name")
             .annotate(total_sold=Sum("quantity"))
