@@ -14,3 +14,13 @@ class StoreScopeService:
             user=user,
             is_active=True
         ).values_list("store_id", flat=True)
+
+
+
+class ReportStoreScope:
+
+    @staticmethod
+    def resolve(store_id):
+        if store_id and store_id != "all":
+            return [int(store_id)]
+        return None  # all stores

@@ -58,32 +58,32 @@ class SaleService:
 
         subtotal = Decimal("0")
 
-        # 🔴 ITEMS & STOCK LOGIC
         for item in items_data:
             product_id = item["product"]
             quantity_to_sell = item["quantity"]
             price = item["price"]
 
-            # 1. Ombor qoldig'ini blokirovka qilib olish (Race condition oldini olish uchun)
+            # batch = ProductBatch.objects.select_for_update().filter(
+            #     store=store,
+            #     product_id=product_id
+            # ).first()
+
             batch = ProductBatch.objects.select_for_update().filter(
                 store=store,
-                product_id=product_id
-            ).first()
+                product_id=product_id,
+                quantity__gt=0
+            ).order_by("created_at").first()
 
-            # 2. VALIDATION: Mahsulot borligini va miqdorini tekshirish
+
             if not batch:
-                raise ValidationError(f"Ushbu mahsulot do'konda mavjud emas.")
-
-            if batch.quantity <= 0:
-                raise ValidationError(f"{batch.product.name.upper()} mahsuloti tugagan (qoldiq 0).")
+                raise ValidationError("Mahsulot mavjud emas")
 
             if batch.quantity < quantity_to_sell:
-                raise ValidationError(
-                    f"{batch.product.name.upper()} mahsuloti yetarli emas. Do'konda {batch.quantity} dona mavjud! So'ralgan: {quantity_to_sell} dona."
-                )
+                raise ValidationError("Mahsulot yetarli emas")
 
-            # 3. STOCKNI KAMAYTIRISH (Atomar tarzda)
-            # F() bazadagi qiymatni to'g'ridan-to'g'ri kamaytiradi
+            # 🔥 CRITICAL FIX
+            purchase_price = batch.purchase_price
+
             ProductBatch.objects.filter(id=batch.id).update(
                 quantity=F('quantity') - quantity_to_sell
             )
@@ -96,8 +96,50 @@ class SaleService:
                 product_id=product_id,
                 quantity=quantity_to_sell,
                 unit_price=price,
+                purchase_price=purchase_price,  # 🔥 YANGI
                 total_price=total_price
             )
+
+        # 🔴 ITEMS & STOCK LOGIC
+        # for item in items_data:
+        #     product_id = item["product"]
+        #     quantity_to_sell = item["quantity"]
+        #     price = item["price"]
+        #
+        #     # 1. Ombor qoldig'ini blokirovka qilib olish (Race condition oldini olish uchun)
+        #     batch = ProductBatch.objects.select_for_update().filter(
+        #         store=store,
+        #         product_id=product_id
+        #     ).first()
+        #
+        #     # 2. VALIDATION: Mahsulot borligini va miqdorini tekshirish
+        #     if not batch:
+        #         raise ValidationError(f"Ushbu mahsulot do'konda mavjud emas.")
+        #
+        #     if batch.quantity <= 0:
+        #         raise ValidationError(f"{batch.product.name.upper()} mahsuloti tugagan (qoldiq 0).")
+        #
+        #     if batch.quantity < quantity_to_sell:
+        #         raise ValidationError(
+        #             f"{batch.product.name.upper()} mahsuloti yetarli emas. Do'konda {batch.quantity} dona mavjud! So'ralgan: {quantity_to_sell} dona."
+        #         )
+        #
+        #     # 3. STOCKNI KAMAYTIRISH (Atomar tarzda)
+        #     # F() bazadagi qiymatni to'g'ridan-to'g'ri kamaytiradi
+        #     ProductBatch.objects.filter(id=batch.id).update(
+        #         quantity=F('quantity') - quantity_to_sell
+        #     )
+        #
+        #     total_price = price * quantity_to_sell
+        #     subtotal += total_price
+        #
+        #     SaleItem.objects.create(
+        #         sale=sale,
+        #         product_id=product_id,
+        #         quantity=quantity_to_sell,
+        #         unit_price=price,
+        #         total_price=total_price
+        #     )
 
         # 🔴 CALCULATE DISCOUNT (Chegirmani hisoblash)
         calculated_discount = Decimal("0")
