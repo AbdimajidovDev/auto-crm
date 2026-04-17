@@ -1,7 +1,7 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from apps.reports.services import ReportService, DashboardService
+from apps.reports.services import DashboardReportService, DashboardService
 from apps.reports.serializers import DashboardReportSerializer
 from apps.reports.services.chart_service import ChartService
 from apps.reports.utils.date_filters import DateRangeResolver
@@ -14,7 +14,7 @@ from apps.sales.models import Sale
 )
 class DashboardReportAPIView(APIView):
     def get(self, request):
-        data = ReportService.get_dashboard_data()
+        data = DashboardReportService.get_dashboard_data()
         serializer = DashboardReportSerializer(data)
         return Response(serializer.data)
 

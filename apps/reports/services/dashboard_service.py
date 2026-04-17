@@ -1,14 +1,17 @@
-from django.db.models import Sum, Q
 from django.utils import timezone
 
 from apps.reports.services.store_scope_service import StoreScopeService
-from apps.sales.models import Sale
 from apps.debts.models import CustomerDebt
-from apps.contract.models import SupplierTransaction
 from apps.products.models import Product
-from django.db.models import Sum, F, Case, When, Value, DecimalField
+from django.db.models import Q, Sum, F, Case, When, Value, DecimalField
 
-class ReportService:
+from apps.sales.models import Sale
+from apps.contract.models import SupplierTransaction
+from apps.products.models import ProductBatch
+
+
+
+class DashboardReportService:
     @staticmethod
     def get_dashboard_data():
         now = timezone.now()
@@ -46,14 +49,6 @@ class ReportService:
             "report_date": now
         }
         return data
-
-
-# services/dashboard_service.py
-
-from django.db.models import Sum, F, DecimalField, ExpressionWrapper
-from apps.sales.models import Sale
-from apps.contract.models import SupplierTransaction
-from apps.products.models import ProductBatch
 
 
 class DashboardService:
