@@ -55,6 +55,7 @@ class SaleItem(models.Model):
     product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
 
     quantity = models.PositiveIntegerField()
+    purchase_price = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=20, decimal_places=2)
     total_price = models.DecimalField(max_digits=20, decimal_places=2)
 
