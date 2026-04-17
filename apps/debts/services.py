@@ -79,3 +79,17 @@ class DebtService:
             amount=amount,
             type=CustomerDebt.Type.INCREASE
         )
+
+
+class CustomerDebtService:
+
+    @staticmethod
+    def get(store_ids):
+        qs = CustomerDebt.objects.all()
+
+        if store_ids:
+            qs = qs.filter(sale__store_id__in=store_ids)
+
+        return qs.values("customer__full_name").annotate(
+            debt=Sum("amount")
+        )
