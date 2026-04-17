@@ -375,3 +375,64 @@
 #         db_table = "supplier_transaction"
 #
 # yana birorta madelim kerak bo'lsa ayt tashlab beraman.
+
+
+
+"""
+const mockMonthlyData: ReportsData = {
+  filters: {
+    dateRange: {
+      from: '2026-04-01',
+      to: '2026-04-30',
+    },
+    branchId: '1',
+    availableBranches: [
+      { id: 'all', name: 'Barchasi' },
+      { id: '1', name: 'Warehouse Store' },
+      { id: '2', name: 'Store 01' },
+      { id: '3', name: 'Store 02' },
+    ],
+  },
+  summary: {
+    totalRevenue: 15000000,
+    totalProfit: 3500000,
+    totalExpenses: 11500000,
+    totalOrders: 700,
+    averageOrderValue: 214000,
+    totalCustomers: 260,
+  },
+  branchStatistics: [
+    {
+      branchId: '1',
+      branchName: 'Toshkent',
+      revenue: 15000000,
+      profit: 3500000,
+      orders: 700,
+      customers: 260,
+      debt: 1200000,
+    },
+  ],
+  charts: {
+    revenueByBranch: {
+      labels: ['Toshkent'],
+      data: [15000000],
+    },
+    profitTrend: {
+      labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
+      data: [900000, 1100000, 800000, 700000],
+    },
+  },
+  topSellingProducts: [
+    { rank: 1, productId: 'PR-01', name: 'Brake Pad', totalSold: 320, totalRevenue: 9600000 },
+    { rank: 2, productId: 'PR-02', name: 'Oil Filter', totalSold: 210, totalRevenue: 4200000 },
+    { rank: 3, productId: 'PR-03', name: 'Air Filter', totalSold: 180, totalRevenue: 3600000 },
+    { rank: 4, productId: 'PR-04', name: 'Spark Plug', totalSold: 150, totalRevenue: 3000000 },
+    { rank: 5, productId: 'PR-05', name: 'Brake Disc', totalSold: 120, totalRevenue: 2400000 },
+  ],
+  debts: {
+    customerDebts: [{ customerName: 'Ali Valiyev', debt: 500000 }],
+    supplierDebts: [{ supplierName: 'Auto Parts LLC', debt: 800000 }],
+  },
+};
+
+"""

@@ -4,6 +4,11 @@ from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
 from django.db.models import Sum
 
 
+from django.db.models.functions import TruncWeek, TruncMonth
+from django.db.models import Sum, F, DecimalField, ExpressionWrapper
+
+
+
 class ChartService:
 
     @staticmethod
@@ -36,3 +41,69 @@ class ChartService:
             "labels": labels,
             "data": values
         }
+
+
+#
+#
+# class ChartService:
+
+    @staticmethod
+    def profit_trend(items_qs, filter_type):
+
+        trunc = TruncWeek("sale__created_at") if filter_type == "monthly" else TruncMonth("sale__created_at")
+
+        data = (
+            items_qs
+            .annotate(period=trunc)
+            .values("period")
+            .annotate(
+                profit=Sum(
+                    ExpressionWrapper(
+                        (F("unit_price") - F("purchase_price")) * F("quantity"),
+                        output_field=DecimalField()
+                    )
+                )
+            )
+            .order_by("period")
+        )
+
+        return {
+            "labels": [i["period"].strftime("%Y-%m-%d") for i in data],
+            "data": [i["profit"] for i in data]
+        }
+
+
+
+
+
+from django.db.models.functions import TruncWeek, TruncMonth
+from django.db.models import Sum, F, ExpressionWrapper, DecimalField
+
+
+class ProfitChartService:
+
+    @staticmethod
+    def get(items_qs, filter_type):
+
+        if filter_type == "monthly":
+            trunc = TruncWeek("sale__created_at")
+        else:
+            trunc = TruncMonth("sale__created_at")
+
+        data = (
+            items_qs
+            .annotate(period=trunc)
+            .values("period")
+            .annotate(
+                profit=Sum(
+                    ExpressionWrapper(
+                        (F("unit_price") - F("purchase_price")) * F("quantity"),
+                        output_field=DecimalField()
+                    )
+                )
+            )
+            .order_by("period")
+        )
+
+        return data
+
