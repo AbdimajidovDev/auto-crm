@@ -1,5 +1,6 @@
 from django.urls import path
 from apps.reports.views import DashboardReportAPIView, DashboardAPIView
+from apps.reports.views.export_view import ReportsExcelExportAPIView
 from apps.reports.views.report_view import ReportsAPIView
 from apps.reports.views.top_product_view import TopProductsAPIView
 
@@ -11,4 +12,7 @@ urlpatterns = [
 
     # Reports
     path('', ReportsAPIView.as_view()),
+
+    # Export
+    path("export/", ReportsExcelExportAPIView.as_view())
 ]
