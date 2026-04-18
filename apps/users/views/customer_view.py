@@ -1,3 +1,5 @@
+from django.db import models
+from django.db.models import Sum, Case, When, F
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, permissions, status
 from rest_framework.generics import get_object_or_404
@@ -15,9 +17,20 @@ from apps.users.serializers.customer_serializer import CustomerSerializer
 class CustomerListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CustomerSerializer
+    # queryset = Customer.objects.prefetch_related('sales', 'debts__sale__store').all()
 
-    def get_queryset(self):
-        return Customer.objects.all()
+    # views.py da querysetni quyidagicha yozish mumkin:
+    queryset = Customer.objects.annotate(
+        annotated_total_debt=Sum(
+            Case(
+                When(debts__type='i', then=F('debts__amount')),
+                When(debts__type='d', then=-F('debts__amount')),
+                default=0,
+                output_field=models.DecimalField()
+            )
+        )
+    )
+
 
 
 @extend_schema(
