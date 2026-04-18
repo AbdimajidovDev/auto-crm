@@ -21,7 +21,8 @@ class Sale(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        db_index=True
+        db_index=True,
+        related_name='sales'
     )
     seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     total_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
