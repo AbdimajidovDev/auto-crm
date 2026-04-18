@@ -26,17 +26,3 @@ class ReportsAPIView(APIView):
             cache.set(cache_key, data, 60)
 
         return Response(data)
-
-
-# class ReportsAPIView(APIView):
-#
-#     permission_classes = [IsAdminUser]
-#
-#     def get(self, request):
-#
-#         data = ReportService.get_full_report(
-#             request.user,
-#             request.GET
-#         )
-#
-#         return Response(data)
