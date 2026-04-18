@@ -8,6 +8,10 @@ from apps.products.models import ProductBatch
 """
     SalesItem madeliga yangi purchase field qo'shilgani uchun bu funksiya yozildi
     avtomatik to'ldirib beradi. faqat bir martta ishlatish kifoya.
+    
+    
+    command:
+    python manage.py fill_purchase_price
 """
 
 
@@ -39,8 +43,3 @@ class Command(BaseCommand):
             updated += 1
 
         self.stdout.write(self.style.SUCCESS(f"{updated} ta yangilandi"))
-
-
-"""
-    python manage.py fill_purchase_price
-"""
