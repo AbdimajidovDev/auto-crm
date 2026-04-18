@@ -1,12 +1,5 @@
-# services/chart_service.py
-
-from django.db.models.functions import TruncDay, TruncWeek, TruncMonth
-from django.db.models import Sum
-
-
-from django.db.models.functions import TruncWeek, TruncMonth
-from django.db.models import Sum, F, DecimalField, ExpressionWrapper
-
+from django.db.models.functions import TruncWeek, TruncMonth, TruncDay
+from django.db.models import Sum, F, ExpressionWrapper, DecimalField
 
 
 class ChartService:
@@ -43,8 +36,6 @@ class ChartService:
         }
 
 
-#
-#
 # class ChartService:
 
     @staticmethod
@@ -74,12 +65,6 @@ class ChartService:
 
 
 
-
-
-from django.db.models.functions import TruncWeek, TruncMonth
-from django.db.models import Sum, F, ExpressionWrapper, DecimalField
-
-
 class ProfitChartService:
 
     @staticmethod
@@ -106,4 +91,3 @@ class ProfitChartService:
         )
 
         return data
-

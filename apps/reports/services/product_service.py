@@ -1,5 +1,3 @@
-# apps/reports/services/product_service.py
-
 from django.db.models import Sum
 from apps.sales.models import SaleItem
 

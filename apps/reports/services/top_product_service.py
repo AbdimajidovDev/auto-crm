@@ -1,5 +1,3 @@
-# services/top_products_service.py
-
 from django.db.models import Sum
 
 from apps.reports.services import StoreScopeService
@@ -74,45 +72,3 @@ class StoreFilterService:
             qs = qs.filter(sale__store_id=store_id)
 
         return qs
-
-
-
-# class TopProductsService:
-#
-#     @staticmethod
-#     def get_top_products(*, user, date_from, date_to, limit=5):
-#
-#         store_ids = StoreScopeService.get_user_stores(user)
-#
-#         qs = SaleItem.objects.filter(
-#             sale__created_at__range=(date_from, date_to)
-#         )
-#
-#         # 🔥 STORE FILTER
-#         if store_ids is not None:
-#             print(' 🔥 STORE FILTER  🔥 STORE FILTER  🔥 STORE FILTER  🔥 STORE FILTER 🔥 STORE FILTER')
-#             qs = qs.filter(sale__store_id__in=store_ids)
-#
-#         # 🔥 CORE AGGREGATION
-#         data = (
-#             qs.values(
-#                 "product_id",
-#                 "product__name"
-#             )
-#             .annotate(
-#                 total_sold=Sum("quantity")
-#             )
-#             .order_by("-total_sold")
-#         )[:limit]
-#
-#         return [
-#             {
-#                 "product_id": item["product_id"],
-#                 "name": item["product__name"],
-#                 "total_sold": item["total_sold"],
-#             }
-#             for item in data
-#         ]
-
-
-

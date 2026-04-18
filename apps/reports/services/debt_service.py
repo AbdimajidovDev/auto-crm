@@ -1,5 +1,3 @@
-# apps/reports/services/debt_service.py
-
 from django.db.models import Sum, Q
 from apps.debts.models import CustomerDebt
 from apps.contract.models import SupplierTransaction

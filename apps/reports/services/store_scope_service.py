@@ -1,5 +1,3 @@
-# services/store_scope.py
-
 from apps.store.models import StoreUser
 
 

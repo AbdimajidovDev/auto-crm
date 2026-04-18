@@ -1,6 +1,3 @@
-
-# apps/reports/services/summary_service.py
-
 from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper
 from apps.sales.models import Sale, SaleItem
 

@@ -2,10 +2,6 @@ from django.db.models import Sum, Case, When, DecimalField, F
 
 from apps.debts.models import CustomerDebt
 
-from django.db.models import Sum, Case, When, DecimalField, F
-
-from apps.debts.models import CustomerDebt
-
 
 class CustomerDebtService:
 

@@ -5,7 +5,7 @@ from rest_framework.generics import get_object_or_404
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.products.models import ProductBatch
 from apps.debts.services import DebtService
-from apps.store.models import Store, StoreUser
+from apps.store.models import StoreUser
 from apps.users.models.customers import Customer
 
 from django.db import transaction
@@ -26,7 +26,6 @@ class SaleService:
         discount_value = data.get("discount_value", Decimal("0"))
 
         # 🔴 STORE LOGIC
-        # 🔴 STORE LOGIC (FIXED)
         if user.is_superuser:
             store = get_object_or_404(Store, id=data["store"])
 
@@ -44,7 +43,6 @@ class SaleService:
 
         if data.get("customer"):
             customer = get_object_or_404(Customer, id=data["customer"])
-            # customer = Customer.objects.get(id=data["customer"])
 
         # Sotuvni yaratish
 
@@ -62,11 +60,6 @@ class SaleService:
             product_id = item["product"]
             quantity_to_sell = item["quantity"]
             price = item["price"]
-
-            # batch = ProductBatch.objects.select_for_update().filter(
-            #     store=store,
-            #     product_id=product_id
-            # ).first()
 
             batch = ProductBatch.objects.select_for_update().filter(
                 store=store,
@@ -99,47 +92,6 @@ class SaleService:
                 purchase_price=purchase_price,  # 🔥 YANGI
                 total_price=total_price
             )
-
-        # 🔴 ITEMS & STOCK LOGIC
-        # for item in items_data:
-        #     product_id = item["product"]
-        #     quantity_to_sell = item["quantity"]
-        #     price = item["price"]
-        #
-        #     # 1. Ombor qoldig'ini blokirovka qilib olish (Race condition oldini olish uchun)
-        #     batch = ProductBatch.objects.select_for_update().filter(
-        #         store=store,
-        #         product_id=product_id
-        #     ).first()
-        #
-        #     # 2. VALIDATION: Mahsulot borligini va miqdorini tekshirish
-        #     if not batch:
-        #         raise ValidationError(f"Ushbu mahsulot do'konda mavjud emas.")
-        #
-        #     if batch.quantity <= 0:
-        #         raise ValidationError(f"{batch.product.name.upper()} mahsuloti tugagan (qoldiq 0).")
-        #
-        #     if batch.quantity < quantity_to_sell:
-        #         raise ValidationError(
-        #             f"{batch.product.name.upper()} mahsuloti yetarli emas. Do'konda {batch.quantity} dona mavjud! So'ralgan: {quantity_to_sell} dona."
-        #         )
-        #
-        #     # 3. STOCKNI KAMAYTIRISH (Atomar tarzda)
-        #     # F() bazadagi qiymatni to'g'ridan-to'g'ri kamaytiradi
-        #     ProductBatch.objects.filter(id=batch.id).update(
-        #         quantity=F('quantity') - quantity_to_sell
-        #     )
-        #
-        #     total_price = price * quantity_to_sell
-        #     subtotal += total_price
-        #
-        #     SaleItem.objects.create(
-        #         sale=sale,
-        #         product_id=product_id,
-        #         quantity=quantity_to_sell,
-        #         unit_price=price,
-        #         total_price=total_price
-        #     )
 
         # 🔴 CALCULATE DISCOUNT (Chegirmani hisoblash)
         calculated_discount = Decimal("0")
@@ -198,4 +150,3 @@ class SaleService:
             )
 
         return sale
-
