@@ -25,6 +25,21 @@ class ProductBatchSerializer(serializers.ModelSerializer):
         return obj.store.name if obj.store else None
 
 
+class ProductByBarcodeSerializer(serializers.ModelSerializer):
+    product = serializers.SerializerMethodField()
+    price = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ProductBatch
+        fields = ('id', 'product', 'price', 'quantity')
+
+    def get_product(self, obj):
+        return obj.product.name if obj.product else None
+
+    def get_price(self, obj):
+        return obj.selling_price or None
+
+
 class ProductListSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     category_name = serializers.SerializerMethodField()
