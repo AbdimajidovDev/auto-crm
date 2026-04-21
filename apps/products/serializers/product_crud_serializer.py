@@ -13,16 +13,20 @@ class ProductImageSerializer(serializers.ModelSerializer):
 
 class ProductBatchSerializer(serializers.ModelSerializer):
     store_name = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductBatch
         fields = (
-            'id', 'product', 'store', 'store_name', 'quantity',
+            'id', 'product', 'product_name', 'store', 'store_name', 'quantity',
             'purchase_price', 'selling_price', 'barcode', 'shtrix_code'
         )
 
     def get_store_name(self, obj):
         return obj.store.name if obj.store else None
+
+    def get_product_name(self, obj):
+        return obj.product.name if obj.product else None
 
 
 class ProductByBarcodeSerializer(serializers.ModelSerializer):

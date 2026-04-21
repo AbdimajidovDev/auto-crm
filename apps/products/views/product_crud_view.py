@@ -10,7 +10,7 @@ from apps.products.serializers.product_crud_serializer import (
     ProductCreateSerializer,
     ProductGetSerializer,
     ProductListSerializer,
-    ProductByBarcodeSerializer,
+    ProductImageSerializer, ProductBatchSerializer,
 )
 from apps.products.services.product_crud_service import ProductService
 
@@ -98,5 +98,5 @@ class BatchByBarcodeAPIView(APIView):
 
     def get(self, request, barcode):
         batch = get_object_or_404(ProductBatch, barcode=barcode)
-        serializer = ProductByBarcodeSerializer(batch, context={"request": request})
+        serializer = ProductBatchSerializer(batch, context={"request": request})
         return Response(serializer.data, status=200)
