@@ -19,7 +19,7 @@ class ProductBatchSerializer(serializers.ModelSerializer):
         model = ProductBatch
         fields = (
             'id', 'product', 'product_name', 'store', 'store_name', 'quantity',
-            'purchase_price', 'selling_price', 'barcode', 'shtrix_code'
+            'purchase_price', 'selling_price', 'barcode', 'shtrix_code', "location"
         )
 
     def get_store_name(self, obj):
@@ -35,7 +35,7 @@ class ProductByBarcodeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductBatch
-        fields = ('id', 'product', 'price', 'quantity')
+        fields = ('id', 'product', 'price', 'quantity', "location")
 
     def get_product(self, obj):
         return obj.product.name if obj.product else None
@@ -52,7 +52,8 @@ class ProductListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = (
-            'id', 'category', 'category_name', 'name', 'description', 'is_active', 'created_at', 'images', 'batches'
+            'id', 'category', 'category_name', 'name', 'unit_measurement',
+            'description', 'is_active', 'created_at', 'images', 'batches'
         )
 
     def get_category_name(self, obj):
@@ -81,7 +82,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         """
-        🔥 UNIVERSAL PARSER:
+        UNIVERSAL PARSER:
         images, images[], images[0] hammasini ushlaydi
         """
         files = []

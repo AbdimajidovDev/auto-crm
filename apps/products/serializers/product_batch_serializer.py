@@ -20,6 +20,7 @@ class ProductBatchSearchSerializer(serializers.ModelSerializer):
             "quantity",
             "selling_price",
             "barcode",
+            "location"
         )
 
 

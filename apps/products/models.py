@@ -31,6 +31,7 @@ class Category(TimestampMixin):
 class Product(TimestampMixin):
     category = models.ForeignKey(Category, on_delete=models.PROTECT)
     name = models.CharField(max_length=100)
+    unit_measurement = models.ForeignKey("ProductUnitMeasurement", on_delete=models.PROTECT, blank=True, null=True)
     description = models.TextField()
     is_active = models.BooleanField(default=True)
 
@@ -56,7 +57,6 @@ class ProductImage(models.Model):
 
 class ProductBatch(TimestampMixin):
     location = models.ForeignKey("ProductLocation", on_delete=models.PROTECT, blank=True, null=True)
-    unit_measurement = models.ForeignKey("ProductUnitMeasurement", on_delete=models.PROTECT, blank=True, null=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
     store = models.ForeignKey(Store, on_delete=models.CASCADE)
 
