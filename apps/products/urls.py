@@ -11,7 +11,7 @@ from apps.products.views.product_crud_view import (
     BatchByBarcodeAPIView, ProductDetailAPIView,
 )
 from apps.products.views.product_batch_view import ProductSearchAPIView, ProductLocationView, \
-    ProductUnitMeasurementView, ProductUnitMeasurementDetailView, ProductLocationDetailView
+    ProductUnitMeasurementView, ProductUnitMeasurementDetailView, ProductLocationDetailView, ProductBatchDetailView
 
 urlpatterns = [
 
@@ -24,6 +24,7 @@ urlpatterns = [
     path("", ProductListAPIView.as_view()),
     path("create/", ProductCreateAPIView.as_view()),
     path("<int:pk>/", ProductDetailAPIView.as_view()),
+    path("item/<int:pk>/", ProductBatchDetailView.as_view()),
 
     path("barcode/<str:barcode>/", BatchByBarcodeAPIView.as_view()),
     path("search/<str:product_name>/", ProductSearchAPIView.as_view()),

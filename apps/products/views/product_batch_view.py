@@ -11,8 +11,35 @@ from apps.common.models.timestamp_mixin import TimestampMixin
 from apps.products.models import ProductBatch, ProductUnitMeasurement, ProductLocation
 from apps.store.models import StoreUser
 
-from apps.products.serializers import ProductBatchSearchSerializer, ProductUnitMeasurementSerializer, \
-    ProductLocationSerializer, ProductUnitMeasurementGetSerializer, ProductLocationGetSerializer
+from apps.products.serializers import (
+    ProductBatchSearchSerializer,
+    ProductUnitMeasurementSerializer,
+    ProductLocationSerializer,
+    ProductUnitMeasurementGetSerializer,
+    ProductLocationGetSerializer,
+    ProductBatchLocationUpdateSerializer,
+)
+
+
+
+@extend_schema(
+    tags=["Product"],
+    summary="Batch joylashuvini yangilash (Faqat location).",
+    request=ProductBatchLocationUpdateSerializer,  # Swagger-da faqat location ko'rinishi uchun
+)
+class ProductBatchDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+
+    def put(self, request, pk):
+        batch = get_object_or_404(ProductBatch, pk=pk)
+
+        serializer = ProductBatchLocationUpdateSerializer(batch, data=request.data, partial=True)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @extend_schema(

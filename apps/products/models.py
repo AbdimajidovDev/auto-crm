@@ -41,7 +41,7 @@ class Product(TimestampMixin):
 
     class Meta:
         db_table = 'product'
-        # ordering = ['name']
+        ordering = ['name']
 
 
 class ProductImage(models.Model):

@@ -1,8 +1,6 @@
 from rest_framework import serializers
-from rest_framework.exceptions import ValidationError
 
-from apps.products.models import Product, ProductImage, ProductBatch
-
+from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -14,6 +12,7 @@ class ProductImageSerializer(serializers.ModelSerializer):
 class ProductBatchSerializer(serializers.ModelSerializer):
     store_name = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
+    location = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductBatch
@@ -27,6 +26,28 @@ class ProductBatchSerializer(serializers.ModelSerializer):
 
     def get_product_name(self, obj):
         return obj.product.name if obj.product else None
+
+    def get_location(self, obj):
+        if obj.location:
+            name = obj.location.location
+            description = obj.location.description
+            location = {
+                "name": name,
+                "description": description,
+                }
+            return location
+        return None
+
+class ProductBatchLocationUpdateSerializer(serializers.ModelSerializer):
+    # Faqat location ID-sini qabul qilamiz
+    location = serializers.PrimaryKeyRelatedField(
+        queryset=ProductLocation.objects.all(),
+        required=True
+    )
+
+    class Meta:
+        model = ProductBatch
+        fields = ['location']
 
 
 class ProductByBarcodeSerializer(serializers.ModelSerializer):
@@ -48,16 +69,20 @@ class ProductListSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     category_name = serializers.SerializerMethodField()
     batches = ProductBatchSerializer(many=True, read_only=True)
+    unit_measurement_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = (
-            'id', 'category', 'category_name', 'name', 'unit_measurement',
+            'id', 'category', 'category_name', 'name', "unit_measurement", 'unit_measurement_name',
             'description', 'is_active', 'created_at', 'images', 'batches'
         )
 
     def get_category_name(self, obj):
         return obj.category.name if obj.category else None
+
+    def get_unit_measurement_name(self, obj):
+        return obj.unit_measurement.measurement if obj.unit_measurement else None
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
@@ -73,6 +98,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         fields = (
             'id',
             'category',
+            'unit_measurement',
             'name_uz',
             'name_uz_cyrl',
             'description_uz',
