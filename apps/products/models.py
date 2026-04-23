@@ -55,6 +55,8 @@ class ProductImage(models.Model):
 
 
 class ProductBatch(TimestampMixin):
+    location = models.ForeignKey("ProductLocation", on_delete=models.PROTECT, blank=True, null=True)
+    unit_measurement = models.ForeignKey("ProductUnitMeasurement", on_delete=models.PROTECT, blank=True, null=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
     store = models.ForeignKey(Store, on_delete=models.CASCADE)
 
@@ -75,3 +77,24 @@ class ProductBatch(TimestampMixin):
         indexes = [
             models.Index(fields=["store", "product"]),
         ]
+
+
+class ProductLocation(TimestampMixin):
+    location = models.TextField()
+    description = models.TextField()
+
+    class Meta:
+        db_table = 'product_location'
+
+    def __str__(self):
+        return f"{self.location} location"
+
+
+class ProductUnitMeasurement(TimestampMixin):
+    measurement = models.CharField(max_length=50)
+
+    class Meta:
+        db_table = 'product_unit_measurement'
+
+    def __str__(self):
+        return self.measurement
