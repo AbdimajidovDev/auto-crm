@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.products.models import ProductBatch
+from apps.products.models import ProductBatch, ProductUnitMeasurement, ProductLocation
 
 
 class ProductBatchSearchSerializer(serializers.ModelSerializer):
@@ -21,3 +21,26 @@ class ProductBatchSearchSerializer(serializers.ModelSerializer):
             "selling_price",
             "barcode",
         )
+
+
+class ProductLocationGetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductLocation
+        fields = ('id', 'location', 'description')
+
+
+class ProductLocationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductLocation
+        fields = ('id', 'location_uz', 'location_uz_cyrl', 'description_uz', 'description_uz_cyrl')
+
+
+class ProductUnitMeasurementGetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductUnitMeasurement
+        fields = ('id', 'measurement')
+
+class ProductUnitMeasurementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductUnitMeasurement
+        fields = ('id', 'measurement_uz', 'measurement_uz_cyrl')
