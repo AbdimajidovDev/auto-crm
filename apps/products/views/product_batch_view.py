@@ -1,6 +1,6 @@
 from drf_spectacular.utils import extend_schema
-from rest_framework import status
-from rest_framework.generics import ListAPIView
+from rest_framework import status, permissions
+from rest_framework.generics import ListAPIView, get_object_or_404
 from rest_framework.permissions import IsAuthenticated
 from django.db.models import Q, Case, When, Value, IntegerField
 from django.core.exceptions import PermissionDenied
@@ -98,6 +98,41 @@ class ProductUnitMeasurementView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+class ProductUnitMeasurementDetailView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_class = ProductUnitMeasurementSerializer
+
+    @extend_schema(
+        tags=["Product"],
+        summary="ID orqali Product o'lchov birlik malumotini olish!",
+    )
+    def get(self, request, pk):
+        measurement = get_object_or_404(ProductUnitMeasurement, pk=pk)
+        serializer = ProductUnitMeasurementGetSerializer(measurement, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=["Product"],
+        summary="Product o'lchov birligini tahrirlash.",
+    )
+    def put(self, request, pk):
+        measurement = get_object_or_404(ProductUnitMeasurement, pk=pk)
+        serializer = self.serializer_class(instance=measurement, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(
+        tags=["Product"],
+        summary="Productni do'kondagi joylashuvini o'chirish.",
+    )
+    def delete(self, request, pk):
+        measurement = get_object_or_404(ProductUnitMeasurement, pk=pk)
+        measurement.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ProductLocationView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ProductLocationSerializer
@@ -121,3 +156,38 @@ class ProductLocationView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ProductLocationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ProductLocationSerializer
+
+    @extend_schema(
+        tags=["Product"],
+        summary="ID orqali Productni do'kondagi joylashuv malumotini olish! ",
+    )
+    def get(self, request, pk):
+        location = get_object_or_404(ProductLocation, pk=pk)
+        serializer = self.serializer_class(location, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        tags=["Product"],
+        summary="Productni do'kondagi joylashuvini tahrirlash.",
+    )
+    def put(self, request, pk):
+        location = get_object_or_404(ProductLocation, pk=pk)
+        serializer = self.serializer_class(instance=location, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    @extend_schema(
+        tags=["Product"],
+        summary="Productni do'kondagi joylashuvini o'chirish.",
+    )
+    def delete(self, request, pk):
+        location = get_object_or_404(ProductLocation, pk=pk)
+        location.delete()
+        return Response('Location successfully deleted!', status=status.HTTP_204_NO_CONTENT)

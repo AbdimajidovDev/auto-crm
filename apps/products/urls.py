@@ -10,7 +10,8 @@ from apps.products.views.product_crud_view import (
     ProductListAPIView,
     BatchByBarcodeAPIView, ProductDetailAPIView,
 )
-from apps.products.views.product_batch_view import ProductSearchAPIView, ProductLocationView, ProductUnitMeasurementView
+from apps.products.views.product_batch_view import ProductSearchAPIView, ProductLocationView, \
+    ProductUnitMeasurementView, ProductUnitMeasurementDetailView, ProductLocationDetailView
 
 urlpatterns = [
 
@@ -28,5 +29,7 @@ urlpatterns = [
     path("search/<str:product_name>/", ProductSearchAPIView.as_view()),
 
     path('store-product/locations/', ProductLocationView.as_view()),
+    path('store-product/locations/<int:pk>/', ProductLocationDetailView.as_view()),
     path('measurements/', ProductUnitMeasurementView.as_view()),
+    path('measurements/<int:pk>/', ProductUnitMeasurementDetailView.as_view()),
 ]
