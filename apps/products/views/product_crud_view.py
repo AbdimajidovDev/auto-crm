@@ -1,3 +1,4 @@
+from django.db.models import Model, ProtectedError
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions
 from rest_framework.exceptions import ValidationError
@@ -81,11 +82,20 @@ class ProductDetailAPIView(APIView):
     )
     def delete(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
-        if product.is_active:
-            product.is_active = False
-            product.save()
-            return Response(status=204)
-        return Response('Product not found', status=400)
+        try:
+            product.delete()
+        except ProtectedError:
+            raise ValidationError(
+                "Bu mahsulotni o‘chirib bo‘lmaydi, chunki u allaqachon tizimda ishlatilgan (kirim/sotuv mavjud)."
+            )
+
+        return Response(status=204)
+
+
+        # if product.is_active:
+        #     product.is_active = False
+        #     product.save()
+        # return Response('Product not found', status=400)
 
 
 
