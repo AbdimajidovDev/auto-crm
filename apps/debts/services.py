@@ -80,6 +80,23 @@ class DebtService:
             type=CustomerDebt.Type.INCREASE
         )
 
+    @staticmethod
+    @transaction.atomic
+    def decrease_debt(*, customer, sale, amount):
+
+        if not customer:
+            raise ValidationError("Customer bo‘lishi kerak")
+
+        if amount <= 0:
+            raise ValidationError("Amount > 0 bo‘lishi kerak")
+
+        return CustomerDebt.objects.create(
+            customer=customer,
+            sale=sale,
+            amount=amount,
+            type=CustomerDebt.Type.DECREASE
+        )
+
 
 class CustomerDebtService:
 

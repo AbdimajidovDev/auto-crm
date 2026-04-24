@@ -2,8 +2,12 @@ from django.urls import path
 from apps.sales.views import (
     SaleCreateAPIView,
     SaleListAPIView,
-    SaleDetailAPIView, CustomerDebtListAPIView,
+    SaleDetailAPIView,
+    CustomerDebtListAPIView,
+    SaleReturnCreateAPIView,
+    SaleReturnListAPIView,
 )
+
 
 urlpatterns = [
     path('list/', SaleListAPIView.as_view()),
@@ -11,4 +15,7 @@ urlpatterns = [
     path('<int:pk>/', SaleDetailAPIView.as_view()),
 
     path('debtor-customers/', CustomerDebtListAPIView.as_view()),
+
+    path('sale-return/list/', SaleReturnListAPIView.as_view()),
+    path('sale-return/', SaleReturnCreateAPIView.as_view()),
 ]
