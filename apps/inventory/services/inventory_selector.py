@@ -2,7 +2,7 @@ from django.shortcuts import get_object_or_404
 from apps.inventory.models import InventorySession
 
 
-from django.db.models import Sum, OuterRef, Subquery, IntegerField, BooleanField, CharField, Value
+from django.db.models import Sum, OuterRef, Subquery, IntegerField, BooleanField, CharField, Value, When, Case
 from django.db.models.functions import Coalesce
 
 from apps.inventory.models import (
@@ -55,9 +55,19 @@ class InventorySelector:
             InventoryMovement.objects
             .filter(session_id=session_id, product=OuterRef("product"))
             .values("product")
-            .annotate(total=Sum("quantity"))
+            .annotate(
+                total=Sum(
+                    Case(
+                        When(type="sale", then=F("quantity")),
+                        When(type="transfer_out", then=F("quantity")),
+                        When(type="return", then=-F("quantity")),  # 🔥 ENG MUHIM
+                        output_field=IntegerField()
+                    )
+                )
+            )
             .values("total")[:1]
         )
+
 
         qs = (
             InventorySnapshot.objects
@@ -79,35 +89,3 @@ class InventorySelector:
             qs = qs.filter(status__in=statuses)
 
         return qs
-
-
-    # @staticmethod
-    # def get_inventory_list(session_id):
-    #
-    #     counts_subquery = (
-    #         InventoryCount.objects
-    #         .filter(session_id=session_id, product=OuterRef("product"))
-    #         .values("product")
-    #         .annotate(total=Sum("counted_quantity"))
-    #         .values("total")[:1]
-    #     )
-    #
-    #     movement_subquery = (
-    #         InventoryMovement.objects
-    #         .filter(session_id=session_id, product=OuterRef("product"))
-    #         .values("product")
-    #         .annotate(total=Sum("quantity"))
-    #         .values("total")[:1]
-    #     )
-    #
-    #     qs = (
-    #         InventorySnapshot.objects
-    #         .filter(session_id=session_id)
-    #         .select_related("product")
-    #         .annotate(
-    #             counted=Coalesce(Subquery(counts_subquery, output_field=IntegerField()), 0),
-    #             moved=Coalesce(Subquery(movement_subquery, output_field=IntegerField()), 0),
-    #         )
-    #     )
-    #
-    #     return qs
