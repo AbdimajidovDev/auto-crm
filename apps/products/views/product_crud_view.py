@@ -11,7 +11,8 @@ from apps.products.serializers.product_crud_serializer import (
     ProductCreateSerializer,
     ProductGetSerializer,
     ProductListSerializer,
-    ProductImageSerializer, ProductBatchSerializer,
+    ProductBatchSerializer,
+    ProductUpdateSerializer,
 )
 from apps.products.services.product_crud_service import ProductService
 
@@ -53,7 +54,7 @@ class ProductCreateAPIView(APIView):
 
 class ProductDetailAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = ProductListSerializer
+    serializer_class = ProductUpdateSerializer
 
     @extend_schema(
         tags=["Product"],
@@ -66,15 +67,22 @@ class ProductDetailAPIView(APIView):
 
     @extend_schema(
         tags=["Product"],
-        summary="- Product tahrirlash.",
+        summary="- Product va uning rasmlarini tahrirlash",
     )
     def put(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
-        serializer = ProductCreateSerializer(product, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=200)
-        return Response(serializer.errors, status=400)
+
+        serializer = ProductUpdateSerializer(
+            product,
+            data=request.data,
+            partial=True
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response('Product successfully updated!', status=200)
+
 
     @extend_schema(
         tags=["Product"],

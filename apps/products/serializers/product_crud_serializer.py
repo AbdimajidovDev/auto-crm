@@ -6,7 +6,7 @@ from apps.products.models import Product, ProductImage, ProductBatch, ProductLoc
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductImage
-        fields = ('image', 'product')
+        fields = ('id', 'image')
 
 
 class ProductBatchSerializer(serializers.ModelSerializer):
@@ -151,3 +151,63 @@ class ProductGetSerializer(serializers.ModelSerializer):
     def get_category_name(self, obj):
         return obj.category.name if obj.category else None
 
+
+class ProductUpdateSerializer(serializers.ModelSerializer):
+
+    # yangi rasmlar
+    new_images = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False
+    )
+
+    # o‘chiriladigan rasmlar IDsi
+    delete_image_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False
+    )
+
+    class Meta:
+        model = Product
+        fields = (
+            "category",
+            "unit_measurement",
+            "name",
+            "description",
+            "new_images",
+            "delete_image_ids",
+        )
+
+    def validate_new_images(self, images):
+        if len(images) > 7:
+            raise serializers.ValidationError("Max 7 images allowed")
+
+        for img in images:
+            if img.size > 5 * 1024 * 1024:
+                raise serializers.ValidationError("Image size must be < 5MB")
+
+        return images
+
+    def update(self, instance, validated_data):
+        new_images = validated_data.pop("new_images", [])
+        delete_ids = validated_data.pop("delete_image_ids", [])
+
+        # 🔹 product fields update
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        instance.save()
+
+        # 🔥 DELETE IMAGES
+        if delete_ids:
+            ProductImage.objects.filter(
+                id__in=delete_ids,
+                product=instance
+            ).delete()
+
+        # 🔥 ADD NEW IMAGES
+        ProductImage.objects.bulk_create([
+            ProductImage(product=instance, image=img)
+            for img in new_images
+        ])
+
+        return instance
