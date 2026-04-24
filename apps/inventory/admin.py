@@ -20,7 +20,7 @@ class InventorySessionAdmin(admin.ModelAdmin):
 
 @admin.register(InventorySnapshot)
 class InventorySnapshotAdmin(admin.ModelAdmin):
-    list_display = ('id', 'session', 'product', 'store', 'expected_quantity')
+    list_display = ('id', 'session', 'product_id', 'product', 'store', 'expected_quantity')
     list_filter = ('store',)
 
 

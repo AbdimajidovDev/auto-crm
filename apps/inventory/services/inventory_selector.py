@@ -2,7 +2,7 @@ from django.shortcuts import get_object_or_404
 from apps.inventory.models import InventorySession
 
 
-from django.db.models import Sum, OuterRef, Subquery, IntegerField, BooleanField, CharField, Value, When, Case
+from django.db.models import Sum, OuterRef, Subquery, IntegerField, BooleanField, CharField, Value, When, Case, F
 from django.db.models.functions import Coalesce
 
 from apps.inventory.models import (
