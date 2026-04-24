@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from rest_framework.generics import get_object_or_404
 
+from apps.inventory.services.inventory_hooks_service import handle_sale_item
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.products.models import ProductBatch
 from apps.debts.services import DebtService
@@ -84,7 +85,7 @@ class SaleService:
             total_price = price * quantity_to_sell
             subtotal += total_price
 
-            SaleItem.objects.create(
+            sale_item = SaleItem.objects.create(
                 sale=sale,
                 product_id=product_id,
                 quantity=quantity_to_sell,
@@ -92,6 +93,8 @@ class SaleService:
                 purchase_price=purchase_price,  # 🔥 YANGI
                 total_price=total_price
             )
+
+            handle_sale_item(sale_item)
 
         # 🔴 CALCULATE DISCOUNT (Chegirmani hisoblash)
         calculated_discount = Decimal("0")

@@ -1,5 +1,6 @@
 from rest_framework.exceptions import ValidationError
 
+from apps.inventory.services.inventory_hooks_service import handle_transfer_approved
 from apps.products.utils.barcode_utility import generate_unique_barcode
 from rest_framework.exceptions import PermissionDenied
 
@@ -130,6 +131,8 @@ class TransferService:
         transfer.approved_by = user
         transfer.approved_at = timezone.now()
         transfer.save()
+
+        handle_transfer_approved(transfer)
 
         return transfer
 

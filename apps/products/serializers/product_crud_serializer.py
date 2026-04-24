@@ -191,13 +191,13 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         new_images = validated_data.pop("new_images", [])
         delete_ids = validated_data.pop("delete_image_ids", [])
 
-        # 🔹 product fields update
+        # product fields update
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
         instance.save()
 
-        # 🔥 DELETE IMAGES
+        # DELETE IMAGES
         images_to_delete = ProductImage.objects.filter(
             id__in=delete_ids,
             product=instance
@@ -205,7 +205,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 
         for img in images_to_delete:
             if img.image:
-                img.image.delete(save=False)  # 🔥 storage’dan o‘chadi
+                img.image.delete(save=False)
 
         images_to_delete.delete()
 
