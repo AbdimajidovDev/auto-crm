@@ -7,7 +7,6 @@ from apps.inventory.models import (
     InventorySnapshot,
     InventoryCount,
     InventoryMovement,
-    InventoryAdjustment
 )
 from apps.products.models import ProductBatch
 
@@ -64,44 +63,6 @@ class InventoryService:
 
         return session
 
-    # @staticmethod
-    # @transaction.atomic
-    # def start_session(*, user, store_id):
-    #
-    #     # ❗ CHECK: faqat bitta active session
-    #     if InventorySession.objects.filter(
-    #         store_id=store_id,
-    #         status=InventorySession.Status.ACTIVE
-    #     ).exists():
-    #         raise ValidationError("Active session mavjud")
-    #
-    #     session = InventorySession.objects.create(
-    #         store_id=store_id,
-    #         started_by=user
-    #     )
-    #
-    #     # 🔥 SNAPSHOT (OPTIMIZED)
-    #     batches = (
-    #         ProductBatch.objects
-    #         .filter(store_id=store_id)
-    #         .values("product_id")
-    #         .annotate(total=Sum("quantity"))
-    #     )
-    #
-    #     InventorySnapshot.objects.bulk_create([
-    #         InventorySnapshot(
-    #             session=session,
-    #             product_id=b["product_id"],
-    #             store_id=store_id,
-    #             expected_quantity=b["total"]
-    #         )
-    #         for b in batches
-    #     ])
-    #
-    #     session.snapshot_taken = True
-    #     session.save(update_fields=["snapshot_taken"])
-    #
-    #     return session
 
     # 🔹 COUNT (SCAN)
 
@@ -163,24 +124,6 @@ class InventoryService:
         count.save(update_fields=["counted_quantity", "status"])
 
 
-    # @staticmethod
-    # @transaction.atomic
-    # def scan_product(*, session_id, product_id, quantity):
-    #
-    #     session = InventorySession.objects.select_for_update().get(id=session_id)
-    #
-    #     if session.status != InventorySession.Status.ACTIVE:
-    #         raise ValidationError("Session yopilgan")
-    #
-    #     obj, _ = InventoryCount.objects.get_or_create(
-    #         session=session,
-    #         product_id=product_id,
-    #         defaults={"counted_quantity": 0}
-    #     )
-    #
-    #     obj.counted_quantity = F("counted_quantity") + quantity
-    #     obj.save(update_fields=["counted_quantity"])
-
     # 🔹 FINALIZE
     @staticmethod
     @transaction.atomic
@@ -226,65 +169,6 @@ class InventoryService:
         session.status = "completed"
         session.save(update_fields=["status"])
 
-
-    # @staticmethod
-    # @transaction.atomic
-    # def finalize(*, session_id):
-    #
-    #     session = InventorySession.objects.select_for_update().get(id=session_id)
-    #
-    #     if session.status != InventorySession.Status.ACTIVE:
-    #         raise ValidationError("Session yopilgan")
-    #
-    #     snapshots = InventorySnapshot.objects.filter(session=session)
-    #
-    #     movements = (
-    #         InventoryMovement.objects
-    #         .filter(session=session)
-    #         .values("product")
-    #         .annotate(total=Sum("quantity"))
-    #     )
-    #     movement_map = {m["product"]: m["total"] for m in movements}
-    #
-    #     counts = {
-    #         c.product_id: c.counted_quantity
-    #         for c in InventoryCount.objects.filter(session=session)
-    #     }
-    #
-    #     adjustments = []
-    #
-    #     for snap in snapshots:
-    #
-    #         counted = counts.get(snap.product_id, 0)
-    #         moved = movement_map.get(snap.product_id, 0)
-    #
-    #         final_stock = counted - moved
-    #         diff = final_stock - snap.expected_quantity
-    #
-    #         if diff != 0:
-    #             adjustments.append(
-    #                 InventoryAdjustment(
-    #                     session=session,
-    #                     product=snap.product,
-    #                     difference=diff
-    #                 )
-    #             )
-    #
-    #     InventoryAdjustment.objects.bulk_create(adjustments)
-    #
-    #     # 🔥 APPLY STOCK (BULK)
-    #     for adj in adjustments:
-    #         ProductBatch.objects.filter(
-    #             store=session.store,
-    #             product=adj.product
-    #         ).update(
-    #             quantity=F("quantity") + adj.difference
-    #         )
-    #
-    #     session.status = InventorySession.Status.COMPLETED
-    #     session.save(update_fields=["status"])
-    #
-    #     return session
 
     # 🔹 CANCEL
     @staticmethod

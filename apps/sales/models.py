@@ -10,6 +10,7 @@ class Sale(models.Model):
         PAID = "paid", "Paid"
         PARTIAL = "partial", "Partial"
         DEBT = "debt", "Debt"
+        RETURNED = "r", "Returned"
 
     class DiscountType(models.TextChoices):
         PERCENTAGE = "p", "Percentage (%)"
@@ -59,6 +60,7 @@ class SaleItem(models.Model):
     purchase_price = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=20, decimal_places=2)
     total_price = models.DecimalField(max_digits=20, decimal_places=2)
+    returned_quantity = models.PositiveIntegerField(default=0)
 
 
 
@@ -89,4 +91,58 @@ class Payment(TimestampMixin):
 
     def __str__(self):
         return f"{self.sale.store.name} {self.customer.full_name} {str(self.amount)}"
-    
+
+
+
+class SaleReturn(TimestampMixin):
+
+    sale = models.ForeignKey(
+        Sale,
+        on_delete=models.PROTECT,
+        related_name="returns"
+    )
+
+    store = models.ForeignKey('store.Store', on_delete=models.CASCADE)
+    customer = models.ForeignKey(
+        'users.Customer',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
+    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
+    total_refund = models.DecimalField(max_digits=20, decimal_places=2, default=0)
+
+    comment = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'sale_return'
+
+    def __str__(self):
+        return f"#{self.sale} Sotuv - {str(self.total_refund)} product"
+
+
+class SaleReturnItem(models.Model):
+    sale_return = models.ForeignKey(
+        SaleReturn,
+        on_delete=models.CASCADE,
+        related_name="items"
+    )
+
+    sale_item = models.ForeignKey(
+        SaleItem,
+        on_delete=models.PROTECT
+    )
+
+    product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
+
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=20, decimal_places=2)
+    total_price = models.DecimalField(max_digits=20, decimal_places=2)
+
+    class Meta:
+        db_table = 'sale_return_item'
+
+    def __str__(self):
+        return
