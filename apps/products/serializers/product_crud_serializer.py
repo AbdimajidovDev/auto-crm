@@ -198,11 +198,16 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         instance.save()
 
         # 🔥 DELETE IMAGES
-        if delete_ids:
-            ProductImage.objects.filter(
-                id__in=delete_ids,
-                product=instance
-            ).delete()
+        images_to_delete = ProductImage.objects.filter(
+            id__in=delete_ids,
+            product=instance
+        )
+
+        for img in images_to_delete:
+            if img.image:
+                img.image.delete(save=False)  # 🔥 storage’dan o‘chadi
+
+        images_to_delete.delete()
 
         # 🔥 ADD NEW IMAGES
         ProductImage.objects.bulk_create([
