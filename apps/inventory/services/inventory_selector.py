@@ -51,20 +51,48 @@ class InventorySelector:
             .values("status")[:1]
         )
 
-        movement_subquery = (
+        # 🔹 SOLD OUT
+        sold_out_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"))
+            .filter(session_id=session_id, product=OuterRef("product"), type="sale")
             .values("product")
-            .annotate(
-                total=Sum(
-                    Case(
-                        When(type="sale", then=F("quantity")),
-                        When(type="transfer_out", then=F("quantity")),
-                        When(type="return", then=-F("quantity")),  # 🔥 ENG MUHIM
-                        output_field=IntegerField()
-                    )
-                )
-            )
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+
+        # 🔹 RETURN
+        returned_subquery = (
+            InventoryMovement.objects
+            .filter(session_id=session_id, product=OuterRef("product"), type="return")
+            .values("product")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+
+        # 🔹 TRANSFER OUT
+        transfer_out_subquery = (
+            InventoryMovement.objects
+            .filter(session_id=session_id, product=OuterRef("product"), type="transfer_out")
+            .values("product")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+
+        # 🔹 TRANSFER IN
+        transfer_in_subquery = (
+            InventoryMovement.objects
+            .filter(session_id=session_id, product=OuterRef("product"), type="transfer_in")
+            .values("product")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+
+        # 🔹 ENTRY
+        entry_subquery = (
+            InventoryMovement.objects
+            .filter(session_id=session_id, product=OuterRef("product"), type="entry")
+            .values("product")
+            .annotate(total=Sum("quantity"))
             .values("total")[:1]
         )
 
@@ -75,14 +103,18 @@ class InventorySelector:
             .select_related("product")
             .annotate(
                 counted=Coalesce(Subquery(counts_subquery, output_field=IntegerField()), 0),
-                moved=Coalesce(Subquery(movement_subquery, output_field=IntegerField()), 0),
+
+                sold_out=Coalesce(Subquery(sold_out_subquery, output_field=IntegerField()), 0),
+                returned=Coalesce(Subquery(returned_subquery, output_field=IntegerField()), 0),
+                transfer_out=Coalesce(Subquery(transfer_out_subquery, output_field=IntegerField()), 0),
+                transfer_in=Coalesce(Subquery(transfer_in_subquery, output_field=IntegerField()), 0),
+                entry=Coalesce(Subquery(entry_subquery, output_field=IntegerField()), 0),
+
                 is_check=Coalesce(Subquery(is_check_subquery, output_field=BooleanField()), False),
-                status=Coalesce(
-                    Subquery(status_subquery, output_field=CharField()),
-                    Value("p")  # 🔥 FIX
-                ),
+                status=Coalesce(Subquery(status_subquery, output_field=CharField()), Value("p")),
             )
         )
+
 
         # 🔥 STATUS FILTER
         if statuses:
