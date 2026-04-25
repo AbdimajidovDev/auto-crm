@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.db.models import Sum, F, Case, When, IntegerField
+from django.db.models.functions import Coalesce
 from rest_framework.exceptions import ValidationError
 
 from apps.inventory.models import (
@@ -137,23 +138,34 @@ class InventoryService:
         if session.status != InventorySession.Status.ACTIVE:
             raise ValidationError("Session yopilgan")
 
-        # 🔹 movements (correct)
         movements = (
             InventoryMovement.objects
             .filter(session=session)
             .values("product")
             .annotate(
-                total=Sum(
-                    Case(
-                        When(type="sale", then=F("quantity")),
-                        When(type="transfer_out", then=F("quantity")),
-                        When(type="return", then=-F("quantity")),
-                        output_field=IntegerField()
-                    )
-                )
+                sold_out=Coalesce(Sum(
+                    Case(When(type="sale", then=F("quantity")), output_field=IntegerField())
+                ), 0),
+
+                returned=Coalesce(Sum(
+                    Case(When(type="return", then=F("quantity")), output_field=IntegerField())
+                ), 0),
+
+                transfer_out=Coalesce(Sum(
+                    Case(When(type="transfer_out", then=F("quantity")), output_field=IntegerField())
+                ), 0),
+
+                transfer_in=Coalesce(Sum(
+                    Case(When(type="transfer_in", then=F("quantity")), output_field=IntegerField())
+                ), 0),
+
+                entry=Coalesce(Sum(
+                    Case(When(type="entry", then=F("quantity")), output_field=IntegerField())
+                ), 0),
             )
         )
-        movement_map = {m["product"]: m["total"] for m in movements}
+
+        movement_map = {m["product"]: m for m in movements}
 
         # 🔹 counts map
         counts_map = {
@@ -171,10 +183,24 @@ class InventoryService:
         for product_id, expected in snapshots.items():
 
             counted = counts_map.get(product_id, 0)
-            moved = movement_map.get(product_id, 0)
 
-            final = counted - moved
+            data = movement_map.get(product_id, {})
 
+            sold_out = data.get("sold_out", 0)
+            returned = data.get("returned", 0)
+            transfer_out = data.get("transfer_out", 0)
+            transfer_in = data.get("transfer_in", 0)
+            entry = data.get("entry", 0)
+
+            final = (
+                    counted
+                    - sold_out
+                    - transfer_out
+                    + transfer_in
+                    + entry
+                    + returned
+            )
+            
             # ❗ NEGATIVE CHECK
             if final < 0:
                 raise ValidationError(f"Negative stock: product_id={product_id}")
@@ -191,68 +217,6 @@ class InventoryService:
 
         session.status = InventorySession.Status.COMPLETED
         session.save(update_fields=["status"])
-
-
-    # @staticmethod
-    # @transaction.atomic
-    # def finalize(*, session_id):
-    #
-    #     session = InventorySession.objects.select_for_update().get(id=session_id)
-    #
-    #     if session.status != "active":
-    #         raise ValidationError("Session yopilgan")
-    #
-    #     # movements = (
-    #     #     InventoryMovement.objects
-    #     #     .filter(session=session)
-    #     #     .values("product")
-    #     #     .annotate(total=Sum("quantity"))
-    #     # )
-    #
-    #     movements = (
-    #         InventoryMovement.objects
-    #         .filter(session=session)
-    #         .values("product")
-    #         .annotate(
-    #             total=Sum(
-    #                 Case(
-    #                     When(type="sale", then=F("quantity")),
-    #                     When(type="transfer_out", then=F("quantity")),
-    #                     When(type="return", then=-F("quantity")),
-    #                     output_field=IntegerField()
-    #                 )
-    #             )
-    #         )
-    #     )
-    #
-    #
-    #     movement_map = {m["product"]: m["total"] for m in movements}
-    #
-    #     counts = InventoryCount.objects.select_related("product").filter(session=session)
-    #
-    #     for count in counts:
-    #
-    #         moved = movement_map.get(count.product_id, 0)
-    #
-    #         final = count.counted_quantity - moved
-    #
-    #         snapshot = InventorySnapshot.objects.get(
-    #             session=session,
-    #             product=count.product
-    #         )
-    #
-    #         diff = final - snapshot.expected_quantity
-    #
-    #         if diff != 0:
-    #             ProductBatch.objects.filter(
-    #                 store=session.store,
-    #                 product=count.product
-    #             ).update(
-    #                 quantity=F("quantity") + diff
-    #             )
-    #
-    #     session.status = "completed"
-    #     session.save(update_fields=["status"])
 
 
     # 🔹 CANCEL
