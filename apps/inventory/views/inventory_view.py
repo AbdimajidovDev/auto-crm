@@ -3,7 +3,6 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 
-from apps.inventory.services.inventory_service import InventoryService
 from apps.inventory.serializers.inventory_serializer import (
     InventoryStartSerializer,
     InventoryCountSerializer,
@@ -11,6 +10,7 @@ from apps.inventory.serializers.inventory_serializer import (
     InventoryCancelSerializer
 )
 
+from apps.inventory.services.inventory_service import InventoryService
 from apps.inventory.services.inventory_selector import InventorySelector
 from apps.inventory.serializers.inventory_serializer import InventoryListSerializer
 
@@ -47,22 +47,6 @@ class InventoryListAPIView(APIView):
             "products": data,
             "checked": checked
         }, status=200)
-
-# class InventoryListAPIView(APIView):
-#     permission_classes = (permissions.IsAuthenticated,)
-#     serializer_class = InventoryListSerializer
-#
-#     @extend_schema(
-#         tags=["inventory"],
-#         summary="Inventarizatsiya davomida barcha mahsulotlar bo‘yicha umumiy holatni olish (declared, scanned, movement, farq)",
-#     )
-#     def get(self, request, session_id):
-#
-#         qs = InventorySelector.get_inventory_list(session_id)
-#
-#         serializer = InventoryListSerializer(qs, many=True)
-#
-#         return Response(serializer.data, status=200)
 
 
 class InventoryStartAPIView(APIView):
@@ -160,3 +144,7 @@ class InventoryCancelAPIView(APIView):
         InventoryService.cancel(**serializer.validated_data)
 
         return Response({"status": "cancelled"})
+
+
+
+# class InventorySnapshotAPIView()
