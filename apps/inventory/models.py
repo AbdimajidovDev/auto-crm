@@ -70,9 +70,11 @@ class InventoryCount(TimestampMixin):
 class InventoryMovement(TimestampMixin):
 
     class Type(models.TextChoices):
-        SALE = "sale"
-        TRANSFER_OUT = "transfer_out"
-        RETURN = "return"
+        SALE = "s", "Sale"
+        TRANSFER_OUT = "to", 'Transfer Out'
+        RETURN = "r", 'Return'
+        TRANSFER_IN = "ti", "Transfer In"
+        ENTRY = "e", "Entry"
 
     session = models.ForeignKey(InventorySession, on_delete=models.CASCADE, related_name="movements")
 
