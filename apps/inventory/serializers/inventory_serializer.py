@@ -3,42 +3,35 @@ from rest_framework import serializers
 class InventoryListSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(source="product.id")
     product_name = serializers.CharField(source="product.name")
+
     declared = serializers.IntegerField(source="expected_quantity")
     scanned = serializers.IntegerField(source="counted")
-    moved = serializers.IntegerField()
+
+    sold_out = serializers.IntegerField()
+    returned = serializers.IntegerField()
+    transfer_out = serializers.IntegerField()
+    transfer_in = serializers.IntegerField()
+    entry = serializers.IntegerField()
+
     status = serializers.CharField()
-    final = serializers.SerializerMethodField()
-    difference = serializers.SerializerMethodField()
     is_check = serializers.BooleanField()
 
+    final = serializers.SerializerMethodField()
+    difference = serializers.SerializerMethodField()
+
     def get_final(self, obj):
-        return obj.counted - obj.moved
+        return (
+                obj.counted
+                - obj.sold_out
+                - obj.transfer_out
+                + obj.transfer_in
+                + obj.entry
+                + obj.returned
+        )
 
     def get_difference(self, obj):
-        return (obj.counted - obj.moved) - obj.expected_quantity
-
-
-
-#
-# class InventoryListSerializer(serializers.Serializer):
-#
-#     product_id = serializers.IntegerField(source="product.id")
-#     product_name = serializers.CharField(source="product.name")
-#
-#     declared = serializers.IntegerField(source="expected_quantity")
-#     scanned = serializers.IntegerField(source="counted")
-#
-#     moved = serializers.IntegerField()
-#
-#     final = serializers.SerializerMethodField()
-#     difference = serializers.SerializerMethodField()
-#
-#     def get_final(self, obj):
-#         return obj.counted - obj.moved
-#
-#     def get_difference(self, obj):
-#         return (obj.counted - obj.moved) - obj.expected_quantity
-
+        final = self.get_final(obj)
+        return final - obj.expected_quantity
 
 
 class InventoryStartSerializer(serializers.Serializer):
