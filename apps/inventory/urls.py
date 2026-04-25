@@ -5,19 +5,18 @@ from .views.inventory_view import (
     InventoryStartAPIView,
     InventorySetCountAPIView,
     InventoryFinalizeAPIView,
-    InventoryCancelAPIView,
+    InventoryCancelAPIView, InventoryMovementListView,
 )
 
 
 
 urlpatterns = [
-    path('inventory/list/<int:session_id>/', InventoryListAPIView.as_view()),
+    path('list/<int:session_id>/', InventoryListAPIView.as_view()),
+    path('movement-list/<int:session_id>/', InventoryMovementListView.as_view()),
 
-    path('inventory/start/', InventoryStartAPIView.as_view()),
+    path('start/', InventoryStartAPIView.as_view()),
+    path('scan/', InventorySetCountAPIView.as_view()),
 
-    path('inventory/scan/', InventorySetCountAPIView.as_view()),
-
-    path('inventory/finalize/', InventoryFinalizeAPIView.as_view()),
-
-    path('inventory/cancel/', InventoryCancelAPIView.as_view()),
+    path('finalize/', InventoryFinalizeAPIView.as_view()),
+    path('cancel/', InventoryCancelAPIView.as_view()),
 ]

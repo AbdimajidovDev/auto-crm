@@ -1,5 +1,8 @@
 from rest_framework import serializers
 
+from apps.inventory.models import InventoryMovement
+
+
 class InventoryListSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(source="product.id")
     product_name = serializers.CharField(source="product.name")
@@ -51,3 +54,16 @@ class InventoryFinalizeSerializer(serializers.Serializer):
 
 class InventoryCancelSerializer(serializers.Serializer):
     session_id = serializers.IntegerField()
+
+
+class InventoryMovementListSerializer(serializers.ModelSerializer):
+    product_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InventoryMovement
+        fields = (
+            'id', 'session', 'product', 'product_name', 'quantity', 'type', 'ref_id', 'created_at',
+        )
+
+    def get_product_name(self, obj):
+        return obj.product.name if obj.product else ''

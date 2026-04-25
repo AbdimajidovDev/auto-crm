@@ -1,13 +1,20 @@
 from drf_spectacular.utils import extend_schema
+from rest_framework.generics import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
+
+from apps.inventory.models import (
+    InventoryMovement,
+    InventorySession,
+)
 
 from apps.inventory.serializers.inventory_serializer import (
     InventoryStartSerializer,
     InventoryCountSerializer,
     InventoryFinalizeSerializer,
-    InventoryCancelSerializer
+    InventoryCancelSerializer,
+    InventoryMovementListSerializer
 )
 
 from apps.inventory.services.inventory_service import InventoryService
@@ -147,4 +154,16 @@ class InventoryCancelAPIView(APIView):
 
 
 
-# class InventorySnapshotAPIView()
+class InventoryMovementListView(APIView):
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = InventoryMovementListSerializer
+
+    @extend_schema(
+        tags=["inventory"],
+        summary="Inventarizatsiya jarayonida sotuv, transfer, ... bo'lganlar ro'yxati."
+    )
+    def get(self, request, session_id):
+        inventory = get_object_or_404(InventorySession, pk=session_id)
+        qs = InventoryMovement.objects.filter(session=inventory)
+        serializer = InventoryMovementListSerializer(qs, many=True, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
