@@ -3,6 +3,7 @@ from rest_framework import serializers
 class InventoryListSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(source="product.id")
     product_name = serializers.CharField(source="product.name")
+    barcode = serializers.CharField()
 
     declared = serializers.IntegerField(source="expected_quantity")
     scanned = serializers.IntegerField(source="counted")
