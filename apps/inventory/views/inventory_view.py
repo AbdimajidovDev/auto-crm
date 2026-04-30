@@ -14,12 +14,12 @@ from apps.inventory.serializers.inventory_serializer import (
     InventoryCountSerializer,
     InventoryFinalizeSerializer,
     InventoryCancelSerializer,
-    InventoryMovementListSerializer
+    InventoryMovementListSerializer, InventoryListSerializer
 )
 
 from apps.inventory.services.inventory_service import InventoryService
 from apps.inventory.services.inventory_selector import InventorySelector
-from apps.inventory.serializers.inventory_serializer import InventoryListSerializer
+from apps.inventory.serializers.inventory_serializer import InventoryDetailSerializer
 
 
 
@@ -27,6 +27,21 @@ from apps.inventory.serializers.inventory_serializer import InventoryListSeriali
 class InventoryListAPIView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
     serializer_class = InventoryListSerializer
+
+    @extend_schema(
+        tags=["inventory"],
+        summary="Inventarizatsiya mahsulotlari (status bo‘yicha filter bilan)",
+    )
+    def get(self, request):
+        inventories = InventorySession.objects.all()
+        serializer = self.serializer_class(inventories, many=True, context={'request': request})
+        print('serializer', serializer.data)
+        return Response(serializer.data, status=200)
+
+
+class InventoryDetailAPIView(APIView):
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_class = InventoryDetailSerializer
 
     @extend_schema(
         tags=["inventory"],

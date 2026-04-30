@@ -1,9 +1,17 @@
 from rest_framework import serializers
 
-from apps.inventory.models import InventoryMovement
+from apps.inventory.models import InventoryMovement, InventorySession
 
 
-class InventoryListSerializer(serializers.Serializer):
+class InventoryListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InventorySession
+        fields = (
+            'id', 'store', 'started_by', 'started_at', 'status', 'snapshot_taken'
+        )
+
+
+class InventoryDetailSerializer(serializers.Serializer):
     product_id = serializers.IntegerField(source="product.id")
     product_name = serializers.CharField(source="product.name")
     barcode = serializers.CharField()

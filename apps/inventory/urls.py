@@ -1,17 +1,19 @@
 from django.urls import path
-from .views import *
 from .views.inventory_view import (
     InventoryListAPIView,
     InventoryStartAPIView,
     InventorySetCountAPIView,
     InventoryFinalizeAPIView,
-    InventoryCancelAPIView, InventoryMovementListView,
+    InventoryCancelAPIView,
+    InventoryMovementListView,
+    InventoryDetailAPIView,
 )
 
 
 
 urlpatterns = [
-    path('list/<int:session_id>/', InventoryListAPIView.as_view()),
+    path('list/', InventoryListAPIView.as_view()),
+    path('list/<int:session_id>/', InventoryDetailAPIView.as_view()),
     path('movement-list/<int:session_id>/', InventoryMovementListView.as_view()),
 
     path('start/', InventoryStartAPIView.as_view()),
