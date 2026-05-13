@@ -27,9 +27,15 @@ class NotificationService:
             ]
 
             # 🔥 bulk insert + ids qaytadi (PostgreSQL)
+            # ✅ YAXSHI: Notification yozuvlari `bulk_create` bilan yaratilgan, loop ichida alohida INSERT qilinmayapti.
             notifications = Notification.objects.bulk_create(notifications)
 
             # 🔥 websocket fanout
+            # ⚠️ MUAMMO [PERFORMANCE]: WebSocket fanout sinxron loop ichida ketma-ket yuboriladi.
+            # Sabab: har bir notification uchun `async_to_sync(group_send)` alohida chaqiriladi.
+            # Natija: userlar soni ko'p bo'lsa commitdan keyingi callback uzoq ishlaydi va worker band bo'ladi.
+            # ✅ YECHIM:
+            # celery_task_send_notifications.delay([notif.id for notif in notifications])
             for notif in notifications:
                 async_to_sync(channel_layer.group_send)(
                     f"user_{notif.user_id}",
@@ -55,6 +61,7 @@ class NotificationService:
     @staticmethod
     def notify_transfer_created(transfer):
 
+        # ✅ YAXSHI: `values_list("user_id", flat=True)` faqat kerakli ustunni oladi.
         user_ids = set(
             StoreUser.objects.filter(
                 store=transfer.to_store,
@@ -91,3 +98,13 @@ class NotificationService:
             message=f"{transfer.to_store.name} transferni rad etdi",
             transfer=transfer
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [WebSocket fanoutni background taskga chiqarish]
+# ═══════════════════════════════

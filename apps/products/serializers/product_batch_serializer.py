@@ -4,6 +4,7 @@ from apps.products.models import ProductBatch, ProductUnitMeasurement, ProductLo
 
 
 class ProductBatchSearchSerializer(serializers.ModelSerializer):
+    # ✅ YAXSHI: Qidiruv serializeri `source` fieldlardan foydalangan; view `select_related` bilan mos.
     product_name = serializers.CharField(source="product.name")
     category_name = serializers.CharField(source="product.category.name")
     store_name = serializers.CharField(source="store.name")
@@ -27,13 +28,25 @@ class ProductBatchSearchSerializer(serializers.ModelSerializer):
 class ProductLocationGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductLocation
-        fields = ('id', 'location', 'description')
+        fields = ('id', 'location', 'description', "created_at")
 
+
+
+# ─────────────────────────────────────────────
+# SERIALIZERS
+# ─────────────────────────────────────────────
 
 class ProductLocationSerializer(serializers.ModelSerializer):
+
     class Meta:
         model = ProductLocation
-        fields = ('id', 'location_uz', 'location_uz_cyrl', 'description_uz', 'description_uz_cyrl')
+        fields = ("id", "location", "description")
+
+
+# class ProductLocationSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = ProductLocation
+#         fields = ('id', 'location_uz', 'location_uz_cyrl', 'description_uz', 'description_uz_cyrl')
 
 
 class ProductUnitMeasurementGetSerializer(serializers.ModelSerializer):
@@ -57,6 +70,12 @@ class StoreQuantitySerializer(serializers.Serializer):
 
 
 class ProductBatchListSerializer(serializers.ModelSerializer):
+    # ⚠️ MUAMMO [PERFORMANCE]: `SerializerMethodField`lar `obj.all_batches` mavjudligiga qattiq bog'langan.
+    # Sabab: view `to_attr="all_batches"` bilan prefetch qilmasa serializer AttributeError yoki N+1 keltiradi.
+    # Natija: serializer boshqa viewda qayta ishlatilsa barqarorlik pasayadi.
+    # ✅ YECHIM:
+    # batches = getattr(obj, "all_batches", [])
+    # yoki bu hisobni view/service qatlamida annotate/prefetch bilan tayyor dict sifatida berish.
     my_quantity = serializers.SerializerMethodField()
     other_stores = serializers.SerializerMethodField()
     # selling_price = serializers.SerializerMethodField()
@@ -85,6 +104,8 @@ class ProductBatchListSerializer(serializers.ModelSerializer):
         return 0
 
     def get_other_stores(self, obj):
+        # Eslatma: `obj.all_batches` viewda `Prefetch` bilan to'ldirilgan bo'lsa yaxshi; aks holda
+        # har bir mahsulot uchun `batches` qayta yuklanadi (N+1).
         store = self.context["selected_store"]
 
         my_qty = 0
@@ -105,3 +126,13 @@ class ProductBatchListSerializer(serializers.ModelSerializer):
             return []
 
         return result
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 1
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProductBatchListSerializerni `all_batches` couplingidan himoyalash]
+# ═══════════════════════════════
