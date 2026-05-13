@@ -10,6 +10,14 @@ class ProductImageSerializer(serializers.ModelSerializer):
 
 
 class ProductBatchSerializer(serializers.ModelSerializer):
+    # ⚠️ MUAMMO [PERFORMANCE]: Uchta `SerializerMethodField` FK/nested maydonlarni o'qiydi.
+    # Sabab: querysetda `select_related("store", "product", "location")` bo'lmasa har batch uchun qo'shimcha querylar chiqadi.
+    # Natija: product detail/listda batchlar ko'p bo'lsa N+1 muammosi yuzaga keladi.
+    # ✅ YECHIM:
+    # store_name = serializers.CharField(source="store.name", read_only=True)
+    # product_name = serializers.CharField(source="product.name", read_only=True)
+    # location = ProductLocationGetSerializer(read_only=True)
+    # N+1: list/detailda batchlar soni ko'p bo'lsa `store`, `product`, `location` uchun prefetch kerak.
     store_name = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
     location = serializers.SerializerMethodField()
@@ -64,25 +72,87 @@ class ProductByBarcodeSerializer(serializers.ModelSerializer):
     def get_price(self, obj):
         return obj.selling_price or None
 
+# ─────────────────────────────────────────────
+# SERIALIZERS
+# ─────────────────────────────────────────────
+
+
+class ProductBatchListSerializer(serializers.ModelSerializer):
+    # select_related("store", "location") queryset darajasida hal qilinadi —
+    # bu yerda qo'shimcha query bo'lmaydi.
+    store_name = serializers.CharField(source="store.name", read_only=True)
+    location_name = serializers.CharField(
+        source="location.location", read_only=True, default=None
+    )
+
+    class Meta:
+        model = ProductBatch
+        fields = (
+            "id", "store", "store_name", "location", "location_name",
+            "quantity", "purchase_price", "selling_price",
+            "barcode", "is_active",
+        )
+
 
 class ProductListSerializer(serializers.ModelSerializer):
+    """
+    N+1 muammosi VIEW darajasida hal qilingan:
+      - category       → select_related
+      - unit_measurement → select_related
+      - images         → Prefetch(ProductImage)
+      - batches        → Prefetch(ProductBatch + select_related store, location)
+
+    SerializerMethodField o'rniga `source=` ishlatildi —
+    bu aniqroq va qo'shimcha Python chaqiruvini kamaytiradi.
+    """
+    # ✅ YAXSHI: Product list serializer `source` fieldlardan foydalanyapti va view queryset bilan mos optimallashtirilgan.
     images = ProductImageSerializer(many=True, read_only=True)
-    category_name = serializers.SerializerMethodField()
-    batches = ProductBatchSerializer(many=True, read_only=True)
-    unit_measurement_name = serializers.SerializerMethodField()
+    batches = ProductBatchListSerializer(many=True, read_only=True)
+
+    # source= ishlatish: get_category_name() kabi alohida metod shart emas
+    category_name = serializers.CharField(
+        source="category.name", read_only=True, default=None
+    )
+    unit_measurement_name = serializers.CharField(
+        source="unit_measurement.measurement", read_only=True, default=None
+    )
 
     class Meta:
         model = Product
         fields = (
-            'id', 'category', 'category_name', 'name', "unit_measurement", 'unit_measurement_name',
-            'description', 'is_active', 'created_at', 'images', 'batches'
+            "id",
+            "category", "category_name",
+            "name",
+            "unit_measurement", "unit_measurement_name",
+            "description",
+            "is_active",
+            "created_at",
+            "images",
+            "batches",
         )
 
-    def get_category_name(self, obj):
-        return obj.category.name if obj.category else None
 
-    def get_unit_measurement_name(self, obj):
-        return obj.unit_measurement.measurement if obj.unit_measurement else None
+
+# class ProductListSerializer(serializers.ModelSerializer):
+#     # N+1: `images`, `batches`, `category`, `unit_measurement` — view querysetida keng `prefetch_related`
+#     # / `select_related` bo'lmasa har bir mahsulot uchun o'nlab qo'shimcha so'rov chiqadi.
+#     images = ProductImageSerializer(many=True, read_only=True)
+#     category_name = serializers.SerializerMethodField()
+#     batches = ProductBatchSerializer(many=True, read_only=True)
+#     unit_measurement_name = serializers.SerializerMethodField()
+#
+#     class Meta:
+#         model = Product
+#         fields = (
+#             'id', 'category', 'category_name', 'name', "unit_measurement", 'unit_measurement_name',
+#             'description', 'is_active', 'created_at', 'images', 'batches'
+#         )
+#
+#     def get_category_name(self, obj):
+#         return obj.category.name if obj.category else None
+#
+#     def get_unit_measurement_name(self, obj):
+#         return obj.unit_measurement.measurement if obj.unit_measurement else None
 
 
 class ProductCreateSerializer(serializers.ModelSerializer):
@@ -129,6 +199,12 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate_images(self, images):
+        # ⚠️ MUAMMO [CLEAN CODE]: Magic numberlar to'g'ridan-to'g'ri ishlatilgan.
+        # Sabab: `7` va `5 * 1024 * 1024` limitlari nomlangan konstanta emas.
+        # Natija: limitlar o'zgarishi kerak bo'lsa bir nechta joydan izlash talab qilinadi.
+        # ✅ YECHIM:
+        # MAX_PRODUCT_IMAGES = 7
+        # MAX_PRODUCT_IMAGE_SIZE = 5 * 1024 * 1024
         if len(images) > 7:
             raise serializers.ValidationError("Max 7 images allowed")
 
@@ -188,6 +264,15 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         return images
 
     def update(self, instance, validated_data):
+        # ⚠️ MUAMMO [KRITIK]: Product update ichida bir nechta write operatsiya transaction bilan o'ralmagan.
+        # Sabab: product save, image file delete, image rows delete va bulk_create alohida bajariladi.
+        # Natija: xatolik bo'lsa product o'zgarib, rasm holati yarimta qolishi mumkin.
+        # ✅ YECHIM:
+        # @transaction.atomic
+        # def update(...):
+        #     instance.save()
+        #     images_to_delete.delete()
+        #     ProductImage.objects.bulk_create(...)
         new_images = validated_data.pop("new_images", [])
         delete_ids = validated_data.pop("delete_image_ids", [])
 
@@ -216,3 +301,13 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         ])
 
         return instance
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProductUpdateSerializer.update ni transaction.atomic bilan himoyalash]
+# ═══════════════════════════════
