@@ -1,4 +1,6 @@
 from django.urls import path
+
+from .views.inventory_count_view import InventoryOverCountView, InventoryShortCountView
 from .views.inventory_view import (
     InventoryListAPIView,
     InventoryStartAPIView,
@@ -21,4 +23,8 @@ urlpatterns = [
 
     path('finalize/', InventoryFinalizeAPIView.as_view()),
     path('cancel/', InventoryCancelAPIView.as_view()),
+
+    path("sessions/<int:session_id>/over/", InventoryOverCountView.as_view(), name="inventory-over-count"),
+    path("sessions/<int:session_id>/short/", InventoryShortCountView.as_view(), name="inventory-short-count"),
+
 ]

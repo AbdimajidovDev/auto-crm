@@ -54,6 +54,7 @@ class TransferService:
 
         TransferService._validate_permissions(user, from_store)
 
+        # ✅ YAXSHI: Transfer yaratish jarayoni `transaction.atomic` ichida, yarimta yozuv qolib ketish xavfi kamaygan.
         transfer = StockTransfer.objects.create(
             from_store=from_store,
             to_store=to_store,
@@ -61,6 +62,17 @@ class TransferService:
         )
 
         for item in items_data:
+            # ⚠️ MUAMMO [PERFORMANCE]: Har item uchun alohida `ProductBatch.objects...get()` so'rovi ishlaydi.
+            # Sabab: itemlar oldindan bitta queryset bilan product_id bo'yicha xaritalanmagan.
+            # Natija: transferda ko'p item bo'lsa N ta SELECT va N ta INSERT paydo bo'ladi.
+            # ✅ YECHIM:
+            # product_ids = [item["product"].id for item in items_data]
+            # batches = {
+            #     batch.product_id: batch
+            #     for batch in ProductBatch.objects.select_for_update().filter(store=from_store, product_id__in=product_ids)
+            # }
+            # item_objs = [StockTransferItem(stock_transfer=transfer, product=item["product"], quantity=item["quantity"], ...) for item in items_data]
+            # StockTransferItem.objects.bulk_create(item_objs)
             batch = ProductBatch.objects.select_for_update().get(
                 store=from_store,
                 product=item['product']
@@ -93,6 +105,17 @@ class TransferService:
     @transaction.atomic
     def approve_transfer(*, transfer_id, user):
 
+        # ⚠️ MUAMMO [PERFORMANCE/N+1]: `items`, `from_store`, `to_store` oldindan yuklanmagan.
+        # Sabab: pastda `transfer.items.all()`, `transfer.from_store`, `transfer.to_store` ishlatiladi.
+        # Natija: approve jarayonida itemlar soniga bog'liq qo'shimcha querylar va FK lookup paydo bo'ladi.
+        # ✅ YECHIM:
+        # transfer = (
+        #     StockTransfer.objects
+        #     .select_for_update()
+        #     .select_related("from_store", "to_store")
+        #     .prefetch_related("items__product")
+        #     .get(id=transfer_id)
+        # )
         transfer = StockTransfer.objects.select_for_update().get(id=transfer_id)
 
         TransferService._validate_transfer_action(user, transfer)
@@ -102,6 +125,13 @@ class TransferService:
 
         for item in transfer.items.all():
 
+            # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida `get_or_create` va `save()` ko'p martalik DB write qiladi.
+            # Sabab: source/target batchlar itemlar bo'yicha bulk tarzda tayyorlanmagan.
+            # Natija: katta transferda lock va query soni ko'payadi, approve endpoint sekinlashadi.
+            # ✅ YECHIM:
+            # source_batches = ProductBatch.objects.select_for_update().filter(store=transfer.from_store, product_id__in=product_ids)
+            # target_batches = ProductBatch.objects.select_for_update().filter(store=transfer.to_store, product_id__in=product_ids)
+            # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
             source_batch = ProductBatch.objects.select_for_update().get(
                 store=transfer.from_store,
                 product=item.product
@@ -165,3 +195,12 @@ class TransferService:
 
         return transfer
 
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [create_transfer/approve_transfer loop ichidagi querylarni bulk/prefetch strategiyaga o'tkazish]
+# ═══════════════════════════════
