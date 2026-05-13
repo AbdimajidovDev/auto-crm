@@ -24,6 +24,7 @@ class InventorySelector:
 
     @staticmethod
     def get_session(pk):
+        # ✅ YAXSHI: `get_object_or_404` orqali topilmagan session uchun aniq 404 qaytariladi.
         return get_object_or_404(InventorySession, pk=pk)
 
 
@@ -108,6 +109,16 @@ class InventorySelector:
             .filter(session_id=session_id)
             .select_related("product")
             .annotate(
+                # ⚠️ MUAMMO [PERFORMANCE]: Bitta queryset ichida 8 ta korrelyatsiyalangan Subquery ishlatilgan.
+                # Sabab: har snapshot qatori uchun count, barcode va movement turlari alohida subquery bilan hisoblanadi.
+                # Natija: mahsulotlar soni katta bo'lsa SQL planner og'irlashadi va endpoint sekinlashadi.
+                # ✅ YECHIM:
+                # movement_totals = InventoryMovement.objects.filter(session_id=session_id).values("product_id", "type").annotate(total=Sum("quantity"))
+                # counts = InventoryCount.objects.filter(session_id=session_id).values("product_id", "counted_quantity", "is_check", "status")
+                # snapshotlarni product_id bo'yicha Python map bilan birlashtirish yoki materialized aggregate jadval ishlatish.
+                # PERFORMANCE: har bir snapshot qatori uchun bir nechta `Subquery` — katta inventarizatsiyada
+                # SQL rejasi og'irlashishi mumkin; ba'zi hollarda materialized view / yig'ilgan jadval
+                # yoki kamroq qadamli annotate strategiyasi ko'rib chiqiladi.
                 counted=Coalesce(Subquery(counts_subquery, output_field=IntegerField()), 0),
                 barcode=Subquery(barcode_subquery),
 
@@ -128,3 +139,13 @@ class InventorySelector:
             qs = qs.filter(status__in=statuses)
 
         return qs
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [get_inventory_list dagi ko'p Subquery strategiyasini aggregate map yoki materialized hisobga almashtirish]
+# ═══════════════════════════════
