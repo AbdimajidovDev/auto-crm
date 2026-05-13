@@ -19,6 +19,7 @@ class InventoryService:
     @transaction.atomic
     def start_session(*, user, store_id):
 
+        # ✅ YAXSHI: Session yaratish va snapshot/count yozish bitta transaction ichida bajariladi.
         if InventorySession.objects.filter(
                 store_id=store_id,
                 status="active"
@@ -59,6 +60,7 @@ class InventoryService:
                 )
             )
 
+        # ✅ YAXSHI: Snapshot va count yozuvlari `bulk_create` bilan yozilyapti.
         InventorySnapshot.objects.bulk_create(snapshots)
         InventoryCount.objects.bulk_create(counts)
 
@@ -120,6 +122,12 @@ class InventoryService:
             count.status = InventoryCount.Status.MORE
 
         # tekshirilganlarga o'tkazish
+        # ⚠️ MUAMMO [PERFORMANCE]: Bitta count uchun ikkita alohida `save()` chaqirilmoqda.
+        # Sabab: `is_check`, `counted_quantity`, `status` bitta update_fields ichida yozilmagan.
+        # Natija: har scan/update uchun ortiqcha UPDATE query ishlaydi.
+        # ✅ YECHIM:
+        # count.is_check = True
+        # count.save(update_fields=["is_check", "counted_quantity", "status"])
         if not count.is_check:
             count.is_check = True
             count.save(update_fields=["is_check"])
@@ -168,12 +176,28 @@ class InventoryService:
         movement_map = {m["product"]: m for m in movements}
 
         # 🔹 counts map
+        # ⚠️ MUAMMO [PERFORMANCE]: `InventoryCount.objects.filter(session=session)` barcha model ustunlarini olib keladi.
+        # Sabab: map uchun faqat `product_id` va `counted_quantity` kerak, ammo model instancelar yaratilmoqda.
+        # Natija: katta inventarizatsiyada xotira va CPU sarfi oshadi.
+        # ✅ YECHIM:
+        # counts_map = dict(
+        #     InventoryCount.objects.filter(session=session).values_list("product_id", "counted_quantity")
+        # )
+        # OPTIMIZATION: `counts_map` va `snapshots` uchun alohida filterlar o'rniga bitta querysetdan
+        # `values_list` yoki bitta annotate bilan birlashtirish DB round-trip sonini kamaytirishi mumkin.
         counts_map = {
             c.product_id: c.counted_quantity
             for c in InventoryCount.objects.filter(session=session)
         }
 
         # 🔹 snapshots map
+        # ⚠️ MUAMMO [PERFORMANCE]: Snapshot map ham model instancelar orqali qurilmoqda.
+        # Sabab: faqat ikkita ustun kerak bo'lsa ham barcha maydonlar select qilinadi.
+        # Natija: mahsulotlar ko'p bo'lganda finalize jarayoni ortiqcha xotira ishlatadi.
+        # ✅ YECHIM:
+        # snapshots = dict(
+        #     InventorySnapshot.objects.filter(session=session).values_list("product_id", "expected_quantity")
+        # )
         snapshots = {
             s.product_id: s.expected_quantity
             for s in InventorySnapshot.objects.filter(session=session)
@@ -208,6 +232,12 @@ class InventoryService:
             diff = final - expected
 
             if diff != 0: # diff
+                # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida har product uchun alohida UPDATE bajariladi.
+                # Sabab: o'zgaradigan batchlar oldindan yig'ilib `bulk_update` qilinmagan.
+                # Natija: productlar soni ko'p bo'lsa transaction uzoq lock ushlab turadi.
+                # ✅ YECHIM:
+                # updated_batches.append(ProductBatch(id=batch_id, quantity=final))
+                # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
                 ProductBatch.objects.select_for_update().filter(
                     store=session.store,
                     product_id=product_id
@@ -236,3 +266,13 @@ class InventoryService:
         InventoryMovement.objects.filter(session=session).delete()
         InventoryCount.objects.filter(session=session).delete()
         InventorySnapshot.objects.filter(session=session).delete()
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 3
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [finalize loopidagi ProductBatch update strategiyasini bulk updatega o'tkazish]
+# ═══════════════════════════════
