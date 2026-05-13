@@ -25,6 +25,12 @@ class SupplierListAPIView(APIView):
     serializer_class = SupplierGetSerializer
 
     def get(self, request):
+        # ⚠️ MUAMMO [PERFORMANCE]: Supplier list filtrsiz `.all()` va pagination/cache yo'q.
+        # Sabab: barcha supplierlar birdan serializerga beriladi.
+        # Natija: supplierlar ko'payganda response sekinlashadi va xotira sarfi oshadi.
+        # ✅ YECHIM:
+        # suppliers = Supplier.objects.only("id", "name", "inn", "phone").order_by("name")
+        # page = self.paginate_queryset(suppliers)
         suppliers = Supplier.objects.all()
         serializer = SupplierGetSerializer(suppliers, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -107,3 +113,13 @@ class SupplierDetailAPIView(APIView):
             return Response({"detail": str(e)}, status=400)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Supplier list uchun pagination va `only()` qo'shish]
+# ═══════════════════════════════

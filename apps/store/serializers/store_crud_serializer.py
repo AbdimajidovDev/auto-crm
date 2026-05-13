@@ -12,6 +12,12 @@ class StoreSellerSerializer(serializers.Serializer):
 
 class StoreListSerializer(serializers.ModelSerializer):
 
+    # ⚠️ MUAMMO [PERFORMANCE]: `sellers` SerializerMethodField har store uchun user_links query ishlatishi mumkin.
+    # Sabab: selector/view `prefetch_related("user_links__user")` qilmasa `obj.user_links.filter(...)` DBga boradi.
+    # Natija: Store listda N+1 query yuzaga keladi.
+    # ✅ YECHIM:
+    # sellers = StoreSellerSerializer(source="active_user_links", many=True, read_only=True)
+    # Viewda: Prefetch("user_links", queryset=StoreUser.objects.filter(is_active=True).select_related("user"), to_attr="active_user_links")
     sellers = serializers.SerializerMethodField()
 
     class Meta:
@@ -63,6 +69,11 @@ class StoreResponseSerializer(serializers.ModelSerializer):
 
 
 class StoreDetailSerializer(serializers.ModelSerializer):
+    # ⚠️ MUAMMO [PERFORMANCE]: Detail serializer ham `user_links.filter()` orqali DBga murojaat qiladi.
+    # Sabab: detail queryset prefetch qilinmasa sellerlar uchun qo'shimcha query bo'ladi.
+    # Natija: detail response barqaror query budgetga ega emas.
+    # ✅ YECHIM:
+    # get_object querysetida `prefetch_related(Prefetch("user_links", ...))` ishlatish.
     sellers = serializers.SerializerMethodField()
 
     class Meta:
@@ -76,3 +87,13 @@ class StoreDetailSerializer(serializers.ModelSerializer):
         store_users = obj.user_links.filter(is_active=True).select_related("user")
 
         return StoreSellerSerializer(store_users, many=True).data
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Store querysetlarga active user_links prefetch qo'shish]
+# ═══════════════════════════════
