@@ -15,12 +15,12 @@ class StoreRepository:
 class StoreUserRepository:
 
     @staticmethod
-    def create_store_user(user, store):
+    def create_store_user(user, store, role):
         try:
             return StoreUser.objects.create(
                 user=user,
                 store=store,
-                role=StoreUser.Role.SELLER
+                role=role
             )
         except IntegrityError:
             raise ValueError("User allaqachon ushbu storega biriktirilgan")

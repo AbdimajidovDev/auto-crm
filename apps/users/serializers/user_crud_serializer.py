@@ -2,7 +2,7 @@
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
-from apps.store.models import Store
+from apps.store.models import Store, StoreUser
 from apps.users.models import User
 from apps.users.validations import check_valid_phone
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -41,6 +41,7 @@ class SellerCreateSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
     store_id = serializers.IntegerField(write_only=True)
+    role = serializers.ChoiceField(StoreUser.Role.choices)
 
     def validate_password(self, value):
         try:

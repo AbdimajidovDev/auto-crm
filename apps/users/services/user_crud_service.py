@@ -13,6 +13,7 @@ class UserService:
     def create_seller_with_store(*, request_user, data: dict):
 
         store_id = data.pop("store_id")
+        role = data.pop("role")
 
         # 🔴 AUTH CHECK (bitta joyda bo‘lishi kerak)
         if not request_user.is_superuser:
@@ -33,7 +34,8 @@ class UserService:
         # 🔴 ATTACH
         StoreUserRepository.create_store_user(
             user=user,
-            store=store
+            store=store,
+            role=role
         )
 
         return user
