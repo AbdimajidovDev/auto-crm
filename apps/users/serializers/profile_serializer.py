@@ -16,6 +16,12 @@ class StoreSerializer(serializers.ModelSerializer):
 
 class ProfileSerializer(serializers.ModelSerializer):
     history = UserHistorySerializer(many=True, read_only=True)
+    # ⚠️ MUAMMO [PERFORMANCE]: `stores` SerializerMethodField ichida DB query qiladi.
+    # Sabab: har profile serializationda Store queryset alohida ishlaydi; prefetch/contextdan foydalanilmagan.
+    # Natija: profile serializer qayta ishlatilsa yoki history bilan birga og'irlashsa ortiqcha DB query paydo bo'ladi.
+    # ✅ YECHIM:
+    # stores = StoreSerializer(source="prefetched_stores", many=True, read_only=True)
+    # Viewda user storelarini oldindan prefetch/context orqali uzatish.
     stores = serializers.SerializerMethodField()
 
     class Meta:
@@ -38,6 +44,9 @@ class ProfileSerializer(serializers.ModelSerializer):
         }
 
     def get_stores(self, obj):
+        # Eslatma: profil serializer har safar `obj` o'rniga `request.user` bo'yicha `Store` qidiradi —
+        # serializer bir necha marta ishlatilsa ham bir xil so'rov takrorlanadi; prefetch yoki
+        # view darajasida kontekst orqali uzatish ixtiyoriy optimallashtirish.
         request = self.context.get("request")
         user = request.user
 
@@ -54,6 +63,16 @@ class ProfileSerializer(serializers.ModelSerializer):
             ).distinct()
 
         return StoreSerializer(stores, many=True).data
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProfileSerializer stores querysini view/prefetch qatlamiga chiqarish]
+# ═══════════════════════════════
 
 
 #

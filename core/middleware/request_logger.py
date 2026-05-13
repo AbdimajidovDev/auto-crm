@@ -28,6 +28,12 @@ class RequestLoggerMiddleware(MiddlewareMixin):
 
         user = request.user if request.user.is_authenticated else "Anonymous"
 
+        # ⚠️ MUAMMO [PERFORMANCE/XAVFSIZLIK]: Middleware har requestda `print` qiladi.
+        # Sabab: stdout sync I/O bo'lib, productionda log rotation/level/filter bilan boshqarilmaydi.
+        # Natija: yuqori trafikda latency oshadi va user/path ma'lumotlari nazoratsiz loglanadi.
+        # ✅ YECHIM:
+        # logger.info("request_finished", extra={"method": method, "path": request.path, "duration": duration, "user_id": getattr(request.user, "id", None)})
+        # MUAMMO: har so'rovda `print` — production log tizimiga o'tkazish yaxshiroq (yoki faqat DEBUG).
         print(f"{icon}  [{user} {method}] {request.path} - {duration:.2f}s 🚀")
 
         return response
@@ -45,3 +51,13 @@ class RequestLoggerMiddleware(MiddlewareMixin):
 #         print(f"[{request.user} {request.method}] {request.path} - {duration:.2f}s 🚀")
 #         return response
 #
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Middleware printini logging konfiguratsiyasiga o'tkazish]
+# ═══════════════════════════════

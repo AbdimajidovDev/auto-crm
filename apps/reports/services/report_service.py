@@ -37,6 +37,15 @@ class ReportService:
         items_qs = SaleItem.objects.filter(
             sale__created_at__range=(date_from, date_to)
         )
+        # ⚠️ MUAMMO [PERFORMANCE]: `items_qs` `select_related("sale")` bilan yengillashtirilmagan.
+        # Sabab: keyingi chart/service hisoblar sale sanasi va store filteriga tayanadi.
+        # Natija: service kengaysa sale FK bo'yicha qo'shimcha querylar paydo bo'lishi mumkin.
+        # ✅ YECHIM:
+        # items_qs = SaleItem.objects.select_related("sale", "product").filter(
+        #     sale__created_at__range=(date_from, date_to)
+        # )
+        # N+1 / ma'lumot: keyingi `ChartService.profit_trend` va boshqa hisoblar `purchase_price`ga
+        # tayangan — NULL bo'lsa natijalar buziladi; `select_related("sale")` ixtiyoriy yengillashtirish.
 
         if store_ids:
             items_qs = items_qs.filter(sale__store_id__in=store_ids)
@@ -58,6 +67,16 @@ class ReportService:
                 "supplierDebts": DebtService.supplier_debt()
             }
         }
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Report item querysetini select_related bilan barqaror qilish]
+# ═══════════════════════════════
 
 
 # ===================================================================================================
