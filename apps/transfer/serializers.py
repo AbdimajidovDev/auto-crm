@@ -9,6 +9,12 @@ from apps.transfer.models import StockTransfer, StockTransferItem, Notification
 class TransferItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
     quantity = serializers.IntegerField(min_value=1)
+    # ⚠️ MUAMMO [PERFORMANCE]: `SerializerMethodField` FK maydonga murojaat qiladi.
+    # Sabab: `get_product_name()` ichida `obj.product.name` o'qiladi; querysetda `items__product`
+    # prefetch qilinmasa har bir item uchun alohida query chiqadi.
+    # Natija: transfer listda itemlar soniga proporsional N+1 query yuzaga keladi.
+    # ✅ YECHIM:
+    # product_name = serializers.CharField(source="product.name", read_only=True)
     product_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -22,6 +28,12 @@ class TransferItemSerializer(serializers.ModelSerializer):
         return obj.product.name if obj.product else ""
 
     def validate(self, data):
+        # ⚠️ MUAMMO [CLEAN CODE/XAVFSIZLIK]: Serializer validation ichida `print` bor.
+        # Sabab: serializer ko'p chaqiriladi va request ma'lumotlarini stdoutga chiqaradi.
+        # Natija: log ifloslanadi, maxfiy ma'lumot chiqishi va testlarda shovqin paydo bo'ladi.
+        # ✅ YECHIM:
+        # logger.debug("Transfer item validated", extra={"product_id": data["product"].id})
+        # MUAMMO: productionda `print` — olib tashlash yoki `logging`ga o'tkazish.
         print('data', data)
 
         # # 🔥 batch borligini tekshiramiz
@@ -43,6 +55,14 @@ class TransferItemSerializer(serializers.ModelSerializer):
 
 class TransferListSerializer(serializers.ModelSerializer):
     items = TransferItemSerializer(many=True)
+    # ⚠️ MUAMMO [PERFORMANCE]: Bir nechta `SerializerMethodField` FK obyektlarini o'qiydi.
+    # Sabab: `from_store`, `to_store`, `approved_by` querysetda `select_related` qilinmasa,
+    # har transfer uchun 3 tagacha qo'shimcha SQL so'rovi ishlaydi.
+    # Natija: list endpoint katta bo'lganda latency keskin oshadi.
+    # ✅ YECHIM:
+    # from_store_name = serializers.CharField(source="from_store.name", read_only=True)
+    # to_store_name = serializers.CharField(source="to_store.name", read_only=True)
+    # approved_by_name = serializers.CharField(source="approved_by.full_name", read_only=True)
     from_store_name = serializers.SerializerMethodField()
     to_store_name = serializers.SerializerMethodField()
     approved_by_name = serializers.SerializerMethodField()
@@ -65,6 +85,12 @@ class TransferListSerializer(serializers.ModelSerializer):
 
 
 class TransferCreateSerializer(serializers.Serializer):
+    # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: `PrimaryKeyRelatedField(queryset=Store.objects.all())` filtrsiz katta jadvalga tayanadi.
+    # Sabab: inactive storelar ham validation querysetiga kiradi va indeks/filter siyosati ko'rinmaydi.
+    # Natija: noto'g'ri store tanlanishi yoki katta jadvalda ortiqcha lookup xarajati paydo bo'ladi.
+    # ✅ YECHIM:
+    # from_store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
+    # to_store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
     from_store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.all())
     to_store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.all())
     items = TransferItemSerializer(many=True)  # Bir nechta mahsulot
@@ -85,3 +111,13 @@ class NotificationSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'user', 'type', 'title', 'message', 'is_read', 'transfer'
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [SerializerMethodField o'rniga `source` ishlatish va view querysetini select_related/prefetch_related bilan moslash]
+# ═══════════════════════════════

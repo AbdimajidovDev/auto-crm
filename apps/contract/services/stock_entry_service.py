@@ -15,6 +15,7 @@ class StockEntryService:
     @staticmethod
     @transaction.atomic
     def create_entry(*, supplier, store, items, paid_amount, user):
+        # ✅ YAXSHI: Kirim yaratish, batch update, itemlar va transaction bitta `transaction.atomic` ichida.
         # 1. Header yaratish
         entry = StockEntry.objects.create(
             supplier=supplier,
@@ -28,6 +29,13 @@ class StockEntryService:
 
         # 2. Mahsulotlarni aylanish
         for item in items:
+            # ⚠️ MUAMMO [PERFORMANCE]: Har item uchun ProductBatch lookup va update/create loop ichida bajariladi.
+            # Sabab: batchlar product_id bo'yicha oldindan select_for_update bilan xaritalanmagan.
+            # Natija: ko'p itemli kirimda transaction uzoq lock ushlab turadi va query soni itemlar soniga bog'liq bo'ladi.
+            # ✅ YECHIM:
+            # product_ids = [item["product"].id for item in items]
+            # batches = ProductBatch.objects.select_for_update().filter(store=store, product_id__in=product_ids)
+            # ProductBatch.objects.bulk_update(updated_batches, ["quantity", "purchase_price", "selling_price"])
             product = item["product"]
             qty = item["quantity"]
             p_price = item["purchase_price"]
@@ -51,6 +59,11 @@ class StockEntryService:
                 )
             else:
                 # ➕ Yangi batch yaratish (barcode va shtrix_code bilan)
+                # ⚠️ MUAMMO [PERFORMANCE]: Barcode image generation transaction ichida bajarilmoqda.
+                # Sabab: fayl/rasm generatsiyasi DB lock ushlab turgan paytda CPU/I/O ishlatadi.
+                # Natija: kirim transactioni uzayadi, parallel requestlar kutib qolishi mumkin.
+                # ✅ YECHIM:
+                # barcode yaratishni qoldirib, shtrix_code image generationni transaction.on_commit yoki background taskga chiqarish.
                 barcode = generate_unique_barcode()
                 ProductBatch.objects.create(
                     product=product,
@@ -100,3 +113,12 @@ class StockEntryService:
 
         return entry
 
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProductBatch loop update strategiyasini bulk update/createga o'tkazish]
+# ═══════════════════════════════

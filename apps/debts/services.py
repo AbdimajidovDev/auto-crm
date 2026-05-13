@@ -10,6 +10,20 @@ class DebtService:
 
     @staticmethod
     def get_sale_debt(sale):
+        # ⚠️ MUAMMO [PERFORMANCE]: Qarz balansi uchun ikki alohida aggregate query ishlatilgan.
+        # Sabab: increase va decrease alohida `filter().aggregate()` bilan hisoblanadi.
+        # Natija: `pay_debt` har chaqirilganda ortiqcha DB round-trip paydo bo'ladi.
+        # ✅ YECHIM:
+        # balance = CustomerDebt.objects.filter(sale=sale).aggregate(
+        #     total=Sum(Case(
+        #         When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
+        #         When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
+        #         default=0,
+        #         output_field=DecimalField(),
+        #     ))
+        # )["total"] or 0
+        # OPTIMIZATION: ikki alohida `filter().aggregate()` o'rniga bitta querysetda `Case/When`
+        # bilan bitta aggregate qilish DB yukini kamaytiradi.
         increases = CustomerDebt.objects.filter(
             sale=sale,
             type=CustomerDebt.Type.INCREASE
@@ -27,7 +41,14 @@ class DebtService:
     def pay_debt(*, sale_id, amount, payment_type):
 
         # 🔴 LOCK SALE (critical!)
+        # ⚠️ MUAMMO [PERFORMANCE]: `select_related("customer")` ishlatilmagan.
+        # Sabab: keyingi kodda `sale.customer` payment va debt yozishda ishlatiladi.
+        # Natija: customer uchun qo'shimcha SELECT query chiqadi.
+        # ✅ YECHIM:
         # sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
+        # sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
+        # N+1 emas, lekin `select_related("customer")` qo'shilsa keyingi `sale.customer` murojaatlari
+        # qo'shimcha so'rovsiz ishlaydi (hozirgi kodda customer tegishli joylar uchun).
         sale = Sale.objects.select_for_update().get(id=sale_id)
         # customer = sale.customer
 
@@ -102,6 +123,20 @@ class CustomerDebtService:
 
     @staticmethod
     def get(store_ids):
+        # ⚠️ MUAMMO [KRITIK]: Qarz summasi `type` farqini hisobga olmasdan `Sum("amount")` qilinyapti.
+        # Sabab: increase va decrease yozuvlari bir xil ishora bilan qo'shiladi.
+        # Natija: mijoz qarzi noto'g'ri, odatda oshirib ko'rsatiladi.
+        # ✅ YECHIM:
+        # return qs.values("customer__full_name").annotate(
+        #     debt=Sum(Case(
+        #         When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
+        #         When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
+        #         default=0,
+        #         output_field=DecimalField(),
+        #     ))
+        # )
+        # MUAMMO: `debt=Sum("amount")` `type=i/d` farqin hisobga olmaydi — qarz balansi noto'g'ri chiqishi mumkin;
+        # `DebtService.customer_debt` dagidek `Case/When` yoki alohida inc/dec kerak.
         qs = CustomerDebt.objects.all()
 
         if store_ids:
@@ -110,3 +145,13 @@ class CustomerDebtService:
         return qs.values("customer__full_name").annotate(
             debt=Sum("amount")
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [CustomerDebtService.get balans hisobini Case/When bilan to'g'rilash]
+# ═══════════════════════════════
