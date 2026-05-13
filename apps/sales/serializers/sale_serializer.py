@@ -7,47 +7,143 @@ from apps.sales.models import (
     Payment,
 )
 
+from decimal import Decimal
+
+# ─────────────────────────────────────────────
+# SERIALIZERS
+# ─────────────────────────────────────────────
+
+class PaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = ("id", "amount", "type", "created_at")
+
 
 class SaleItemSerializer(serializers.ModelSerializer):
-    product_name = serializers.SerializerMethodField()
+    """
+    N+1 tuzatish:
+      Avval → get_product_name() metodi obj.product.name ga murojaat qilardi,
+              lekin product prefetch qilinmagan edi → har item uchun SQL.
+      Keyin → get_queryset() da Prefetch("items", queryset=...select_related("product"))
+              ishlatiladi, shuning uchun source= yetarli — metod shart emas.
+    """
+    # ✅ YAXSHI: `SerializerMethodField` o'rniga `source="product.name"` ishlatilgan.
+    product_name = serializers.CharField(source="product.name", read_only=True)
 
     class Meta:
         model = SaleItem
         fields = (
-            'id', 'product', 'product_name', 'quantity', 'unit_price', 'total_price'
+            "id", "product", "product_name",
+            "quantity", "unit_price", "total_price",
+            "returned_quantity",
         )
-
-    def get_product_name(self, obj):
-        return obj.product.name if obj.product else None
 
 
 class SaleListSerializer(serializers.ModelSerializer):
-    store_name = serializers.SerializerMethodField()
-    customer_name = serializers.SerializerMethodField()
-    seller_name = serializers.SerializerMethodField()
+    """
+    SerializerMethodField → source= ga o'tkazildi:
+      get_store_name    → source="store.name"
+      get_customer_name → source="customer.full_name"
+      get_seller_name   → source="seller.full_name" (yoki get_full_name())
+
+    Nima uchun? source= Python darajasida ishlaydi — qo'shimcha SQL yo'q
+    (select_related queryset darajasida hal qilgan), va metod yozish shart emas.
+
+    debt:
+      Avval → get_debt() ichida obj.total_increase, obj.total_decrease ni o'qirdi.
+              Bu annotatedan kelardi, lekin kartezian tufayli qiymatlar noto'g'ri edi.
+      Keyin → Subquery annotate dan kelgan to'g'ri qiymatlar ishlatiladi.
+    """
+    # ✅ YAXSHI: FK nomlari `source` orqali berilgan; queryset `select_related` bo'lsa qo'shimcha SQL chiqmaydi.
+    store_name = serializers.CharField(source="store.name", read_only=True)
+    customer_name = serializers.CharField(source="customer.full_name", read_only=True, default=None)
+    seller_name = serializers.CharField(source="seller.full_name", read_only=True, default=None)
+
+    items = SaleItemSerializer(many=True, read_only=True)
+    payments = PaymentSerializer(many=True, read_only=True)
+
+    # Subquery annotatedan keladigan tayyor qiymatlar
+    total_increase = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
+    total_decrease = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
+    # ⚠️ MUAMMO [ARXITEKTURA/PERFORMANCE]: `debt` serializer method orqali hisoblanadi.
+    # Sabab: qiymat annotate qilingan maydonlardan keladi, lekin yakuniy hisob serializer qatlamida qolgan.
+    # Natija: list uchun biznes formula serializerga bog'lanadi; filter/order qilish kerak bo'lsa qayta yozish talab etiladi.
+    # ✅ YECHIM:
+    # debt = serializers.DecimalField(max_digits=20, decimal_places=2, read_only=True)
+    # Querysetda: .annotate(debt=Greatest(F("total_increase") - F("total_decrease"), Value(0)))
     debt = serializers.SerializerMethodField()
-    items = SaleItemSerializer(many=True)
 
     class Meta:
         model = Sale
         fields = (
-            'id', 'store', 'store_name', 'seller', 'seller_name', 'customer', 'customer_name',
-            'payments', 'status', 'total_amount', 'paid_amount', 'debt',
-            'discount_type', 'discount_value', 'discount_amount', 'items', 'created_at',
+            "id",
+            "store", "store_name",
+            "seller", "seller_name",
+            "customer", "customer_name",
+            "payments",
+            "status",
+            "total_amount", "paid_amount", "debt",
+            "total_increase", "total_decrease",
+            "discount_type", "discount_value", "discount_amount",
+            "items",
+            "created_at",
         )
 
-    def get_store_name(self, obj):
-        return obj.store.name if obj.store else None
-
-    def get_customer_name(self, obj):
-        return obj.customer.full_name if obj.customer else None
-
-    def get_seller_name(self, obj):
-        return obj.seller.full_name if obj.seller else None
-
-    def get_debt(self, obj):
-        debt = (obj.total_increase or 0) - (obj.total_decrease or 0)
+    def get_debt(self, obj) -> Decimal | None:
+        """
+        Subquery annotatedan kelgan to'g'ri qiymatlar asosida hisoblaydi.
+        Nol yoki manfiy bo'lsa None qaytaradi (qarzdorlik yo'q).
+        """
+        increase = obj.total_increase or Decimal("0")
+        decrease = obj.total_decrease or Decimal("0")
+        debt = increase - decrease
         return debt if debt > 0 else None
+
+
+
+
+# class SaleItemSerializer(serializers.ModelSerializer):
+#     # N+1: `SaleListAPIView` querysetida `prefetch_related("items")` bor, lekin `items__product`
+#     # yuklanmagan — har bir satr uchun `product` jadvalidan qo'shimcha SELECT ketadi.
+#     product_name = serializers.SerializerMethodField()
+#
+#     class Meta:
+#         model = SaleItem
+#         fields = (
+#             'id', 'product', 'product_name', 'quantity', 'unit_price', 'total_price'
+#         )
+#
+#     def get_product_name(self, obj):
+#         return obj.product.name if obj.product else None
+
+
+# class SaleListSerializer(serializers.ModelSerializer):
+#     store_name = serializers.SerializerMethodField()
+#     customer_name = serializers.SerializerMethodField()
+#     seller_name = serializers.SerializerMethodField()
+#     debt = serializers.SerializerMethodField()
+#     items = SaleItemSerializer(many=True)
+#
+#     class Meta:
+#         model = Sale
+#         fields = (
+#             'id', 'store', 'store_name', 'seller', 'seller_name', 'customer', 'customer_name',
+#             'payments', 'status', 'total_amount', 'paid_amount', 'debt',
+#             'discount_type', 'discount_value', 'discount_amount', 'items', 'created_at',
+#         )
+#
+#     def get_store_name(self, obj):
+#         return obj.store.name if obj.store else None
+#
+#     def get_customer_name(self, obj):
+#         return obj.customer.full_name if obj.customer else None
+#
+#     def get_seller_name(self, obj):
+#         return obj.seller.full_name if obj.seller else None
+#
+#     def get_debt(self, obj):
+#         debt = (obj.total_increase or 0) - (obj.total_decrease or 0)
+#         return debt if debt > 0 else None
 
 
 class SaleItemInputSerializer(serializers.Serializer):
@@ -92,6 +188,11 @@ class SaleCreateSerializer(serializers.Serializer):
     payments = PaymentInputSerializer(many=True)
 
     def validate(self, data):
+        # ⚠️ MUAMMO [ARXITEKTURA]: Serializer ichida store permission va payment/debt biznes qoidalari aralashgan.
+        # Sabab: validation HTTP request userga bog'lanib, domain service bilan takrorlanadigan qoidalarni saqlaydi.
+        # Natija: serializer unit testlari og'irlashadi va boshqa entrypointlarda bir xil qoida qayta yoziladi.
+        # ✅ YECHIM:
+        # SaleValidationService.validate_create(user=self.context["request"].user, data=data)
         items = data.get('items') or []
         payments = data.get('payments') or []
         customer = data.get('customer')
@@ -155,3 +256,13 @@ class CustomerDebtListSerializer(serializers.Serializer):
     customer_id = serializers.IntegerField()
     customer_name = serializers.CharField()
     total_debt = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 2
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [SaleCreateSerializer ichidagi biznes validationni service qatlamiga chiqarish]
+# ═══════════════════════════════

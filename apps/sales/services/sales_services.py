@@ -21,6 +21,15 @@ class SaleService:
     @staticmethod
     @transaction.atomic
     def create_sale(*, user, data):
+        # ⚠️ MUAMMO [ARXITEKTURA]: `create_sale` metodi bir nechta mas'uliyatni bajaryapti.
+        # Sabab: store aniqlash, customer lookup, stock kamaytirish, discount hisoblash, payment yaratish,
+        # sale status va debt yozish bitta uzun metod ichida.
+        # Natija: testlash qiyinlashadi, xatolikda regressiya xavfi oshadi.
+        # ✅ YECHIM:
+        # store = SaleStoreResolver.resolve(user=user, store_id=data.get("store"))
+        # totals = SalePricingService.calculate(items=items_data, discount_type=discount_type, discount_value=discount_value)
+        # SaleStockService.reserve_items(store=store, items=items_data)
+        # SalePaymentService.create_payments(sale=sale, payments=payments_data)
         items_data = data["items"]
         payments_data = data["payments"]
         discount_type = data.get("discount_type")
@@ -58,6 +67,17 @@ class SaleService:
         subtotal = Decimal("0")
 
         for item in items_data:
+            # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida har item uchun batch lookup, UPDATE, SaleItem create va hook chaqirilmoqda.
+            # Sabab: kerakli ProductBatch yozuvlari oldindan `product_id__in` bilan lock qilinmagan va SaleItemlar bulk yaratilmagan.
+            # Natija: ko'p itemli sotuvda transaction uzoq davom etadi, lock contention va N ta query paydo bo'ladi.
+            # ✅ YECHIM:
+            # product_ids = [item["product"] for item in items_data]
+            # batches = ProductBatch.objects.select_for_update().filter(store=store, product_id__in=product_ids, quantity__gt=0)
+            # SaleItem.objects.bulk_create(item_objs)
+            # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
+            # PERFORMANCE: har bir savdo pozitsiyasi uchun `select_for_update` + alohida UPDATE —
+            # ko'p qatorli savdoda tranzaksiya uzoq yopilib qolishi mumkin; batch strategiya yoki
+            # birlashtirilgan stock update ko'rib chiqiladi.
             product_id = item["product"]
             quantity_to_sell = item["quantity"]
             price = item["price"]
@@ -120,6 +140,12 @@ class SaleService:
 
         # 🔴 PAYMENTS
         paid_amount = Decimal("0")
+        # ⚠️ MUAMMO [PERFORMANCE]: Paymentlar loop ichida alohida `create()` bilan yozilmoqda.
+        # Sabab: payment obyektlari yig'ilib `bulk_create` qilinmagan.
+        # Natija: ko'p to'lov turi bo'lsa transaction ichida ortiqcha INSERT querylar ishlaydi.
+        # ✅ YECHIM:
+        # payment_objs = [Payment(sale=sale, customer=customer, amount=p["amount"], type=p["type"]) for p in payments_data]
+        # Payment.objects.bulk_create(payment_objs)
         for p in payments_data:
             Payment.objects.create(
                 sale=sale,
@@ -153,3 +179,13 @@ class SaleService:
             )
 
         return sale
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 2
+# Arxitektura muammolari: 1
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [create_sale ichidagi stock/payment yozuvlarini bulk strategiyaga ajratish va metodni kichik servicelarga bo'lish]
+# ═══════════════════════════════

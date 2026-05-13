@@ -19,6 +19,19 @@ class SaleReturnListAPIView(APIView):
     serializer_class = SaleReturnListSerializer
 
     def get(self, request):
+        # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Filtrsiz `.all()` va prefetch/select_related yo'q.
+        # Sabab: serializer `store`, `seller`, `items`, `items__product` maydonlariga murojaat qiladi.
+        # Natija: N+1 query va katta jadvalda pagination/filter yo'qligi sabab endpoint sekinlashadi.
+        # ✅ YECHIM:
+        # sale_return = (
+        #     SaleReturn.objects
+        #     .select_related("store", "seller", "customer", "sale")
+        #     .prefetch_related(Prefetch("items", queryset=SaleReturnItem.objects.select_related("product")))
+        #     .order_by("-created_at")
+        # )
+        # N+1: list serializer `store`, `seller`, `items`, `items__product` ga tegadi — `select_related`
+        # va `prefetch_related` (masalan `Prefetch("items", queryset=...select_related("product"))`)
+        # qo'shmasa har bir qator uchun alohida so'rovlar ko'payadi.
         sale_return = SaleReturn.objects.all()
         serializer = self.serializer_class(sale_return, many=True)
         return Response(serializer.data, status=200)
@@ -50,3 +63,13 @@ class SaleReturnCreateAPIView(APIView):
             "return_id": return_obj.id,
             "refund": return_obj.total_refund
         }, status=201)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 1
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [SaleReturnListAPIView querysetini select_related/prefetch_related va pagination bilan optimallashtirish]
+# ═══════════════════════════════

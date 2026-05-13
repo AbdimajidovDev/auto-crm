@@ -17,6 +17,11 @@ class SaleReturnCreateSerializer(serializers.Serializer):
 
 
 class SaleReturnItemSerializer(serializers.ModelSerializer):
+    # ⚠️ MUAMMO [PERFORMANCE]: `SerializerMethodField` product FK ga murojaat qiladi.
+    # Sabab: view querysetida `items__product` prefetch qilinmasa har return item uchun query chiqadi.
+    # Natija: qaytarishlar ro'yxatida N+1 muammosi paydo bo'ladi.
+    # ✅ YECHIM:
+    # product_name = serializers.CharField(source="product.name", read_only=True)
     product_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -24,10 +29,18 @@ class SaleReturnItemSerializer(serializers.ModelSerializer):
         fields = ('id', 'sale_item', 'product', 'product_name', 'quantity')
 
     def get_product_name(self, obj):
+        # N+1: `SaleReturnListAPIView` querysetida `items` va `product` prefetch bo'lmasa har bir qator uchun so'rov.
         return obj.product.name if obj.product else ''
 
 
 class SaleReturnListSerializer(serializers.ModelSerializer):
+    # ⚠️ MUAMMO [PERFORMANCE]: `store_name` va `seller_name` SerializerMethodField orqali FK o'qiydi.
+    # Sabab: viewda `select_related("store", "seller")` bo'lmasa har obyekt uchun qo'shimcha query ishlaydi.
+    # Natija: list endpoint katta bo'lganda latency oshadi.
+    # ✅ YECHIM:
+    # store_name = serializers.CharField(source="store.name", read_only=True)
+    # seller_name = serializers.CharField(source="seller.full_name", read_only=True)
+    # N+1: `store`, `seller` FK nomlari serializer method orqali — viewda `select_related("store", "seller")` kerak.
     store_name = serializers.SerializerMethodField()
     seller_name = serializers.SerializerMethodField()
 
@@ -44,3 +57,13 @@ class SaleReturnListSerializer(serializers.ModelSerializer):
 
     def get_seller_name(self, obj):
         return obj.seller.full_name if obj.seller else ''
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 2
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [SerializerMethodFieldlarni `source` fieldlarga almashtirish va view querysetini moslash]
+# ═══════════════════════════════
