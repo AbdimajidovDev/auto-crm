@@ -19,6 +19,13 @@ class DashboardReportService:
 
         # Barcha hisoblashlar baza darajasida
         data = {
+            # ⚠️ MUAMMO [ARXITEKTURA]: KPI nomi stock miqdorini anglatadi, lekin Product katalog count ishlatilgan.
+            # Sabab: `Product.objects.count()` ombordagi real quantity emas.
+            # Natija: dashboardda noto'g'ri biznes metrika ko'rsatiladi.
+            # ✅ YECHIM:
+            # "total_products_in_stock": ProductBatch.objects.aggregate(total=Sum("quantity"))["total"] or 0
+            # Eslatma: nom `total_products_in_stock` bo'lsa ham bu `Product` (katalog) soni —
+            # ombordagi `ProductBatch` miqdori emas; KPI noto'g'ri talqin qilinishi mumkin.
             "total_products_in_stock": Product.objects.count() or 0,
 
             "monthly_revenue": Sale.objects.filter(created_at__gte=start_of_month).aggregate(
@@ -77,6 +84,13 @@ class DashboardService:
         total_debt = total_revenue - total_paid
 
         # Supplier debt
+        # ⚠️ MUAMMO [PERFORMANCE]: SupplierTransaction uchun avval `.all()` olinib, keyin scope filter qo'llanadi.
+        # Sabab: kod mantiqan lazy bo'lsa ham query ni aniq boshlang'ich filter bilan ifodalash o'qilishi va indeks rejasini yaxshilaydi.
+        # Natija: kelajakda `.all()` ustiga qo'shimcha ishlov qo'shilsa katta jadval xavfi oshadi.
+        # ✅ YECHIM:
+        # supplier = SupplierTransaction.objects.filter(entry__created_at__range=(date_from, date_to))
+        # PERFORMANCE: butun `SupplierTransaction` jadvali yuklanadi — katta tarixda
+        # `only()` / indekslangan filtr yoki alohida aggregate service yordamida cheklash foydali.
         supplier = SupplierTransaction.objects.all()
 
         if store_ids is not None:
@@ -103,3 +117,13 @@ class DashboardService:
             "totalDebt": total_debt,
             "supplierDebt": supplier_debt,
         }
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 1
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Dashboard KPI `total_products_in_stock` ni ProductBatch quantity asosida hisoblash]
+# ═══════════════════════════════
