@@ -26,6 +26,7 @@ class InventorySession(TimestampMixin):
 
     class Meta:
         db_table = "inventory_session"
+        ordering = ['-created_at']
         indexes = [
             models.Index(fields=["store", "status"]),
         ]
