@@ -15,7 +15,7 @@ class StoreSerializer(serializers.ModelSerializer):
 
 
 class ProfileSerializer(serializers.ModelSerializer):
-    history = UserHistorySerializer(many=True, read_only=True)
+    history = serializers.SerializerMethodField()
     # ⚠️ MUAMMO [PERFORMANCE]: `stores` SerializerMethodField ichida DB query qiladi.
     # Sabab: har profile serializationda Store queryset alohida ishlaydi; prefetch/contextdan foydalanilmagan.
     # Natija: profile serializer qayta ishlatilsa yoki history bilan birga og'irlashsa ortiqcha DB query paydo bo'ladi.
@@ -42,6 +42,10 @@ class ProfileSerializer(serializers.ModelSerializer):
             "phone_number": {'read_only': True},
             "email": {'read_only': True},
         }
+
+    def get_history(self, obj):
+        histories = obj.history.all().order_by('-created_at')[:5]
+        return UserHistorySerializer(histories, many=True).data
 
     def get_stores(self, obj):
         # Eslatma: profil serializer har safar `obj` o'rniga `request.user` bo'yicha `Store` qidiradi —
