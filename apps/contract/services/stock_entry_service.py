@@ -14,13 +14,14 @@ class StockEntryService:
 
     @staticmethod
     @transaction.atomic
-    def create_entry(*, supplier, store, items, paid_amount, user):
+    def create_entry(*, supplier, store, items, paid_amount, payment_type, user):
         # ✅ YAXSHI: Kirim yaratish, batch update, itemlar va transaction bitta `transaction.atomic` ichida.
         # 1. Header yaratish
         entry = StockEntry.objects.create(
             supplier=supplier,
             store=store,
             paid_amount=paid_amount,
+            payment_type=payment_type,
             created_by=user
         )
 
