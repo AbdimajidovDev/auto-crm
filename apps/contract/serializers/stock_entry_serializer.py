@@ -41,6 +41,7 @@ class StockEntryCreateSerializer(serializers.Serializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.all())
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.all())
     paid_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
+    payment_type = serializers.ChoiceField(choices=StockEntry.PaymentType.choices)
     items = StockEntryItemSerializer(many=True)
 
     def validate(self, data):
