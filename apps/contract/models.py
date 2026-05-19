@@ -48,6 +48,11 @@ class Supplier(TimestampMixin):
 
 
 class StockEntry(TimestampMixin):
+    class PaymentType(models.TextChoices):
+        Cash = "cash", "Cash"
+        Card = "card", "Card"
+        OnlinePayment = "op", "Online Payment"
+
     supplier = models.ForeignKey(
         "contract.Supplier",
         on_delete=models.PROTECT,
@@ -61,6 +66,7 @@ class StockEntry(TimestampMixin):
     )
     total_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    payment_type = models.CharField(max_length=7, choices=PaymentType.choices, default=PaymentType.Cash)
 
     created_by = models.ForeignKey(
         "users.User",

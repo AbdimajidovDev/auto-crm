@@ -2,8 +2,9 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.generics import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import status, permissions, generics
 
+from apps.common.paginations import StandardPagination
 from apps.inventory.models import (
     InventoryMovement,
     InventorySession,
@@ -23,40 +24,34 @@ from apps.inventory.serializers.inventory_serializer import InventoryDetailSeria
 
 
 
-
-class InventoryListAPIView(APIView):
+@extend_schema(
+    tags=["Inventory"],
+    summary="Inventarizatsiya mahsulotlari (status bo‘yicha filter bilan)",
+)
+class InventoryListAPIView(generics.ListAPIView):
     permission_classes = (permissions.IsAuthenticated,)
     serializer_class = InventoryListSerializer
+    pagination_class = StandardPagination
 
-    @extend_schema(
-        tags=["Inventory"],
-        summary="Inventarizatsiya mahsulotlari (status bo‘yicha filter bilan)",
-    )
-    def get(self, request):
-        # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Filtrsiz `.all()` va pagination yo'q.
-        # Sabab: inventarizatsiya sessiyalari do'kon/user scope bo'yicha cheklanmagan va barcha yozuv serializerga uzatiladi.
-        # Natija: katta jadvalda memory/latency oshadi, boshqa do'kon sessiyalari ko'rinib qolishi mumkin.
-        # ✅ YECHIM:
-        # inventories = (
-        #     InventorySession.objects
-        #     .select_related("store", "started_by")
-        #     .filter(store__user_links__user=request.user, store__user_links__is_active=True)
-        #     .order_by("-started_at")
-        # )
-        # page = self.paginate_queryset(inventories)
-        # OPTIMIZATION / N+1: ro'yxat katta bo'lsa `started_by`, `store` uchun `select_related(...)`
-        # qo'shish tavsiya etiladi — aks holda serializer yoki keyingi qatlam har bir sessiya uchun
-        # alohida so'rov yuborishi mumkin.
-        inventories = InventorySession.objects.all()
-        serializer = self.serializer_class(inventories, many=True, context={'request': request})
-        # ⚠️ MUAMMO [CLEAN CODE/PERFORMANCE]: `serializer.data` print qilinishi serializationni majburan bajaradi.
-        # Sabab: DRF serializer lazy hisoblanadi, print esa response oldidan qo'shimcha CPU/I/O sarflaydi.
-        # Natija: katta ro'yxatda endpoint sekinlashadi va loglar ifloslanadi.
-        # ✅ YECHIM:
-        # logger.debug("Inventory list serialized", extra={"count": len(serializer.data)})
-        # MUAMMO: productionda `print` — log/shovqin va sekinlik; `logging` yoki olib tashlash yaxshiroq.
-        print('serializer', serializer.data)
-        return Response(serializer.data, status=200)
+    def get_queryset(self):
+        user = self.request.user
+
+        if user.is_superuser:
+            return (
+                InventorySession.objects
+                .select_related("store", "started_by")
+                .order_by("-started_at")
+            )
+
+        return (
+            InventorySession.objects
+            .select_related("store", "started_by")
+            .filter(
+                store__user_links__user=user,
+                store__user_links__is_active=True,
+            )
+            .order_by("-started_at")
+        )
 
 
 class InventoryDetailAPIView(APIView):
