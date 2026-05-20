@@ -77,45 +77,61 @@ class ProductByBarcodeSerializer(serializers.ModelSerializer):
 # ─────────────────────────────────────────────
 
 
-class ProductBatchListSerializer(serializers.ModelSerializer):
-    # select_related("store", "location") queryset darajasida hal qilinadi —
-    # bu yerda qo'shimcha query bo'lmaydi.
-    store_name = serializers.CharField(source="store.name", read_only=True)
-    location_name = serializers.CharField(
-        source="location.location", read_only=True, default=None
-    )
+# class ProductBatchListSerializer(serializers.ModelSerializer):
+#     # select_related("store", "location") queryset darajasida hal qilinadi —
+#     # bu yerda qo'shimcha query bo'lmaydi.
+#     store_name = serializers.CharField(source="store.name", read_only=True)
+#     location_name = serializers.CharField(
+#         source="location.location", read_only=True, default=None
+#     )
+#
+#     class Meta:
+#         model = ProductBatch
+#         fields = (
+#             "id", "store", "store_name", "location", "location_name",
+#             "quantity", "purchase_price", "selling_price",
+#             "barcode", "is_active",
+#         )
 
-    class Meta:
-        model = ProductBatch
-        fields = (
-            "id", "store", "store_name", "location", "location_name",
-            "quantity", "purchase_price", "selling_price",
-            "barcode", "is_active",
-        )
+
+
+# ============================================================
+# SERIALIZERS
+# ============================================================
+
+class ProductBatchListSerializer(serializers.Serializer):
+    """
+    Batch mavjud bo'lsa — haqiqiy ma'lumot,
+    batch yo'q bo'lsa — do'kon ma'lumoti + quantity=0.
+    ModelSerializer emas, chunki ba'zi objectlar
+    virtual (ProductBatch emas, dict).
+    """
+    id            = serializers.IntegerField(allow_null=True)
+    store         = serializers.IntegerField(source="store_id")
+    store_name    = serializers.CharField()
+    location      = serializers.IntegerField(allow_null=True)
+    location_name = serializers.CharField(allow_null=True)
+    quantity      = serializers.IntegerField()
+    purchase_price = serializers.DecimalField(
+        max_digits=12, decimal_places=2, allow_null=True
+    )
+    selling_price  = serializers.DecimalField(
+        max_digits=12, decimal_places=2, allow_null=True
+    )
+    barcode    = serializers.CharField(allow_null=True)
+    is_active  = serializers.BooleanField(allow_null=True)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
-    """
-    N+1 muammosi VIEW darajasida hal qilingan:
-      - category       → select_related
-      - unit_measurement → select_related
-      - images         → Prefetch(ProductImage)
-      - batches        → Prefetch(ProductBatch + select_related store, location)
-
-    SerializerMethodField o'rniga `source=` ishlatildi —
-    bu aniqroq va qo'shimcha Python chaqiruvini kamaytiradi.
-    """
-    # ✅ YAXSHI: Product list serializer `source` fieldlardan foydalanyapti va view queryset bilan mos optimallashtirilgan.
     images = ProductImageSerializer(many=True, read_only=True)
-    batches = ProductBatchListSerializer(many=True, read_only=True)
-
-    # source= ishlatish: get_category_name() kabi alohida metod shart emas
     category_name = serializers.CharField(
         source="category.name", read_only=True, default=None
     )
     unit_measurement_name = serializers.CharField(
         source="unit_measurement.measurement", read_only=True, default=None
     )
+    # batches endi SerializerMethodField — barcha do'konlarni qamrab oladi
+    batches = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
@@ -130,6 +146,87 @@ class ProductListSerializer(serializers.ModelSerializer):
             "images",
             "batches",
         )
+
+    def get_batches(self, product):
+        # Context dan barcha do'konlar olinadi (view da set qilinadi)
+        all_stores = self.context.get("all_stores", [])
+
+        # Prefetch dan kelgan batchlarni store_id → batch mapping
+        batch_map = {
+            batch.store_id: batch
+            for batch in product.batches.all()
+        }
+
+        result = []
+        for store in all_stores:
+            batch = batch_map.get(store.id)
+            if batch:
+                result.append({
+                    "id":             batch.id,
+                    "store_id":       store.id,
+                    "store_name":     store.name,
+                    "location":       batch.location_id,
+                    "location_name":  getattr(batch.location, "location", None),
+                    "quantity":       batch.quantity,
+                    "purchase_price": batch.purchase_price,
+                    "selling_price":  batch.selling_price,
+                    "barcode":        batch.barcode,
+                    "is_active":      batch.is_active,
+                })
+            else:
+                # Batch yo'q — virtual yozuv
+                result.append({
+                    "id":             None,
+                    "store_id":       store.id,
+                    "store_name":     store.name,
+                    "location":       None,
+                    "location_name":  None,
+                    "quantity":       0,
+                    "purchase_price": None,
+                    "selling_price":  None,
+                    "barcode":        None,
+                    "is_active":      None,
+                })
+
+        return ProductBatchListSerializer(result, many=True).data
+
+
+# class ProductListSerializer(serializers.ModelSerializer):
+#     """
+#     N+1 muammosi VIEW darajasida hal qilingan:
+#       - category       → select_related
+#       - unit_measurement → select_related
+#       - images         → Prefetch(ProductImage)
+#       - batches        → Prefetch(ProductBatch + select_related store, location)
+#
+#     SerializerMethodField o'rniga `source=` ishlatildi —
+#     bu aniqroq va qo'shimcha Python chaqiruvini kamaytiradi.
+#     """
+#     # ✅ YAXSHI: Product list serializer `source` fieldlardan foydalanyapti va view queryset bilan mos optimallashtirilgan.
+#     images = ProductImageSerializer(many=True, read_only=True)
+#     batches = ProductBatchListSerializer(many=True, read_only=True)
+#
+#     # source= ishlatish: get_category_name() kabi alohida metod shart emas
+#     category_name = serializers.CharField(
+#         source="category.name", read_only=True, default=None
+#     )
+#     unit_measurement_name = serializers.CharField(
+#         source="unit_measurement.measurement", read_only=True, default=None
+#     )
+#
+#     class Meta:
+#         model = Product
+#         fields = (
+#             "id",
+#             "category", "category_name",
+#             "name",
+#             "unit_measurement", "unit_measurement_name",
+#             "description",
+#             "is_active",
+#             "created_at",
+#             "images",
+#             "batches",
+#         )
 
 
 

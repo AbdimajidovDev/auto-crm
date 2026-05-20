@@ -78,6 +78,39 @@ from drf_spectacular.types import OpenApiTypes
 # ─────────────────────────────────────────────
 # VIEW
 # ─────────────────────────────────────────────
+# class ProductListAPIView(generics.ListAPIView):
+#     permission_classes = [permissions.IsAuthenticated]
+#     serializer_class = ProductListSerializer
+#     pagination_class = StandardPagination
+#
+#     filter_backends = [DjangoFilterBackend, SearchFilter]
+#     filterset_class = ProductFilter
+#     search_fields = ["name", "description"]  # ?search=moy
+#
+#     def get_queryset(self):
+#         # ✅ YAXSHI: Product list uchun `select_related` va `Prefetch` ishlatilgan, serializerdagi nested maydonlar N+1 chiqarmaydi.
+#         # Prefetch bilan batches ichidagi store va location ham bitta queryda keladi.
+#         # Jami: 1 (Product) + 1 (images) + 1 (batches) = 3 SQL query.
+#         # select_related category va unit_measurement JOIN qiladi → +0 query.
+#         batches_qs = ProductBatch.objects.select_related(
+#             "store", "location"
+#         ).filter(is_active=True)
+#
+#         return (
+#             Product.objects
+#             .filter(is_active=True)
+#             .select_related("category", "unit_measurement")
+#             .prefetch_related(
+#                 Prefetch("images"),
+#                 Prefetch("batches", queryset=batches_qs),
+#             )
+#             .order_by("name")
+#         )
+
+
+# ============================================================
+# VIEW
+# ============================================================
 
 @extend_schema(
     tags=["Product"],
@@ -96,23 +129,19 @@ from drf_spectacular.types import OpenApiTypes
     ],
 )
 class ProductListAPIView(generics.ListAPIView):
-    permission_classes = [permissions.IsAuthenticated]
-    serializer_class = ProductListSerializer
-    pagination_class = StandardPagination
-
-    filter_backends = [DjangoFilterBackend, SearchFilter]
-    filterset_class = ProductFilter
-    search_fields = ["name", "description"]  # ?search=moy
+    permission_classes  = [permissions.IsAuthenticated]
+    serializer_class    = ProductListSerializer
+    pagination_class    = StandardPagination
+    filter_backends     = [DjangoFilterBackend, SearchFilter]
+    filterset_class     = ProductFilter
+    search_fields       = ["name", "description"]
 
     def get_queryset(self):
-        # ✅ YAXSHI: Product list uchun `select_related` va `Prefetch` ishlatilgan, serializerdagi nested maydonlar N+1 chiqarmaydi.
-        # Prefetch bilan batches ichidagi store va location ham bitta queryda keladi.
-        # Jami: 1 (Product) + 1 (images) + 1 (batches) = 3 SQL query.
-        # select_related category va unit_measurement JOIN qiladi → +0 query.
-        batches_qs = ProductBatch.objects.select_related(
-            "store", "location"
-        ).filter(is_active=True)
-
+        batches_qs = (
+            ProductBatch.objects
+            .select_related("store", "location")
+            .filter(is_active=True)
+        )
         return (
             Product.objects
             .filter(is_active=True)
@@ -123,6 +152,15 @@ class ProductListAPIView(generics.ListAPIView):
             )
             .order_by("name")
         )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        # Barcha faol do'konlar — bitta query, context orqali serializer ga uzatiladi.
+        # Har bir mahsulot uchun alohida Store query bo'lmaydi → N+1 yo'q.
+        context["all_stores"] = list(
+            Store.objects.filter(is_active=True).only("id", "name").order_by("name")
+        )
+        return context
 
 
 #

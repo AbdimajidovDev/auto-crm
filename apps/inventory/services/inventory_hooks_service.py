@@ -1,14 +1,16 @@
 from apps.inventory.models import InventorySession, InventoryMovement
 
 
-# Invetarizatsiya jarayonida mahsulot sotilganda miqdordan ayirish
-def handle_sale_item(sale_item):
-
-    session = InventorySession.objects.filter(
-        store=sale_item.sale.store,
-        status="active"
+def _get_active_session(store):
+    """Umumiy helper — har funksiyada takrorlanishni oldini oladi."""
+    return InventorySession.objects.filter(
+        store=store,
+        status=InventorySession.Status.ACTIVE  # ✅ konstanta
     ).first()
 
+
+def handle_sale_item(sale_item):
+    session = _get_active_session(sale_item.sale.store)
     if not session:
         return
 
@@ -17,60 +19,49 @@ def handle_sale_item(sale_item):
         product=sale_item.product,
         quantity=sale_item.quantity,
         type=InventoryMovement.Type.SALE,
-        ref_id=sale_item.sale_id
+        ref_id=sale_item.sale_id,
     )
 
 
-# Invetarizatsiya jarayonida boshqa do'konga transfer qilinganda miqdordan ayirish
 def handle_transfer_approved(transfer):
-
-    session = InventorySession.objects.filter(
-        store=transfer.from_store,
-        status="active"
-    ).first()
-
+    session = _get_active_session(transfer.from_store)
     if not session:
         return
 
-    for item in transfer.items.all():
-        InventoryMovement.objects.create(
+    # ✅ select_related + bulk_create — N+1 yo'q
+    items = transfer.items.select_related("product").all()
+    InventoryMovement.objects.bulk_create([
+        InventoryMovement(
             session=session,
             product=item.product,
             quantity=item.quantity,
             type=InventoryMovement.Type.TRANSFER_OUT,
-            ref_id=transfer.id
+            ref_id=transfer.id,
         )
+        for item in items
+    ])
 
 
-# Invetarizatsiya jarayonida Do'konga transfer qilinganda miqdorgaga qo'shish
 def handle_transfer_in(transfer):
-
-    session = InventorySession.objects.filter(
-        store=transfer.to_store,
-        status="active"
-    ).first()
-
+    session = _get_active_session(transfer.to_store)
     if not session:
         return
 
-    for item in transfer.items.all():
-        InventoryMovement.objects.create(
+    items = transfer.items.select_related("product").all()
+    InventoryMovement.objects.bulk_create([
+        InventoryMovement(
             session=session,
             product=item.product,
             quantity=item.quantity,
             type=InventoryMovement.Type.TRANSFER_IN,
-            ref_id=transfer.id
+            ref_id=transfer.id,
         )
+        for item in items
+    ])
 
 
-# Invetarizatsiya jarayonida mahsulot vazvrat qilinganda miqdorga qo'shish
 def handle_sale_return(return_obj, sale_item, quantity):
-
-    session = InventorySession.objects.filter(
-        store=return_obj.store,
-        status="active"
-    ).first()
-
+    session = _get_active_session(return_obj.store)
     if not session:
         return
 
@@ -79,27 +70,23 @@ def handle_sale_return(return_obj, sale_item, quantity):
         product=sale_item.product,
         quantity=quantity,
         type=InventoryMovement.Type.RETURN,
-        ref_id=return_obj.id
+        ref_id=return_obj.id,
     )
 
 
-# Invetarizatsiya jarayonida Kirim qilinganda miqdorgaga qo'shish
 def handle_stock_entry(entry):
-
-    session = InventorySession.objects.filter(
-        store=entry.store,
-        status="active"
-    ).first()
-
+    session = _get_active_session(entry.store)
     if not session:
         return
 
-    for item in entry.items.all():
-        InventoryMovement.objects.create(
+    items = entry.items.select_related("product").all()
+    InventoryMovement.objects.bulk_create([
+        InventoryMovement(
             session=session,
             product=item.product,
             quantity=item.quantity,
             type=InventoryMovement.Type.ENTRY,
-            ref_id=entry.id
+            ref_id=entry.id,
         )
-
+        for item in items
+    ])

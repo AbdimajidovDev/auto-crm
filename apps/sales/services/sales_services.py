@@ -98,7 +98,7 @@ class SaleService:
             # 🔥 CRITICAL FIX
             purchase_price = batch.purchase_price
 
-            ProductBatch.objects.filter(id=batch.id).update(
+            ProductBatch.objects.filter(id=batch.pk).update(
                 quantity=F('quantity') - quantity_to_sell
             )
 

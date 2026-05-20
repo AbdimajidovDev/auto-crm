@@ -61,7 +61,7 @@ class InventorySelector:
         # 🔹 SOLD OUT
         sold_out_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"), type="sale")
+            .filter(session_id=session_id, product=OuterRef("product"), type=InventoryMovement.Type.SALE)
             .values("product")
             .annotate(total=Sum("quantity"))
             .values("total")[:1]
@@ -70,7 +70,7 @@ class InventorySelector:
         # 🔹 RETURN
         returned_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"), type="return")
+            .filter(session_id=session_id, product=OuterRef("product"), type=InventoryMovement.Type.RETURN)
             .values("product")
             .annotate(total=Sum("quantity"))
             .values("total")[:1]
@@ -79,7 +79,7 @@ class InventorySelector:
         # 🔹 TRANSFER OUT
         transfer_out_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"), type="transfer_out")
+            .filter(session_id=session_id, product=OuterRef("product"), type=InventoryMovement.Type.TRANSFER_OUT)
             .values("product")
             .annotate(total=Sum("quantity"))
             .values("total")[:1]
@@ -88,7 +88,7 @@ class InventorySelector:
         # 🔹 TRANSFER IN
         transfer_in_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"), type="transfer_in")
+            .filter(session_id=session_id, product=OuterRef("product"), type=InventoryMovement.Type.TRANSFER_IN)
             .values("product")
             .annotate(total=Sum("quantity"))
             .values("total")[:1]
@@ -97,7 +97,7 @@ class InventorySelector:
         # 🔹 ENTRY
         entry_subquery = (
             InventoryMovement.objects
-            .filter(session_id=session_id, product=OuterRef("product"), type="entry")
+            .filter(session_id=session_id, product=OuterRef("product"), type=InventoryMovement.Type.ENTRY)
             .values("product")
             .annotate(total=Sum("quantity"))
             .values("total")[:1]

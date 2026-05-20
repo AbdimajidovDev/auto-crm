@@ -122,6 +122,8 @@ class InventorySetCountAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         InventoryService.set_count(**serializer.validated_data)
+        InventoryService.scan_product(**serializer.validated_data)
+
 
         return Response({"status": "updated"})
 
