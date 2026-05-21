@@ -12,7 +12,11 @@ from apps.common.paginations import StandardPagination
 from apps.debts.models import CustomerDebt
 from apps.sales.models import Sale, SaleItem
 from apps.users.models.customers import Customer
-from apps.users.serializers.customer_serializer import CustomerSerializer, _debt_subquery, CustomerWriteSerializer
+from apps.users.serializers.customer_serializer import (
+    _debt_subquery,
+    CustomerWriteSerializer,
+    CustomerListSerializer, CustomerSerializer,
+)
 
 
 # ─────────────────────────────────────────────
@@ -55,33 +59,221 @@ def _customer_queryset():
 # ─────────────────────────────────────────────
 # VIEWS
 # ─────────────────────────────────────────────
+from decimal import Decimal
 
+from django.db import models
+from django.db.models import DecimalField, OuterRef, Prefetch, Subquery, Sum, Value
+from django.db.models.functions import Coalesce
+from drf_spectacular.openapi import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
+from rest_framework import generics, permissions
+from rest_framework.filters import OrderingFilter, SearchFilter
+
+from apps.sales.models import Sale, SaleItem
+
+# ------------------------------------------------------------------ #
+#  Queryset helper                                                     #
+# ------------------------------------------------------------------ #
+def _customer_queryset():
+    """
+    Barcha Customer so'rovlari uchun yagona, optimallashtirilgan queryset.
+
+    Annotatsiyalar
+    ──────────────
+    total_purchase_amount
+        Mijoz bilan bog'liq barcha Sale.total_amount yig'indisi.
+        Subquery ishlatildi → bitta correlated SELECT, N+1 yo'q.
+
+    total_debt
+        CustomerDebt modeli orqali:
+            _debt_in   = type="i" (kirim/qarz hosil qiluvchi) yig'indisi
+            _debt_paid = type="p" (to'lov / qarzni kamaytiradigan) yig'indisi
+            total_debt = _debt_in - _debt_paid
+
+        Supplier logikasi bilan aynan bir xil pattern.
+        Agar loyihangizda total_debt boshqacha hisoblanayotgan bo'lsa
+        (masalan, Sale.total_amount - Sale.paid_amount), quyidagi
+        `# ALT:` blokini ochib ishlatish mumkin.
+
+    Prefetch
+    ────────
+    sales → store          : select_related → JOIN (1 ta qo'shimcha SQL yo'q)
+    sales → items → product: W ta Prefetch → jami 3 ta qo'shimcha SQL
+    debts → sale → store   : store_debts uchun Python guruhlash
+    """
+    zero = Value(Decimal("0.00"), output_field=DecimalField())
+
+    # --- jami xarid summasi ---
+    total_purchase_subquery = (
+        Sale.objects.filter(customer=OuterRef("pk"))
+        .exclude(status=Sale.Status.RETURNED)          # qaytarilgan sotuvlarni hisobga olmaydi
+        .values("customer")
+        .annotate(total=Sum("total_amount"))
+        .values("total")
+    )
+
+    # --- qarz hosil qiluvchi tranzaksiyalar (CustomerDebt type="i") ---
+    debt_in_subquery = (
+        CustomerDebt.objects.filter(
+            customer=OuterRef("pk"),
+            type="i",                                   # INVENTORY_IN / kirim
+        )
+        .values("customer")
+        .annotate(total=Sum("amount"))
+        .values("total")
+    )
+
+    # --- to'lov tranzaksiyalari (CustomerDebt type="p") ---
+    debt_paid_subquery = (
+        CustomerDebt.objects.filter(
+            customer=OuterRef("pk"),
+            type="p",                                   # PAYMENT / to'lov
+        )
+        .values("customer")
+        .annotate(total=Sum("amount"))
+        .values("total")
+    )
+
+    # ALT: Agar CustomerDebt modeli yo'q bo'lsa va qarz Sale orqali hisoblanayotgan bo'lsa:
+    # total_debt_subquery = (
+    #     Sale.objects.filter(customer=OuterRef("pk"))
+    #     .exclude(status=Sale.Status.RETURNED)
+    #     .values("customer")
+    #     .annotate(debt=Sum(models.F("total_amount") - models.F("paid_amount")))
+    #     .values("debt")
+    # )
+
+    # --- items uchun Prefetch: product select_related bilan ---
+    items_prefetch = Prefetch(
+        "items",
+        queryset=SaleItem.objects.select_related("product").only(
+            "id", "sale_id", "product_id", "product__name",
+            "quantity", "total_price",
+        ),
+    )
+
+    # --- sales uchun Prefetch: store select_related + items prefetch ---
+    sales_prefetch = Prefetch(
+        "sales",
+        queryset=Sale.objects.select_related("store")
+        .only(
+            "id", "customer_id", "store_id", "store__name",
+            "total_amount", "paid_amount", "status", "created_at",
+        )
+        .prefetch_related(items_prefetch)
+        .order_by("-created_at"),
+    )
+
+    # --- debts uchun Prefetch: store_debts hisobi uchun ---
+    debts_prefetch = Prefetch(
+        "debts",
+        queryset=CustomerDebt.objects.select_related("sale__store").only(
+            "id", "customer_id", "amount", "type",
+            "sale_id", "sale__store_id", "sale__store__name",
+        ),
+    )
+
+    return (
+        Customer.objects.only("id", "full_name", "phone_number")
+        .annotate(
+            total_purchase_amount=Coalesce(
+                Subquery(total_purchase_subquery, output_field=DecimalField()),
+                zero,
+            ),
+            _debt_in=Coalesce(
+                Subquery(debt_in_subquery, output_field=DecimalField()),
+                zero,
+            ),
+            _debt_paid=Coalesce(
+                Subquery(debt_paid_subquery, output_field=DecimalField()),
+                zero,
+            ),
+        )
+        .annotate(
+            # Ikkinchi .annotate() — birinchi annotatsiyalarga murojaat qilish uchun
+            total_debt=models.ExpressionWrapper(
+                models.F("_debt_in") - models.F("_debt_paid"),
+                output_field=DecimalField(max_digits=20, decimal_places=2),
+            )
+
+            # ALT (CustomerDebt yo'q bo'lsa):
+            # total_debt=Coalesce(
+            #     Subquery(total_debt_subquery, output_field=DecimalField()),
+            #     zero,
+            # ),
+        )
+        .prefetch_related(sales_prefetch, debts_prefetch)
+    )
+
+
+# ------------------------------------------------------------------ #
+#  View                                                                #
+# ------------------------------------------------------------------ #
 @extend_schema_view(
     get=extend_schema(
-        tags=["customer"],
-        summary="Mijozlar ro'yxati",
+        tags=["Customer"],
+        summary="Mijozlar ro'yxati — search, ordering, pagination, jami xarid va qarz.",
         parameters=[
-            OpenApiParameter("search", OpenApiTypes.STR,
-                             description="Ism yoki telefon bo'yicha qidirish"),
-            OpenApiParameter("ordering", OpenApiTypes.STR,
-                             description="Tartiblash: full_name, -full_name, total_debt, -total_debt"),
-            OpenApiParameter("page", OpenApiTypes.INT, description="Sahifa raqami"),
-            OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi yozuvlar soni"),
+            OpenApiParameter(
+                "search", OpenApiTypes.STR,
+                description="Ism yoki telefon bo'yicha qidirish.",
+            ),
+            OpenApiParameter(
+                "ordering", OpenApiTypes.STR,
+                description=(
+                    "Tartiblash: full_name, -full_name, "
+                    "total_debt, -total_debt, "
+                    "total_purchase_amount, -total_purchase_amount"
+                ),
+            ),
+            OpenApiParameter("page",  OpenApiTypes.INT, description="Sahifa raqami."),
+            OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi yozuvlar soni."),
         ],
-    ),
+    )
 )
 class CustomerListView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = CustomerSerializer
-    pagination_class = StandardPagination
-    filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ["full_name", "phone_number"]
-    ordering_fields = ["full_name", "total_debt"]
+    serializer_class   = CustomerListSerializer
+    pagination_class   = StandardPagination
+    filter_backends    = [SearchFilter, OrderingFilter]
+    search_fields      = ["full_name", "phone_number"]
+    ordering_fields    = [
+        "full_name",
+        "total_debt",
+        "total_purchase_amount",   # yangi — xarid summasi bo'yicha tartiblash
+    ]
     ordering = ["full_name"]
 
     def get_queryset(self):
-        # ✅ YAXSHI: List view pagination, search va ordering bilan ishlaydi.
         return _customer_queryset()
+
+
+
+# @extend_schema_view(
+#     get=extend_schema(
+#         tags=["customer"],
+#         summary="Mijozlar ro'yxati",
+#         parameters=[
+#             OpenApiParameter("search", OpenApiTypes.STR,
+#                              description="Ism yoki telefon bo'yicha qidirish"),
+#             OpenApiParameter("ordering", OpenApiTypes.STR,
+#                              description="Tartiblash: full_name, -full_name, total_debt, -total_debt"),
+#             OpenApiParameter("page", OpenApiTypes.INT, description="Sahifa raqami"),
+#             OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi yozuvlar soni"),
+#         ],
+#     ),
+# )
+# class CustomerListView(generics.ListAPIView):
+#     permission_classes = [permissions.IsAuthenticated]
+#     serializer_class = CustomerSerializer
+#     pagination_class = StandardPagination
+#     filter_backends = [SearchFilter, OrderingFilter]
+#     search_fields = ["full_name", "phone_number"]
+#     ordering_fields = ["full_name", "total_debt"]
+#     ordering = ["full_name"]
+#
+#     def get_queryset(self):
+#         return _customer_queryset()
 
 
 @extend_schema(

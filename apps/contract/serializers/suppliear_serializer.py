@@ -7,11 +7,38 @@ from django.utils import translation
 
 from apps.users.validations import check_valid_phone
 
+from decimal import Decimal
+
+class SupplierListSerializer(serializers.ModelSerializer):
+    total_purchase_amount = serializers.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        read_only=True,
+        default=Decimal("0.00"),
+    )
+    total_debt = serializers.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        read_only=True,
+        default=Decimal("0.00"),
+    )
+
+    class Meta:
+        model = Supplier
+        fields = [
+            "id",
+            "name",
+            "description",
+            "address",
+            "phone_number",
+            "inn",
+            "is_active",
+            "total_purchase_amount",
+            "total_debt",
+        ]
+
 
 class SupplierGetSerializer(serializers.ModelSerializer):
-    # name = serializers.SerializerMethodField()
-    # description = serializers.SerializerMethodField()
-    # address = serializers.SerializerMethodField()
 
     class Meta:
         model = Supplier
