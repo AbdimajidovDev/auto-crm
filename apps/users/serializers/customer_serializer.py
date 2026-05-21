@@ -82,13 +82,104 @@ class SaleItemSerializer(serializers.ModelSerializer):
         fields = ("id", "product", "product_name", "quantity", "total_price")
 
 
-class SaleSerializer(serializers.ModelSerializer):
+# class SaleSerializer(serializers.ModelSerializer):
+#     items = SaleItemSerializer(many=True, read_only=True)
+#     store_name = serializers.CharField(source="store.name", read_only=True)
+#
+#     class Meta:
+#         model = Sale
+#         fields = ("id", "store_name", "total_amount", "paid_amount", "status", "created_at", "items")
+
+
+# ------------------------------------------------------------------ #
+#  SaleItem — ichki serializer                                         #
+# ------------------------------------------------------------------ #
+# class SaleItemSerializer(serializers.Serializer):
+#     id = serializers.IntegerField()
+#     product = serializers.IntegerField(source="product_id")
+#     product_name = serializers.CharField(source="product.name")
+#     quantity = serializers.IntegerField()
+#     total_price = serializers.DecimalField(max_digits=20, decimal_places=2)
+
+
+# ------------------------------------------------------------------ #
+#  Sale — ichki serializer                                             #
+# ------------------------------------------------------------------ #
+class SaleSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    store_name = serializers.CharField(source="store.name")
+    total_amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    paid_amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    status = serializers.CharField()
+    created_at = serializers.DateTimeField()
     items = SaleItemSerializer(many=True, read_only=True)
-    store_name = serializers.CharField(source="store.name", read_only=True)
+
+
+# ------------------------------------------------------------------ #
+#  Customer — asosiy serializer                                        #
+# ------------------------------------------------------------------ #
+class CustomerListSerializer(serializers.ModelSerializer):
+    """
+    N+1 muammolari qanday hal qilindi:
+
+    total_purchase_amount:
+      Annotate orqali Sale.total_amount yig'indisi — bitta correlated Subquery.
+
+    total_debt:
+      Annotate orqali CustomerDebt (type="i" kirim - "p" to'lov) — ikkita Subquery,
+      ExpressionWrapper bilan ayirma hisoblanadi.
+      (Supplier logikasi bilan bir xil pattern.)
+
+    store_debts:
+      prefetch_related("debts__sale__store") — Python darajasida guruhlash,
+      qo'shimcha SQL yo'q.
+
+    sales → items → product:
+      Prefetch("sales") + Prefetch("sales__items") + select_related("product")
+      — N ta mijoz uchun faqat 3 ta qo'shimcha SQL.
+    """
+
+    # annotate orqali kelgan qiymatlar — SerializerMethodField shart emas
+    total_purchase_amount = serializers.DecimalField(
+        max_digits=20, decimal_places=2, read_only=True
+    )
+    total_debt = serializers.DecimalField(
+        max_digits=20, decimal_places=2, read_only=True
+    )
+
+    store_debts = serializers.SerializerMethodField()
+    sales = SaleSerializer(many=True, read_only=True)
 
     class Meta:
-        model = Sale
-        fields = ("id", "store_name", "total_amount", "paid_amount", "status", "created_at", "items")
+        model = Customer
+        fields = (
+            "id",
+            "full_name",
+            "phone_number",
+            "total_purchase_amount",
+            "total_debt",
+            "store_debts",
+            "sales",
+        )
+
+    def get_store_debts(self, obj) -> list[dict]:
+        """
+        prefetch_related("debts__sale__store") orqali debts xotirada mavjud.
+        Qo'shimcha SQL yo'q — Python darajasida guruhlash.
+        """
+        store_map: dict[str, float] = {}
+        for debt in obj.debts.all():  # prefetch — SQL yo'q
+            sale = getattr(debt, "sale", None)
+            store = getattr(sale, "store", None) if sale else None
+            if not store:
+                continue
+            delta = float(debt.amount) if debt.type == "i" else -float(debt.amount)
+            store_map[store.name] = store_map.get(store.name, 0) + delta
+
+        return [
+            {"store": store_name, "debt": round(debt_val, 2)}
+            for store_name, debt_val in sorted(store_map.items())
+        ]
 
 
 class CustomerSerializer(serializers.ModelSerializer):

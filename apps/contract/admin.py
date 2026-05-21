@@ -20,7 +20,7 @@ class StockEntryItemInline(admin.StackedInline):
 
 @admin.register(StockEntry)
 class StockEntryAdmin(admin.ModelAdmin):
-    list_display = ('id', 'supplier', 'store', 'created_at')
+    list_display = ('id', 'supplier', 'store', 'total_amount', 'payment_type', 'created_at')
     list_filter = ('supplier',)
     search_fields = ('supplier__name',)
 
