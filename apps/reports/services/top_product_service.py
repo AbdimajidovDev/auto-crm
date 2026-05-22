@@ -1,6 +1,6 @@
 from django.db.models import Sum
 
-from apps.reports.services import StoreScopeService
+from apps.reports.services.store_scope_service import StoreScopeService
 from apps.sales.models import SaleItem
 
 
