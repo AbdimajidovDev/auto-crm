@@ -191,67 +191,6 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ProductBatchListSerializer(result, many=True).data
 
 
-# class ProductListSerializer(serializers.ModelSerializer):
-#     """
-#     N+1 muammosi VIEW darajasida hal qilingan:
-#       - category       → select_related
-#       - unit_measurement → select_related
-#       - images         → Prefetch(ProductImage)
-#       - batches        → Prefetch(ProductBatch + select_related store, location)
-#
-#     SerializerMethodField o'rniga `source=` ishlatildi —
-#     bu aniqroq va qo'shimcha Python chaqiruvini kamaytiradi.
-#     """
-#     # ✅ YAXSHI: Product list serializer `source` fieldlardan foydalanyapti va view queryset bilan mos optimallashtirilgan.
-#     images = ProductImageSerializer(many=True, read_only=True)
-#     batches = ProductBatchListSerializer(many=True, read_only=True)
-#
-#     # source= ishlatish: get_category_name() kabi alohida metod shart emas
-#     category_name = serializers.CharField(
-#         source="category.name", read_only=True, default=None
-#     )
-#     unit_measurement_name = serializers.CharField(
-#         source="unit_measurement.measurement", read_only=True, default=None
-#     )
-#
-#     class Meta:
-#         model = Product
-#         fields = (
-#             "id",
-#             "category", "category_name",
-#             "name",
-#             "unit_measurement", "unit_measurement_name",
-#             "description",
-#             "is_active",
-#             "created_at",
-#             "images",
-#             "batches",
-#         )
-
-
-
-# class ProductListSerializer(serializers.ModelSerializer):
-#     # N+1: `images`, `batches`, `category`, `unit_measurement` — view querysetida keng `prefetch_related`
-#     # / `select_related` bo'lmasa har bir mahsulot uchun o'nlab qo'shimcha so'rov chiqadi.
-#     images = ProductImageSerializer(many=True, read_only=True)
-#     category_name = serializers.SerializerMethodField()
-#     batches = ProductBatchSerializer(many=True, read_only=True)
-#     unit_measurement_name = serializers.SerializerMethodField()
-#
-#     class Meta:
-#         model = Product
-#         fields = (
-#             'id', 'category', 'category_name', 'name', "unit_measurement", 'unit_measurement_name',
-#             'description', 'is_active', 'created_at', 'images', 'batches'
-#         )
-#
-#     def get_category_name(self, obj):
-#         return obj.category.name if obj.category else None
-#
-#     def get_unit_measurement_name(self, obj):
-#         return obj.unit_measurement.measurement if obj.unit_measurement else None
-
-
 class ProductCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(
         child=serializers.ImageField(),
