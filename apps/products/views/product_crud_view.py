@@ -163,23 +163,6 @@ class ProductListAPIView(generics.ListAPIView):
         return context
 
 
-#
-# @extend_schema(
-#     tags=["Product"],
-#     summary="- Productlar ro'yxati.",
-# )
-# class ProductListAPIView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]
-#     serializer_class = ProductListSerializer
-#
-#     def get(self, request):
-#         # N+1: `ProductListSerializer` `category`, `unit_measurement`, `images`, `batches` (va batch
-#         # ichidagi `store`, `product`, `location`) bilan ishlaydi — prefetchsiz har bir mahsulot uchun
-#         # ko'plab qo'shimcha so'rovlar (klassik N+1) chiqadi.
-#         products = Product.objects.filter(is_active=True)
-#         serializer = self.serializer_class(products, many=True, context={"request": request})
-#         return Response(serializer.data, status=200)
-
 
 @extend_schema(
     tags=["Product"],
