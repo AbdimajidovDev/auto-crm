@@ -1,28 +1,58 @@
 from rest_framework import serializers
 
-from apps.users.models import User
-from apps.users.serializers import UserHistorySerializer
-
-
-from rest_framework import serializers
 from apps.store.models import Store
+from apps.users.models import User
 
-class StoreSerializer(serializers.ModelSerializer):
+
+# ─────────────────────────────────────────────
+#  Store serializer — role bilan
+# ─────────────────────────────────────────────
+class ProfileStoreSerializer(serializers.ModelSerializer):
+    """
+    Store ma'lumotlari + foydalanuvchining shu do'kondagi roli.
+    role — StoreUser.role dan annotate orqali keladi (N+1 yo'q).
+    Superuser uchun role='superuser' — StoreUser mavjud bo'lmasa ham.
+    """
+    role = serializers.SerializerMethodField()
+
     class Meta:
         model = Store
-        fields = ("id", "name", "phone_number", "address", "type", "is_active")
+        fields = (
+            "id",
+            "name",
+            "phone_number",
+            "address",
+            "type",
+            "is_active",
+            "role",
+        )
+
+    def get_role(self, obj) -> str:
+        # superuser bo'lsa — barcha do'konlar uchun 'superuser'
+        request = self.context.get("request")
+        if request and request.user.is_superuser:
+            return "superuser"
+        # annotate orqali kelgan role_in_store (view darajasida prefetch + annotate)
+        return getattr(obj, "role_in_store", None)
 
 
+# ─────────────────────────────────────────────
+#  History serializer
+# ─────────────────────────────────────────────
+class UserHistorySerializer(serializers.ModelSerializer):
+    class Meta:
+        from apps.users.models import UserHistory  # loyihangizdagi model
+        model = UserHistory
+        fields = ("id", "action", "ip_address", "user_agent", "created_at")
 
+
+# ─────────────────────────────────────────────
+#  Profile serializer
+# ─────────────────────────────────────────────
 class ProfileSerializer(serializers.ModelSerializer):
+    stores = ProfileStoreSerializer(source="prefetched_stores", many=True, read_only=True)
     history = serializers.SerializerMethodField()
-    # ⚠️ MUAMMO [PERFORMANCE]: `stores` SerializerMethodField ichida DB query qiladi.
-    # Sabab: har profile serializationda Store queryset alohida ishlaydi; prefetch/contextdan foydalanilmagan.
-    # Natija: profile serializer qayta ishlatilsa yoki history bilan birga og'irlashsa ortiqcha DB query paydo bo'ladi.
-    # ✅ YECHIM:
-    # stores = StoreSerializer(source="prefetched_stores", many=True, read_only=True)
-    # Viewda user storelarini oldindan prefetch/context orqali uzatish.
-    stores = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -32,64 +62,32 @@ class ProfileSerializer(serializers.ModelSerializer):
             "full_name",
             "phone_number",
             "email",
+            "role",
             "stores",
             "history",
         )
-
         extra_kwargs = {
             "id": {"read_only": True},
-            "is_superuser": {'read_only': True},
-            "phone_number": {'read_only': True},
-            "email": {'read_only': True},
+            "is_superuser": {"read_only": True},
+            "phone_number": {"read_only": True},
+            "email": {"read_only": True},
         }
 
-    def get_history(self, obj):
-        histories = obj.history.all().order_by('-created_at')[:5]
+    def get_role(self, obj) -> str:
+        if obj.is_superuser:
+            return "superuser"
+        # prefetched_stores da annotate qilingan role_in_store dan olamiz
+        stores = getattr(obj, "prefetched_stores", None)
+        if stores:
+            first = next(iter(stores), None)
+            if first:
+                return getattr(first, "role_in_store", None)
+        return None
+
+    def get_history(self, obj) -> list:
+        histories = sorted(
+            obj.history.all(),
+            key=lambda h: h.created_at,
+            reverse=True,
+        )[:5]
         return UserHistorySerializer(histories, many=True).data
-
-    def get_stores(self, obj):
-        # Eslatma: profil serializer har safar `obj` o'rniga `request.user` bo'yicha `Store` qidiradi —
-        # serializer bir necha marta ishlatilsa ham bir xil so'rov takrorlanadi; prefetch yoki
-        # view darajasida kontekst orqali uzatish ixtiyoriy optimallashtirish.
-        request = self.context.get("request")
-        user = request.user
-
-        # 🔐 SUPERUSER → hamma store
-        if user.is_superuser:
-            stores = Store.objects.filter(is_active=True)
-
-        else:
-            # 🔐 faqat o‘ziga tegishli storelar
-            stores = Store.objects.filter(
-                user_links__user=user,
-                user_links__is_active=True,
-                is_active=True
-            ).distinct()
-
-        return StoreSerializer(stores, many=True).data
-
-
-# ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 0
-# Performance muammolari: 1
-# Arxitektura muammolari: 0
-# Umumiy baho: 7 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProfileSerializer stores querysini view/prefetch qatlamiga chiqarish]
-# ═══════════════════════════════
-
-
-#
-# class ProfileSerializer(serializers.ModelSerializer):
-#     history = UserHistorySerializer(many=True, read_only=True)
-#
-#     class Meta:
-#         model = User
-#         fields = ("id", "is_superuser", "full_name", "phone_number", "email", "history")
-#
-#         extra_kwargs = {
-#             "id": {"read_only": True},
-#             "is_superuser": {'read_only': True},
-#             "phone_number": {'read_only': True},
-#             "email": {'read_only': True},
-#         }
