@@ -37,8 +37,6 @@ class ChartService:
         }
 
 
-# class ChartService:
-
     @staticmethod
     def profit_trend(items_qs, filter_type):
 
