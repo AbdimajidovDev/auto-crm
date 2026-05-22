@@ -73,7 +73,6 @@ class ProductBatch(TimestampMixin):
 
     class Meta:
         db_table = "product_batch"
-        unique_together = ("store", "barcode")
         indexes = [
             models.Index(fields=["store", "product"]),
         ]
