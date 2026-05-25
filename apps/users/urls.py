@@ -8,6 +8,7 @@ from apps.users.views.auth_view import (
     ChangePasswordAPIView,
     ForgotPasswordView,
     ResetPasswordView,
+    TokenRefreshAPIView,
 )
 from apps.users.views.user_crud_view import (
     SellerCreateAPIView,
@@ -30,6 +31,8 @@ urlpatterns = [
     # Auth
     path('login/', AdminLoginAPIView.as_view()),
     path('logout/', LogOutView.as_view()),
+    path("auth/refresh/", TokenRefreshAPIView.as_view(), name="token-refresh"),
+
 
     # Forgot password
     path('change-password/', ChangePasswordAPIView.as_view(), name='change-password'),

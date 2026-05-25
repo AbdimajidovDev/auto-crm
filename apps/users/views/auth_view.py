@@ -5,6 +5,8 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.users.models import UserHistory
 from apps.users.serializers import AdminLoginSerializer
@@ -97,6 +99,41 @@ class LogOutView(APIView):
 
         return response
 
+@extend_schema(
+    tags=['Auth'],
+    summary='- access tokenni yangilash'
+)
+class TokenRefreshAPIView(APIView):
+    permission_classes = []
+
+    def post(self, request):
+        refresh_token = request.COOKIES.get("refreshToken")
+
+        if not refresh_token:
+            return Response(
+                {"detail": "Refresh token topilmadi."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        try:
+            refresh = RefreshToken(refresh_token)
+            access_token = str(refresh.access_token)
+
+            response = Response({"success": True}, status=status.HTTP_200_OK)
+            response.set_cookie(
+                key="accessToken",
+                value=access_token,
+                httponly=True,
+                secure=False,       # production da True
+                samesite="Lax",
+                max_age=60 * 15,    # 15 daqiqa
+            )
+            return response
+
+        except TokenError:
+            return Response(
+                {"detail": "Refresh token yaroqsiz yoki muddati o'tgan."},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
 
 
 @extend_schema(
