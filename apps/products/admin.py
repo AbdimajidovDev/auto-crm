@@ -1,7 +1,8 @@
 from django.contrib import admin
 from modeltranslation.admin import TranslationAdmin
 
-from apps.products.models import Product, ProductImage, ProductBatch, Category, ProductLocation, ProductUnitMeasurement
+from apps.products.models import Product, ProductImage, ProductBatch, Category, ProductLocation, ProductUnitMeasurement, \
+    Brand
 
 
 # Register your models here.
@@ -51,3 +52,8 @@ class ProductLocationAdmin(TranslationAdmin):
 @admin.register(ProductUnitMeasurement)
 class ProductUnitMeasurementAdmin(TranslationAdmin):
     list_display = ('id', 'measurement', 'created_at')
+
+
+@admin.register(Brand)
+class BrandAdmin(TranslationAdmin):
+    list_display = ('id', 'name')
