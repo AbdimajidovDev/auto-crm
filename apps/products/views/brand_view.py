@@ -9,10 +9,11 @@ from apps.products.services.brand_service import (
 
 
 class BrandListCreateAPIView(APIView):
+    serializer_class = BrandSerializer
 
     def get(self, request):
         brands = BrandService.list()
-        serializer = BrandSerializer(brands, many=True,)
+        serializer = BrandSerializer(brands, many=True, context={"request": request})
 
         return Response(
             serializer.data
