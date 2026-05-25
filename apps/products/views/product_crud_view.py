@@ -134,7 +134,7 @@ class ProductListAPIView(generics.ListAPIView):
     pagination_class    = StandardPagination
     filter_backends     = [DjangoFilterBackend, SearchFilter]
     filterset_class     = ProductFilter
-    search_fields       = ["name", "description"]
+    search_fields       = ["id", "name", "description"]
 
     def get_queryset(self):
         batches_qs = (
