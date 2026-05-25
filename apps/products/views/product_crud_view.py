@@ -143,7 +143,7 @@ class ProductListAPIView(generics.ListAPIView):
 
     filterset_class = ProductFilter
 
-    search_fields = ["id", "name", "description", ]
+    search_fields = ["id", "name", "sku", "barcode", "description", ]
 
     def get_queryset(self):
 
