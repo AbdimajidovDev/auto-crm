@@ -14,7 +14,7 @@ class Supplier(TimestampMixin):
     phone_number = models.CharField(max_length=20, db_index=True)
     description = models.TextField()
 
-    inn = models.CharField(max_length=50, unique=True)
+    inn = models.CharField(max_length=50, unique=True, blank=True, null=True)
     address = models.TextField()
 
     is_active = models.BooleanField(default=True)
