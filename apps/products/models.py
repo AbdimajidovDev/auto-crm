@@ -29,7 +29,7 @@ class Category(TimestampMixin):
 
 
 class Product(TimestampMixin):
-    category = models.ForeignKey(Category, on_delete=models.PROTECT)
+    category = models.ForeignKey(Category, on_delete=models.PROTECT, blank=True, null=True)
     name = models.CharField(max_length=100)
     unit_measurement = models.ForeignKey("ProductUnitMeasurement", on_delete=models.PROTECT, blank=True, null=True)
     description = models.TextField()
