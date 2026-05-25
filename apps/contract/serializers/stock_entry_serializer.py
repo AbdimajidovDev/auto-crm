@@ -5,12 +5,8 @@ from apps.products.models import Product, ProductBatch
 
 
 class StockEntryItemSerializer(serializers.Serializer):
-    # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: `Product.objects.all()` active/filter cheklovisiz ishlatilgan.
-    # Sabab: inactive productlar ham kirim validationiga kiradi.
-    # Natija: noto'g'ri productga kirim qilish yoki katta product jadvalida ortiqcha lookup xavfi bor.
-    # ✅ YECHIM:
-    # product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
-    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
+    # product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     quantity = serializers.IntegerField()
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     selling_price = serializers.DecimalField(max_digits=12, decimal_places=2)
