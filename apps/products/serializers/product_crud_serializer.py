@@ -235,17 +235,13 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate_images(self, images):
-        # ⚠️ MUAMMO [CLEAN CODE]: Magic numberlar to'g'ridan-to'g'ri ishlatilgan.
-        # Sabab: `7` va `5 * 1024 * 1024` limitlari nomlangan konstanta emas.
-        # Natija: limitlar o'zgarishi kerak bo'lsa bir nechta joydan izlash talab qilinadi.
-        # ✅ YECHIM:
-        # MAX_PRODUCT_IMAGES = 7
-        # MAX_PRODUCT_IMAGE_SIZE = 5 * 1024 * 1024
-        if len(images) > 7:
+        MAX_PRODUCT_IMAGES = 7
+        MAX_PRODUCT_IMAGE_SIZE = 5 * 1024 * 1024
+        if len(images) > MAX_PRODUCT_IMAGES:
             raise serializers.ValidationError("Max 7 images allowed")
 
         for img in images:
-            if img.size > 5 * 1024 * 1024:
+            if img.size > MAX_PRODUCT_IMAGE_SIZE:
                 raise serializers.ValidationError("Image size must be < 5MB")
 
         return images
