@@ -9,42 +9,42 @@ class ProductImageSerializer(serializers.ModelSerializer):
         fields = ('id', 'image')
 
 
-class ProductBatchSerializer(serializers.ModelSerializer):
-    # ⚠️ MUAMMO [PERFORMANCE]: Uchta `SerializerMethodField` FK/nested maydonlarni o'qiydi.
-    # Sabab: querysetda `select_related("store", "product", "location")` bo'lmasa har batch uchun qo'shimcha querylar chiqadi.
-    # Natija: product detail/listda batchlar ko'p bo'lsa N+1 muammosi yuzaga keladi.
-    # ✅ YECHIM:
-    # store_name = serializers.CharField(source="store.name", read_only=True)
-    # product_name = serializers.CharField(source="product.name", read_only=True)
-    # location = ProductLocationGetSerializer(read_only=True)
-    # N+1: list/detailda batchlar soni ko'p bo'lsa `store`, `product`, `location` uchun prefetch kerak.
-    store_name = serializers.SerializerMethodField()
-    product_name = serializers.SerializerMethodField()
-    location = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ProductBatch
-        fields = (
-            'id', 'product', 'product_name', 'store', 'store_name', 'quantity',
-            'purchase_price', 'selling_price', 'barcode', 'shtrix_code', "location"
-        )
-
-    def get_store_name(self, obj):
-        return obj.store.name if obj.store else None
-
-    def get_product_name(self, obj):
-        return obj.product.name if obj.product else None
-
-    def get_location(self, obj):
-        if obj.location:
-            name = obj.location.location
-            description = obj.location.description
-            location = {
-                "name": name,
-                "description": description,
-                }
-            return location
-        return None
+# class ProductBatchSerializer(serializers.ModelSerializer):
+#     # ⚠️ MUAMMO [PERFORMANCE]: Uchta `SerializerMethodField` FK/nested maydonlarni o'qiydi.
+#     # Sabab: querysetda `select_related("store", "product", "location")` bo'lmasa har batch uchun qo'shimcha querylar chiqadi.
+#     # Natija: product detail/listda batchlar ko'p bo'lsa N+1 muammosi yuzaga keladi.
+#     # ✅ YECHIM:
+#     # store_name = serializers.CharField(source="store.name", read_only=True)
+#     # product_name = serializers.CharField(source="product.name", read_only=True)
+#     # location = ProductLocationGetSerializer(read_only=True)
+#     # N+1: list/detailda batchlar soni ko'p bo'lsa `store`, `product`, `location` uchun prefetch kerak.
+#     store_name = serializers.SerializerMethodField()
+#     product_name = serializers.SerializerMethodField()
+#     location = serializers.SerializerMethodField()
+#
+#     class Meta:
+#         model = ProductBatch
+#         fields = (
+#             'id', 'product', 'product_name', 'store', 'store_name', 'quantity',
+#             'purchase_price', 'selling_price', 'barcode', 'shtrix_code', "location"
+#         )
+#
+#     def get_store_name(self, obj):
+#         return obj.store.name if obj.store else None
+#
+#     def get_product_name(self, obj):
+#         return obj.product.name if obj.product else None
+#
+#     def get_location(self, obj):
+#         if obj.location:
+#             name = obj.location.location
+#             description = obj.location.description
+#             location = {
+#                 "name": name,
+#                 "description": description,
+#                 }
+#             return location
+#         return None
 
 class ProductBatchLocationUpdateSerializer(serializers.ModelSerializer):
     # Faqat location ID-sini qabul qilamiz
@@ -58,19 +58,19 @@ class ProductBatchLocationUpdateSerializer(serializers.ModelSerializer):
         fields = ['location']
 
 
-class ProductByBarcodeSerializer(serializers.ModelSerializer):
-    product = serializers.SerializerMethodField()
-    price = serializers.SerializerMethodField()
-
-    class Meta:
-        model = ProductBatch
-        fields = ('id', 'product', 'price', 'quantity', "location")
-
-    def get_product(self, obj):
-        return obj.product.name if obj.product else None
-
-    def get_price(self, obj):
-        return obj.selling_price or None
+# class ProductByBarcodeSerializer(serializers.ModelSerializer):
+#     product = serializers.SerializerMethodField()
+#     price = serializers.SerializerMethodField()
+#
+#     class Meta:
+#         model = ProductBatch
+#         fields = ('id', 'product', 'price', 'quantity', "location")
+#
+#     def get_product(self, obj):
+#         return obj.product.name if obj.product else None
+#
+#     def get_price(self, obj):
+#         return obj.selling_price or None
 
 # ─────────────────────────────────────────────
 # SERIALIZERS
@@ -98,34 +98,25 @@ class ProductByBarcodeSerializer(serializers.ModelSerializer):
 # ============================================================
 # SERIALIZERS
 # ============================================================
-
 class ProductBatchListSerializer(serializers.Serializer):
-    """
-    Batch mavjud bo'lsa — haqiqiy ma'lumot,
-    batch yo'q bo'lsa — do'kon ma'lumoti + quantity=0.
-    ModelSerializer emas, chunki ba'zi objectlar
-    virtual (ProductBatch emas, dict).
-    """
-    id            = serializers.IntegerField(allow_null=True)
-    store         = serializers.IntegerField(source="store_id")
-    store_name    = serializers.CharField()
-    location      = serializers.IntegerField(allow_null=True)
-    location_name = serializers.CharField(allow_null=True)
-    quantity      = serializers.IntegerField()
-    purchase_price = serializers.DecimalField(
-        max_digits=12, decimal_places=2, allow_null=True
-    )
-    selling_price  = serializers.DecimalField(
-        max_digits=12, decimal_places=2, allow_null=True
-    )
-    barcode    = serializers.CharField(allow_null=True)
-    is_active  = serializers.BooleanField(allow_null=True)
+    id             = serializers.IntegerField(allow_null=True)
+    store          = serializers.IntegerField(source="store_id")
+    store_name     = serializers.CharField()
+    location       = serializers.IntegerField(allow_null=True)
+    location_name  = serializers.CharField(allow_null=True)
+    quantity       = serializers.IntegerField()
+    purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    selling_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    is_active      = serializers.BooleanField(allow_null=True)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
     images = ProductImageSerializer(many=True, read_only=True)
     category_name = serializers.CharField(
         source="category.name", read_only=True, default=None
+    )
+    brand_name = serializers.CharField(
+        source="brand.name", read_only=True, default=None
     )
     unit_measurement_name = serializers.CharField(
         source="unit_measurement.measurement", read_only=True, default=None
@@ -138,10 +129,12 @@ class ProductListSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "category", "category_name",
+            "brand", "brand_name",
             "name",
+            "sku", "barcode", "shtrix_code",
             "unit_measurement", "unit_measurement_name",
             "description",
-            "is_active",
+            "status",
             "created_at",
             "images",
             "batches",
@@ -170,7 +163,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                     "quantity":       batch.quantity,
                     "purchase_price": batch.purchase_price,
                     "selling_price":  batch.selling_price,
-                    "barcode":        batch.barcode,
+                    # "barcode":        batch.barcode,
                     "is_active":      batch.is_active,
                 })
             else:
@@ -204,6 +197,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         fields = (
             'id',
             'category',
+            'brand',
             'unit_measurement',
             'name_uz',
             'name_uz_cyrl',

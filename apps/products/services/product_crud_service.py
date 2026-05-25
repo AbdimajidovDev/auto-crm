@@ -28,3 +28,33 @@ class ProductService:
         return product
 
 
+
+from io import BytesIO
+
+import barcode
+from barcode.writer import ImageWriter
+
+
+class BarcodeService:
+
+    @staticmethod
+    def generate(barcode_number: str):
+
+        buffer = BytesIO()
+
+        generator = barcode.get(
+            "ean13",
+            barcode_number,
+            writer=ImageWriter()
+        )
+
+        generator.write(
+            buffer,
+            options={
+                "write_text": True,
+            }
+        )
+
+        buffer.seek(0)
+
+        return buffer
