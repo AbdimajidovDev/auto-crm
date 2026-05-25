@@ -18,7 +18,7 @@ class ProductImageInline(admin.StackedInline):
 
 @admin.register(Product)
 class ProductListAdmin(TranslationAdmin):
-    list_display = ('id', 'name', 'category', 'unit_measurement', 'created_at')
+    list_display = ('id', 'name', 'sku', 'barcode', 'brand', 'category', 'unit_measurement', 'created_at')
     search_fields = ('name',)
     list_filter = ('category',)
 
