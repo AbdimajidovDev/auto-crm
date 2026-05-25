@@ -7,7 +7,6 @@ from rest_framework.exceptions import ValidationError
 from apps.inventory.services.inventory_hooks_service import handle_stock_entry
 from apps.products.models import ProductBatch
 from apps.contract.models import StockEntry, StockEntryItem, SupplierTransaction
-from apps.products.utils.barcode_utility import generate_unique_barcode, generate_barcode_image
 
 
 class StockEntryService:
@@ -65,16 +64,13 @@ class StockEntryService:
                 # Natija: kirim transactioni uzayadi, parallel requestlar kutib qolishi mumkin.
                 # ✅ YECHIM:
                 # barcode yaratishni qoldirib, shtrix_code image generationni transaction.on_commit yoki background taskga chiqarish.
-                barcode = generate_unique_barcode()
+
                 ProductBatch.objects.create(
                     product=product,
                     store=store,
                     quantity=qty,
                     purchase_price=p_price,
-                    selling_price=s_price,
-                    barcode=barcode,
-                    # Mana bu yerda rasm generatsiya qilinadi
-                    shtrix_code=generate_barcode_image(barcode)
+                    selling_price=s_price
                 )
 
             item_objs.append(
