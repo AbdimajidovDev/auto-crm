@@ -46,6 +46,6 @@ urlpatterns = [
     path('measurements/<int:pk>/', ProductUnitMeasurementDetailView.as_view()),
 
     # Brand
-    path("", BrandListCreateAPIView.as_view(),),
-    path("<int:pk>/", BrandRetrieveUpdateDestroyAPIView.as_view(),),
+    path("brand/", BrandListCreateAPIView.as_view(),),
+    path("brand/<int:pk>/", BrandRetrieveUpdateDestroyAPIView.as_view(),),
 ]
