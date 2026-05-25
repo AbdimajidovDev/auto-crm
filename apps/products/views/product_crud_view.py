@@ -8,13 +8,13 @@ from rest_framework.views import APIView
 
 from apps.common.paginations import StandardPagination
 from apps.products.filters import ProductFilter
-from apps.products.models import Product, ProductBatch
+from apps.products.models import Product, ProductBatch, ProductImage
 from apps.products.serializers import ProductBatchListSerializer
 from apps.products.serializers.product_crud_serializer import (
     ProductCreateSerializer,
     ProductGetSerializer,
     ProductListSerializer,
-    ProductBatchSerializer,
+    # ProductBatchSerializer,
     ProductUpdateSerializer,
 )
 from apps.products.services.product_crud_service import ProductService
@@ -129,39 +129,150 @@ from drf_spectacular.types import OpenApiTypes
     ],
 )
 class ProductListAPIView(generics.ListAPIView):
-    permission_classes  = [permissions.IsAuthenticated]
-    serializer_class    = ProductListSerializer
-    pagination_class    = StandardPagination
-    filter_backends     = [DjangoFilterBackend, SearchFilter]
-    filterset_class     = ProductFilter
-    search_fields       = ["id", "name", "description"]
+    permission_classes = [
+        permissions.IsAuthenticated
+    ]
+
+    serializer_class = ProductListSerializer
+    pagination_class = StandardPagination
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+    ]
+
+    filterset_class = ProductFilter
+
+    search_fields = ["id", "name", "description", ]
 
     def get_queryset(self):
-        batches_qs = (
+
+        active_batches = (
             ProductBatch.objects
-            .select_related("store", "location")
-            .filter(is_active=True)
+            .filter(
+                is_active=True
+            )
+            .select_related(
+                "store",
+                "location",
+            )
+            .only(
+                "id",
+                "product_id",
+                "quantity",
+                "store_id",
+                "store__id",
+                "store__name",
+                "location_id",
+                "location__id",
+                "location__location",
+            )
         )
+
         return (
             Product.objects
-            .filter(is_active=True)
-            .select_related("category", "unit_measurement")
-            .prefetch_related(
-                Prefetch("images"),
-                Prefetch("batches", queryset=batches_qs),
+            .filter(
+                status=Product.ProductStatus.ACTIVE
             )
-            .order_by("name")
+            .select_related(
+                "category",
+                "brand",
+                "unit_measurement",
+            )
+            .prefetch_related(
+
+                Prefetch(
+                    "images",
+                    queryset=(
+                        ProductImage.objects
+                        .only(
+                            "id",
+                            "product_id",
+                            "image",
+                        )
+                    ),
+                ),
+
+                Prefetch("batches", queryset=active_batches,),)
+            .only(
+                "id",
+                "name",
+                "description",
+
+                "sku",
+                "barcode",
+
+                "category_id",
+                "category__name_uz",
+
+                "brand_id",
+                "brand__name",
+
+                "unit_measurement_id",
+                "unit_measurement__measurement",
+            )
+            # .order_by(
+            #     "name",
+            # )
         )
 
     def get_serializer_context(self):
+
         context = super().get_serializer_context()
-        # Barcha faol do'konlar — bitta query, context orqali serializer ga uzatiladi.
-        # Har bir mahsulot uchun alohida Store query bo'lmaydi → N+1 yo'q.
-        context["all_stores"] = list(
-            Store.objects.filter(is_active=True).only("id", "name").order_by("name")
+
+        stores = (
+            Store.objects
+            .filter(
+                is_active=True
+            )
+            .only(
+                "id",
+                "name",
+            )
+            .order_by(
+                "name"
+            )
         )
+
+        context["all_stores"] = stores
+
         return context
 
+
+# class ProductListAPIView(generics.ListAPIView):
+#     permission_classes  = [permissions.IsAuthenticated]
+#     serializer_class    = ProductListSerializer
+#     pagination_class    = StandardPagination
+#     filter_backends     = [DjangoFilterBackend, SearchFilter]
+#     filterset_class     = ProductFilter
+#     search_fields       = ["id", "name", "description"]
+#
+#     def get_queryset(self):
+#         batches_qs = (
+#             ProductBatch.objects
+#             .select_related("store", "location")
+#             .filter(is_active=True)
+#         )
+#         return (
+#             Product.objects
+#             .filter(is_active=True)
+#             .select_related("category", "unit_measurement")
+#             .prefetch_related(
+#                 Prefetch("images"),
+#                 Prefetch("batches", queryset=batches_qs),
+#             )
+#             .order_by("name")
+#         )
+#
+#     def get_serializer_context(self):
+#         context = super().get_serializer_context()
+#         # Barcha faol do'konlar — bitta query, context orqali serializer ga uzatiladi.
+#         # Har bir mahsulot uchun alohida Store query bo'lmaydi → N+1 yo'q.
+#         context["all_stores"] = list(
+#             Store.objects.filter(is_active=True).only("id", "name").order_by("name")
+#         )
+#         return context
+#
 
 
 @extend_schema(
@@ -247,17 +358,17 @@ class ProductDetailAPIView(APIView):
 
 
 
-@extend_schema(
-    tags=["Product"],
-    summary="- barcode orqali productni olish.",
-)
-class BatchByBarcodeAPIView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request, barcode):
-        batch = get_object_or_404(ProductBatch, barcode=barcode)
-        serializer = ProductBatchSerializer(batch, context={"request": request})
-        return Response(serializer.data, status=200)
+# @extend_schema(
+#     tags=["Product"],
+#     summary="- barcode orqali productni olish.",
+# )
+# class BatchByBarcodeAPIView(APIView):
+#     permission_classes = [permissions.IsAuthenticated]
+#
+#     def get(self, request, barcode):
+#         batch = get_object_or_404(ProductBatch, barcode=barcode)
+#         serializer = ProductBatchSerializer(batch, context={"request": request})
+#         return Response(serializer.data, status=200)
 
 #
 # class ProductBatchListAPIView(APIView):

@@ -7,7 +7,7 @@ from apps.transfer.models import StockTransfer, StockTransferItem, Notification
 
 
 class TransferItemSerializer(serializers.ModelSerializer):
-    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE))
     quantity = serializers.IntegerField(min_value=1)
     # ⚠️ MUAMMO [PERFORMANCE]: `SerializerMethodField` FK maydonga murojaat qiladi.
     # Sabab: `get_product_name()` ichida `obj.product.name` o'qiladi; querysetda `items__product`

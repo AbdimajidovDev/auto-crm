@@ -5,7 +5,9 @@ from apps.products.models import Product, ProductBatch
 
 
 class StockEntryItemSerializer(serializers.Serializer):
-    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(is_active=True))
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE)
+    )
     # product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     quantity = serializers.IntegerField()
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2)
@@ -128,7 +130,7 @@ class StockEntryItemListSerializer(serializers.ModelSerializer):
         # Fallback: prefetch bo'lmasa DB dan oladi (detail view uchun)
         return (
             ProductBatch.objects
-            .filter(product=obj.product, store=obj.entry.store, is_active=True)
+            .filter(product=obj.product, store=obj.entry.store, status=Product.ProductStatus.ACTIVE)
             .last()
         )
 
