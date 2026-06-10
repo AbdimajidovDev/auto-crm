@@ -21,7 +21,7 @@ class Category(TimestampMixin):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return self.name
+        return f"{self.name}"
 
     class Meta:
         db_table = 'category'
@@ -38,7 +38,7 @@ class Brand(models.Model):
         )
 
         def __str__(self):
-            return self.name
+            return f"{self.name}"
 
         class Meta:
             db_table = "brand"
@@ -111,7 +111,7 @@ class Product(TimestampMixin):
                 super().save(update_fields=update_fields)
 
     def __str__(self):
-        return self.name
+        return f"{self.name}"
 
     class Meta:
         db_table = 'product'

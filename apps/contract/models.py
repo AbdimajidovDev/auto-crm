@@ -30,7 +30,7 @@ class Supplier(TimestampMixin):
         ]
 
     def __str__(self):
-        return self.name
+        return f"{self.name}"
 
     def get_total_debt(self):
         # Jami kirim qilingan qarzlar yig'indisi
