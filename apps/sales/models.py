@@ -91,7 +91,7 @@ class Payment(TimestampMixin):
     type = models.CharField(max_length=5, choices=Type.choices)
 
     def __str__(self):
-        return f"{self.sale.store.name} {self.customer.full_name if self.customer.full_name else ''} {str(self.amount)}"
+        return f"{self.sale.store.name} {self.customer.full_name if self.customer else ''} {str(self.amount)}"
 
 
 

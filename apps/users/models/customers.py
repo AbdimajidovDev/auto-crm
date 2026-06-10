@@ -8,4 +8,4 @@ class Customer(TimestampMixin):
     phone_number = models.CharField(max_length=20)
 
     def __str__(self):
-        return self.full_name if self.full_name else 'Mijoz malumoti kiritilmagan'
+        return self.full_name if self.full_name else ''
