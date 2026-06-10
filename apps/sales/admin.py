@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.sales.models import Sale, SaleItem
+from apps.sales.models import Sale, SaleItem, SaleReturnItem
 
 
 # Register your models here.
@@ -21,4 +21,9 @@ class SaleAdmin(admin.ModelAdmin):
 
 @admin.register(SaleItem)
 class SaleItemAdmin(admin.ModelAdmin):
+    list_display = ('id', 'sale')
+
+
+@admin.register(SaleReturnItem)
+class SaleReturnAdmin(admin.ModelAdmin):
     list_display = ('id', 'sale')
