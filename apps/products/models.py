@@ -153,6 +153,9 @@ class ProductBatch(TimestampMixin):
             models.Index(fields=["store", "product"]),
         ]
 
+    def __str__(self):
+        return f'Batches {self.store.name} {self.product.name}'
+
 
 class ProductLocation(TimestampMixin):
     location = models.TextField()

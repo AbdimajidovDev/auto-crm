@@ -1,6 +1,10 @@
 from django.urls import path
 
-from apps.users.views.customer_view import CustomerListView, CustomerDetailView, CustomerCreateView
+from apps.users.views.customer_view import (
+    CustomerListView,
+    CustomerDetailView,
+    CustomerCreateView,
+)
 from apps.users.views.profile_view import ProfileView
 from apps.users.views.auth_view import (
     AdminLoginAPIView,
@@ -12,7 +16,8 @@ from apps.users.views.auth_view import (
 )
 from apps.users.views.user_crud_view import (
     SellerCreateAPIView,
-    UsersListView, UsersDetailView,
+    UsersListView,
+    UsersDetailView,
 )
 
 
@@ -32,7 +37,6 @@ urlpatterns = [
     path('login/', AdminLoginAPIView.as_view()),
     path('logout/', LogOutView.as_view()),
     path("auth/refresh/", TokenRefreshAPIView.as_view(), name="token-refresh"),
-
 
     # Forgot password
     path('change-password/', ChangePasswordAPIView.as_view(), name='change-password'),
