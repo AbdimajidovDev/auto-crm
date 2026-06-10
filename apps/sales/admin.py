@@ -17,3 +17,8 @@ class SaleAdmin(admin.ModelAdmin):
         'total_amount', 'paid_amount', 'created_at'
     )
     inlines = [SaleItemInline]
+
+
+@admin.register(SaleItem)
+class SaleItemAdmin(admin.ModelAdmin):
+    list_display = ('id', 'sale')
