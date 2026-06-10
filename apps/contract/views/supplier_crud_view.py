@@ -172,25 +172,6 @@ class SupplierListAPIView(APIView):
         serializer = SupplierListSerializer(page, many=True)
         return paginator.get_paginated_response(serializer.data)
 
-# @extend_schema(
-#         tags=["Supplier"],
-#         summary="- Taminotchilar ro'yxati.",
-#     )
-# class SupplierListAPIView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]
-#     serializer_class = SupplierGetSerializer
-#
-#     def get(self, request):
-#         # ⚠️ MUAMMO [PERFORMANCE]: Supplier list filtrsiz `.all()` va pagination/cache yo'q.
-#         # Sabab: barcha supplierlar birdan serializerga beriladi.
-#         # Natija: supplierlar ko'payganda response sekinlashadi va xotira sarfi oshadi.
-#         # ✅ YECHIM:
-#         # suppliers = Supplier.objects.only("id", "name", "inn", "phone").order_by("name")
-#         # page = self.paginate_queryset(suppliers)
-#         suppliers = Supplier.objects.all()
-#         serializer = SupplierGetSerializer(suppliers, many=True, context={"request": request})
-#         return Response(serializer.data, status=status.HTTP_200_OK)
-
 
 @extend_schema(
         tags=["Supplier"],
