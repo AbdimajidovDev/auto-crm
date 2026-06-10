@@ -26,4 +26,4 @@ class SaleItemAdmin(admin.ModelAdmin):
 
 @admin.register(SaleReturnItem)
 class SaleReturnAdmin(admin.ModelAdmin):
-    list_display = ('id', 'sale')
+    list_display = ('id', 'sale_return')
