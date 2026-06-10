@@ -145,4 +145,4 @@ class SaleReturnItem(models.Model):
         db_table = 'sale_return_item'
 
     def __str__(self):
-        return
+        return f"#{self.sale_return} Sotuv - {str(self.quantity)} product"
