@@ -40,11 +40,11 @@ class InventorySelector:
             .values("total")[:1]
         )
 
-        barcode_subquery = (
-            ProductBatch.objects
-            .filter(product=OuterRef("product"), store_id=OuterRef("store_id"))
-            .values("barcode")[:1]
-        )
+        # barcode_subquery = (
+        #     ProductBatch.objects
+        #     .filter(product=OuterRef("product"), store_id=OuterRef("store_id"))
+        #     .values("barcode")[:1]
+        # )
 
         is_check_subquery = (
             InventoryCount.objects
@@ -120,7 +120,7 @@ class InventorySelector:
                 # SQL rejasi og'irlashishi mumkin; ba'zi hollarda materialized view / yig'ilgan jadval
                 # yoki kamroq qadamli annotate strategiyasi ko'rib chiqiladi.
                 counted=Coalesce(Subquery(counts_subquery, output_field=IntegerField()), 0),
-                barcode=Subquery(barcode_subquery),
+                barcode=F("product__barcode"),
 
                 sold_out=Coalesce(Subquery(sold_out_subquery, output_field=IntegerField()), 0),
                 returned=Coalesce(Subquery(returned_subquery, output_field=IntegerField()), 0),
