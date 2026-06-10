@@ -59,40 +59,6 @@ class StockEntryCreateSerializer(serializers.Serializer):
 # ─────────────────────────────────────────────
 
 class StockEntryItemListSerializer(serializers.ModelSerializer):
-    """
-    N+1 tuzatish — get_barcode() va get_shtrix_code():
-
-    Avvalgi kod:
-      def get_barcode(self, obj):
-          batch = ProductBatch.objects.filter(product=obj.product, store=obj.entry.store).last()
-          return batch.barcode if batch else None
-
-      def get_shtrix_code(self, obj):
-          batch = ProductBatch.objects.filter(product=obj.product, store=obj.entry.store).last()
-          ...
-
-      Muammo:
-        - Har item uchun 2 ta alohida SQL (barcode + shtrix_code) → 2×N SQL
-        - Bir xil filter ikki marta yuboriladi — takroriy ish
-        - obj.entry.store → entry prefetch qilinmasa yana +1 SQL
-
-    Yechim:
-      get_queryset() da items prefetch qilinayotganda, har item uchun
-      tegishli ProductBatch ni ham Prefetch orqali bitta queryda olamiz.
-      Serializer faqat xotiradan o'qiydi — SQL yo'q.
-
-      Prefetch:
-        StockEntryItem.objects
-          .prefetch_related(
-              Prefetch(
-                  "product__batches",
-                  queryset=ProductBatch.objects.filter(is_active=True),
-                  to_attr="fetched_batches"
-              )
-          )
-      Keyin get_batch() da: obj.product.fetched_batches bo'yicha
-      entry.store ga mos batchni Python darajasida topamiz.
-    """
     barcode = serializers.SerializerMethodField()
     shtrix_code = serializers.SerializerMethodField()
 
@@ -104,49 +70,63 @@ class StockEntryItemListSerializer(serializers.ModelSerializer):
             "barcode", "shtrix_code",
         )
 
-    def _get_batch(self, obj):
-        """
-        Prefetch qilingan fetched_batches dan entry.store ga mos batchni qaytaradi.
-        SQL yo'q — xotiradan qidiriladi.
-
-        Agar prefetch yo'q bo'lsa (masalan detail viewda) — fallback sifatida
-        DB ga murojaat qiladi, lekin bu holat ro'yxat viewda bo'lmaydi.
-        """
-        # ⚠️ MUAMMO [CLEAN CODE]: `store_id = obj.entry_id` noto'g'ri nomlangan va ishlatilmaydi.
-        # Sabab: entry_id store_id emas; o'zgaruvchi keyingi kodda foydalanilmagan.
-        # Natija: kelajakdagi maintainer noto'g'ri assumption bilan bug kiritishi mumkin.
-        # ✅ YECHIM:
-        # Bu satrni olib tashlash yoki kerak bo'lsa `entry_id = obj.entry_id` deb nomlash.
-        store_id = obj.entry_id  # entry.store_id ni olish uchun quyida ko'rsatilgan
-
-        # Prefetch to_attr orqali kelgan list
-        fetched = getattr(obj.product, "fetched_batches", None)
-        if fetched is not None:
-            # entry.store_id — entry select_related orqali yuklanadi
-            entry_store_id = obj.entry.store_id
-            matched = [b for b in fetched if b.store_id == entry_store_id]
-            return matched[-1] if matched else None
-
-        # Fallback: prefetch bo'lmasa DB dan oladi (detail view uchun)
-        return (
-            ProductBatch.objects
-            .filter(product=obj.product, store=obj.entry.store, status=Product.ProductStatus.ACTIVE)
-            .last()
-        )
-
     def get_barcode(self, obj):
-        batch = self._get_batch(obj)
-        return batch.barcode if batch else None
+        return obj.product.barcode if obj.product else None
 
     def get_shtrix_code(self, obj):
-        batch = self._get_batch(obj)
-        if not batch or not batch.shtrix_code:
+        if not obj.product or not obj.product.shtrix_code:
             return None
         request = self.context.get("request")
         return (
-            request.build_absolute_uri(batch.shtrix_code.url)
-            if request else batch.shtrix_code.url
+            request.build_absolute_uri(obj.product.shtrix_code.url)
+            if request else obj.product.shtrix_code.url
         )
+
+
+    # def _get_batch(self, obj):
+    #     """
+    #     Prefetch qilingan fetched_batches dan entry.store ga mos batchni qaytaradi.
+    #     SQL yo'q — xotiradan qidiriladi.
+    #
+    #     Agar prefetch yo'q bo'lsa (masalan detail viewda) — fallback sifatida
+    #     DB ga murojaat qiladi, lekin bu holat ro'yxat viewda bo'lmaydi.
+    #     """
+    #     # ⚠️ MUAMMO [CLEAN CODE]: `store_id = obj.entry_id` noto'g'ri nomlangan va ishlatilmaydi.
+    #     # Sabab: entry_id store_id emas; o'zgaruvchi keyingi kodda foydalanilmagan.
+    #     # Natija: kelajakdagi maintainer noto'g'ri assumption bilan bug kiritishi mumkin.
+    #     # ✅ YECHIM:
+    #     # Bu satrni olib tashlash yoki kerak bo'lsa `entry_id = obj.entry_id` deb nomlash.
+    #     store_id = obj.entry_id  # entry.store_id ni olish uchun quyida ko'rsatilgan
+    #
+    #     # Prefetch to_attr orqali kelgan list
+    #     fetched = getattr(obj.product, "fetched_batches", None)
+    #     if fetched is not None:
+    #         # entry.store_id — entry select_related orqali yuklanadi
+    #         entry_store_id = obj.entry.store_id
+    #         matched = [b for b in fetched if b.store_id == entry_store_id]
+    #         return matched[-1] if matched else None
+    #
+    #     # Fallback: prefetch bo'lmasa DB dan oladi (detail view uchun)
+    #     return (
+    #         ProductBatch.objects
+    #         .filter(product=obj.product, store=obj.entry.store, status=Product.ProductStatus.ACTIVE)
+    #         .last()
+    #     )
+
+
+    # def get_barcode(self, obj):
+    #     batch = self._get_batch(obj)
+    #     return batch.barcode if batch else None
+
+    # def get_shtrix_code(self, obj):
+    #     batch = self._get_batch(obj)
+    #     if not batch or not batch.shtrix_code:
+    #         return None
+    #     request = self.context.get("request")
+    #     return (
+    #         request.build_absolute_uri(batch.shtrix_code.url)
+    #         if request else batch.shtrix_code.url
+    #     )
 
 
 class StockEntryListSerializer(serializers.ModelSerializer):
