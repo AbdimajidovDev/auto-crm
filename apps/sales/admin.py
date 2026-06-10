@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.sales.models import Sale, SaleItem, SaleReturnItem
+from apps.sales.models import Sale, SaleItem, SaleReturnItem, SaleReturn
 
 
 # Register your models here.
@@ -19,11 +19,6 @@ class SaleAdmin(admin.ModelAdmin):
     inlines = [SaleItemInline]
 
 
-@admin.register(SaleItem)
-class SaleItemAdmin(admin.ModelAdmin):
-    list_display = ('id', 'sale')
-
-
-@admin.register(SaleReturnItem)
+@admin.register(SaleReturn)
 class SaleReturnAdmin(admin.ModelAdmin):
-    list_display = ('id', 'sale_return')
+    list_display = ('id', 'sale')
