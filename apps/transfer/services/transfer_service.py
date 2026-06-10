@@ -149,7 +149,7 @@ class TransferService:
                 defaults={
                     'purchase_price': item.purchase_price,
                     'selling_price': item.selling_price,
-                    'barcode': generate_unique_barcode(),
+                    # 'barcode': generate_unique_barcode(),
                     'quantity': 0
                 }
             )
