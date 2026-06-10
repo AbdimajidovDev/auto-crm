@@ -152,23 +152,23 @@ class InventoryService:
             .values("product")
             .annotate(
                 sold_out=Coalesce(Sum(
-                    Case(When(type="sale", then=F("quantity")), output_field=IntegerField())
+                    Case(When(type="s", then=F("quantity")), output_field=IntegerField())
                 ), 0),
 
                 returned=Coalesce(Sum(
-                    Case(When(type="return", then=F("quantity")), output_field=IntegerField())
+                    Case(When(type="r", then=F("quantity")), output_field=IntegerField())
                 ), 0),
 
                 transfer_out=Coalesce(Sum(
-                    Case(When(type="transfer_out", then=F("quantity")), output_field=IntegerField())
+                    Case(When(type="to", then=F("quantity")), output_field=IntegerField())
                 ), 0),
 
                 transfer_in=Coalesce(Sum(
-                    Case(When(type="transfer_in", then=F("quantity")), output_field=IntegerField())
+                    Case(When(type="ti", then=F("quantity")), output_field=IntegerField())
                 ), 0),
 
                 entry=Coalesce(Sum(
-                    Case(When(type="entry", then=F("quantity")), output_field=IntegerField())
+                    Case(When(type="e", then=F("quantity")), output_field=IntegerField())
                 ), 0),
             )
         )
