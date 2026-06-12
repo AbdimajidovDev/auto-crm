@@ -107,6 +107,7 @@ class ProductBatchListSerializer(serializers.Serializer):
     quantity       = serializers.IntegerField()
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     selling_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    wholesale_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     is_active      = serializers.BooleanField(allow_null=True)
 
 
