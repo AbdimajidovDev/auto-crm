@@ -75,7 +75,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "phone_number", "full_name", "store"]
+        fields = ["id", "phone_number", "full_name", "store", "email"]
 
     def get_store(self, obj):
         store_link = (

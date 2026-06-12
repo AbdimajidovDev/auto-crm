@@ -14,7 +14,6 @@ class UserService:
 
         store_id = data.pop("store_id")
         role = data.pop("role")
-        email = data.pop("email")
 
         # 🔴 AUTH CHECK (bitta joyda bo‘lishi kerak)
         if not request_user.is_superuser:
