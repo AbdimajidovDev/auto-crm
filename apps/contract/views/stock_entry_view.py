@@ -158,6 +158,36 @@ class StockEntryListAPIView(generics.ListAPIView):
         )
 
 
+@extend_schema(
+    tags=["Stock Entry"],
+    summary="Omborga kirim qilish.",
+)
+class StockEntryCreateAPIView(APIView):
+    permission_classes = [IsSuperUser]
+    serializer_class = StockEntryCreateSerializer
+
+    def post(self, request):
+        serializer = self.serializer_class(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        entry = StockEntryService.create_entry(
+            supplier=serializer.validated_data["supplier"],
+            store=serializer.validated_data["store"],
+            cash_amount=serializer.validated_data["cash_amount"],
+            card_amount=serializer.validated_data["card_amount"],
+            items=serializer.validated_data["items"],
+            user=request.user
+        )
+
+        return Response({
+            'status': 'success',
+            "id": entry.id,
+            "items_count": len(serializer.validated_data["items"]),
+            "payment_type": entry.payment_type,
+            "paid_amount": entry.paid_amount,
+            "debt_amount": entry.debt_amount,
+        }, status=status.HTTP_201_CREATED)
+
 
 # @extend_schema(
 #     tags=["Stock Entry"],
@@ -214,42 +244,42 @@ class StockEntryListAPIView(generics.ListAPIView):
 #         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@extend_schema(
-    tags=["Stock Entry"],
-    summary="Omborga kirim qilish.",
-)
-class StockEntryCreateAPIView(APIView):
-    permission_classes = [IsSuperUser]
-    serializer_class = StockEntryCreateSerializer
-
-    def post(self, request):
-        serializer = self.serializer_class(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        try:
-            entry = StockEntryService.create_entry(
-                supplier=serializer.validated_data["supplier"],
-                store=serializer.validated_data["store"],
-                paid_amount=serializer.validated_data["paid_amount"],
-                payment_type=serializer.validated_data["payment_type"],
-                items=serializer.validated_data["items"],
-                user=request.user
-            )
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
-
-        return Response({
-            'status': 'success',
-            "id": entry.id,
-            # ⚠️ MUAMMO [PERFORMANCE]: `entry.items.count()` yangi COUNT query bajaradi.
-            # Sabab: service `items` sonini biladi, lekin response uchun entry reverse managerdan qayta so'ralmoqda.
-            # Natija: create endpointda ortiqcha DB query ishlaydi.
-            # ✅ YECHIM:
-            # "items_count": len(serializer.validated_data["items"])
-            # Qo'shimcha so'rov: `items` allaqachon yuklangan bo'lsa `len(serializer...)`
-            # yoki `created_items_count` kabi maydon bilan cheklash mumkin.
-            "items_count": entry.items.count()
-        }, status=status.HTTP_201_CREATED)
+# @extend_schema(
+#     tags=["Stock Entry"],
+#     summary="Omborga kirim qilish.",
+# )
+# class StockEntryCreateAPIView(APIView):
+#     permission_classes = [IsSuperUser]
+#     serializer_class = StockEntryCreateSerializer
+#
+#     def post(self, request):
+#         serializer = self.serializer_class(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+#
+#         try:
+#             entry = StockEntryService.create_entry(
+#                 supplier=serializer.validated_data["supplier"],
+#                 store=serializer.validated_data["store"],
+#                 paid_amount=serializer.validated_data["paid_amount"],
+#                 payment_type=serializer.validated_data["payment_type"],
+#                 items=serializer.validated_data["items"],
+#                 user=request.user
+#             )
+#         except ValidationError as e:
+#             return Response({"detail": str(e)}, status=400)
+#
+#         return Response({
+#             'status': 'success',
+#             "id": entry.id,
+#             # ⚠️ MUAMMO [PERFORMANCE]: `entry.items.count()` yangi COUNT query bajaradi.
+#             # Sabab: service `items` sonini biladi, lekin response uchun entry reverse managerdan qayta so'ralmoqda.
+#             # Natija: create endpointda ortiqcha DB query ishlaydi.
+#             # ✅ YECHIM:
+#             # "items_count": len(serializer.validated_data["items"])
+#             # Qo'shimcha so'rov: `items` allaqachon yuklangan bo'lsa `len(serializer...)`
+#             # yoki `created_items_count` kabi maydon bilan cheklash mumkin.
+#             "items_count": entry.items.count()
+#         }, status=status.HTTP_201_CREATED)
 
 
 # ═══════════════════════════════
