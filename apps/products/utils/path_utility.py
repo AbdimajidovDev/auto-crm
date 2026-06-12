@@ -2,7 +2,8 @@
 # ==========================  Image ===============================
 
 def product_image_path(instance, filename):
-    category_slug = instance.category.slug if instance.category else "uncategorized"
+    product = instance.product  # ProductImage.product -> Product
+    category_slug = product.category.slug if product.category else "uncategorized"
     return f"products/{category_slug}/images/{filename}"
 
 
