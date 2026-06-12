@@ -37,7 +37,6 @@ class UserService:
             user=user,
             store=store,
             role=role,
-            email=email,
         )
 
         return user
