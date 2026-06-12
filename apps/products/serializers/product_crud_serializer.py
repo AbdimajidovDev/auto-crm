@@ -155,16 +155,16 @@ class ProductListSerializer(serializers.ModelSerializer):
             batch = batch_map.get(store.id)
             if batch:
                 result.append({
-                    "id":             batch.id,
-                    "store_id":       store.id,
-                    "store_name":     store.name,
-                    "location":       batch.location_id,
-                    "location_name":  getattr(batch.location, "location", None),
-                    "quantity":       batch.quantity,
-                    "purchase_price": batch.purchase_price,
-                    "selling_price":  batch.selling_price,
-                    # "barcode":        batch.barcode,
-                    "is_active":      batch.is_active,
+                    "id":              batch.id,
+                    "store_id":        store.id,
+                    "store_name":      store.name,
+                    "location":        batch.location_id,
+                    "location_name":   getattr(batch.location, "location", None),
+                    "quantity":        batch.quantity,
+                    "purchase_price":  batch.purchase_price,
+                    "selling_price":   batch.selling_price,
+                    "wholesale_price": batch.wholesale_price,
+                    "is_active":       batch.is_active,
                 })
             else:
                 # Batch yo'q — virtual yozuv
@@ -177,7 +177,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                     "quantity":       0,
                     "purchase_price": None,
                     "selling_price":  None,
-                    "barcode":        None,
+                    "wholesale_price": None,
                     "is_active":      None,
                 })
 
