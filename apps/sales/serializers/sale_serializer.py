@@ -179,24 +179,27 @@ class PaymentInputSerializer(serializers.Serializer):
 class SaleCreateSerializer(serializers.Serializer):
     store = serializers.IntegerField(required=False)
     customer = serializers.IntegerField(required=False, allow_null=True)
-
-    # Chegirma uchun yangi maydonlar
     discount_type = serializers.ChoiceField(choices=Sale.DiscountType.choices, required=False, allow_null=True)
     discount_value = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, default=0)
-
     items = SaleItemInputSerializer(many=True)
     payments = PaymentInputSerializer(many=True)
+    debt_due_date = serializers.DateField(required=False, allow_null=True)
+
+    # def validate(self, data):
+    #     # ⚠️ MUAMMO [ARXITEKTURA]: Serializer ichida store permission va payment/debt biznes qoidalari aralashgan.
+    #     # Sabab: validation HTTP request userga bog'lanib, domain service bilan takrorlanadigan qoidalarni saqlaydi.
+    #     # Natija: serializer unit testlari og'irlashadi va boshqa entrypointlarda bir xil qoida qayta yoziladi.
+    #     # ✅ YECHIM:
+    #     # SaleValidationService.validate_create(user=self.context["request"].user, data=data)
+    #     items = data.get('items') or []
+    #     payments = data.get('payments') or []
+    #     customer = data.get('customer')
 
     def validate(self, data):
-        # ⚠️ MUAMMO [ARXITEKTURA]: Serializer ichida store permission va payment/debt biznes qoidalari aralashgan.
-        # Sabab: validation HTTP request userga bog'lanib, domain service bilan takrorlanadigan qoidalarni saqlaydi.
-        # Natija: serializer unit testlari og'irlashadi va boshqa entrypointlarda bir xil qoida qayta yoziladi.
-        # ✅ YECHIM:
-        # SaleValidationService.validate_create(user=self.context["request"].user, data=data)
         items = data.get('items') or []
         payments = data.get('payments') or []
         customer = data.get('customer')
-
+        debt_due_date = data.get('debt_due_date')
         request = self.context["request"]
         user = request.user
 
@@ -207,34 +210,45 @@ class SaleCreateSerializer(serializers.Serializer):
                     "store": "Superuser store tanlashi kerak"
                 })
         else:
-            # 🔥 store berilsa ham ignore qilamiz
             data["store"] = None
-
 
         if not items:
             raise serializers.ValidationError({
-                "items": "Items bo‘sh bo‘lmasligi kerak"
+                "items": "Items bo'sh bo'lmasligi kerak"
             })
-
         if not payments:
             raise serializers.ValidationError({
-                "payments": "Payments bo‘sh bo‘lmasligi kerak"
+                "payments": "Payments bo'sh bo'lmasligi kerak"
             })
 
-        # 🔥 Total hisoblash
         total_items_amount = sum(
             item['quantity'] * item['price'] for item in items
         )
-
         total_paid = sum(
             payment['amount'] for payment in payments
         )
 
         # 🔴 Qarz logikasi
-        if total_paid < total_items_amount and not customer:
-            raise serializers.ValidationError({
-                "customer": "Qarzga savdo uchun mijoz majburiy"
-            })
+        has_debt = total_paid < total_items_amount
+
+        if has_debt:
+            if not customer:
+                raise serializers.ValidationError({
+                    "customer": "Qarzga savdo uchun mijoz majburiy"
+                })
+
+            if not debt_due_date:
+                raise serializers.ValidationError({
+                    "debt_due_date": "Qarzga savdo uchun qaytarish sanasi majburiy"
+                })
+
+            if debt_due_date < timezone.localdate():
+                raise serializers.ValidationError({
+                    "debt_due_date": "Qaytarish sanasi o'tmishda bo'lishi mumkin emas"
+                })
+        else:
+            # Qarz yo'q bo'lsa, due_date kiritilgan bo'lsa ham e'tiborga olinmaydi
+            data["debt_due_date"] = None
 
         # 🔴 Chegirma validatsiyasi
         if data.get("discount_type") == Sale.DiscountType.PERCENTAGE:

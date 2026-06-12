@@ -171,11 +171,21 @@ class SaleService:
         sale.save()
 
         # 🔴 DEBT
+        # if customer and paid_amount < final_total_amount:
+        #     DebtService.increase_debt(
+        #         customer=customer,
+        #         amount=final_total_amount - paid_amount,
+        #         sale=sale
+        #     )
+
+        debt_due_date = data.get("debt_due_date")
+
         if customer and paid_amount < final_total_amount:
             DebtService.increase_debt(
                 customer=customer,
                 amount=final_total_amount - paid_amount,
-                sale=sale
+                sale=sale,
+                due_date=debt_due_date
             )
 
         return sale

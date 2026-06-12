@@ -86,19 +86,17 @@ class DebtService:
 
     @staticmethod
     @transaction.atomic
-    def increase_debt(*, customer, sale, amount):
-
+    def increase_debt(*, customer, sale, amount, due_date=None):
         if not customer:
-            raise ValidationError("Customer bo‘lishi kerak")
-
+            raise ValidationError("Customer bo'lishi kerak")
         if amount <= 0:
-            raise ValidationError("Amount > 0 bo‘lishi kerak")
-
+            raise ValidationError("Amount > 0 bo'lishi kerak")
         return CustomerDebt.objects.create(
             customer=customer,
             sale=sale,
             amount=amount,
-            type=CustomerDebt.Type.INCREASE
+            type=CustomerDebt.Type.INCREASE,
+            due_date=due_date
         )
 
     @staticmethod
