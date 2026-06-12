@@ -2,7 +2,8 @@
 # ==========================  Image ===============================
 
 def product_image_path(instance, filename):
-    return f"products/{instance.product.category.slug}/images/{filename}"
+    category_slug = instance.category.slug if instance.category else "uncategorized"
+    return f"products/{category_slug}/images/{filename}"
 
 
 # ==========================  Barcode ===============================
