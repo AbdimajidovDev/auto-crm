@@ -16,19 +16,14 @@ class StandardPagination(PageNumberPagination):
     def get_paginated_response(self, data):
         page_size = self.get_page_size(self.request)
         count = self.page.paginator.count
-
-        # FIX: avvalgi kod `(count + page_size - 1) // page_size` ishlatgan edi —
-        # bu odatda to'g'ri ishlaydi, lekin `math.ceil` aniqroq va maqsadni
-        # ochiq ifodalaydi. Ikkalasi bir xil natija beradi, lekin `ceil` o'qish
-        # osonroq va xatolarga chidamliroq.
         total_pages = math.ceil(count / page_size) if page_size else 1
 
         return Response({
             "count": count,
             "total_pages": total_pages,
             "current_page": self.page.number,
-            "next": self.get_next_link(),        # Qo'shildi: frontend uchun qulay
-            "previous": self.get_previous_link(), # Qo'shildi: frontend uchun qulay
+            "next": self.get_next_link(),
+            "previous": self.get_previous_link(),
             "results": data,
         })
 
