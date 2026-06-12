@@ -40,7 +40,7 @@ class ProductLocationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ProductLocation
-        fields = ("id", "location", "description")
+        fields = ("id", "location_uz", "location_cyrl", "description_uz", "description_cyrl")
 
 
 # class ProductLocationSerializer(serializers.ModelSerializer):
