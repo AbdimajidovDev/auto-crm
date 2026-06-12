@@ -15,7 +15,6 @@ class CustomerDebt(TimestampMixin):
         on_delete=models.CASCADE,
         related_name='debts'
     )
-
     sale = models.ForeignKey(
         'sales.Sale',
         on_delete=models.SET_NULL,
@@ -23,9 +22,9 @@ class CustomerDebt(TimestampMixin):
         blank=True,
         related_name='debt_records'
     )
-
     amount = models.DecimalField(max_digits=20, decimal_places=2)
     type = models.CharField(max_length=2, choices=Type.choices)
+    due_date = models.DateField(null=True, blank=True)
 
     def __str__(self):
         return f"{self.customer} | {self.amount} | {self.type}"
