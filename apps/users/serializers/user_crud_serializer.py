@@ -38,6 +38,7 @@ class UserSerializer(serializers.ModelSerializer):
 class SellerCreateSerializer(serializers.Serializer):
     full_name = serializers.CharField(write_only=True)
     phone_number = serializers.CharField(write_only=True)
+    email = serializers.EmailField(write_only=True)
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
     store_id = serializers.IntegerField(write_only=True)
@@ -62,6 +63,11 @@ class SellerCreateSerializer(serializers.Serializer):
 
         data.pop("confirm_password")
         return data
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError({"error": "Email already exists"})
+        return value
 
 
 class UserResponseSerializer(serializers.ModelSerializer):

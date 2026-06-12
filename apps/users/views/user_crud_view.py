@@ -72,10 +72,10 @@ class UsersDetailView(APIView):
 )
 class SellerCreateAPIView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
-    serializer_classes = SellerCreateSerializer
+    serializer_class = SellerCreateSerializer
 
     def post(self, request):
-        serializer = self.serializer_classes(data=request.data)
+        serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         try:
