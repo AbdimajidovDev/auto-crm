@@ -74,12 +74,15 @@ def handle_sale_return(return_obj, sale_item, quantity):
     )
 
 
-def handle_stock_entry(entry):
+def handle_stock_entry(entry, items=None):
     session = _get_active_session(entry.store)
     if not session:
         return
 
-    items = entry.items.select_related("product").all()
+    # Agar items berilmagan bo'lsa (tashqaridan chaqirilganda) — DB dan o'qi
+    if items is None:
+        items = entry.items.select_related("product").all()
+
     InventoryMovement.objects.bulk_create([
         InventoryMovement(
             session=session,
