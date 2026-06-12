@@ -1,77 +1,49 @@
-from decimal import Decimal
-
 from django.db import transaction
 from django.db.models import F
-from rest_framework.exceptions import ValidationError
-
 from apps.inventory.services.inventory_hooks_service import handle_stock_entry
 from apps.products.models import ProductBatch
 from apps.contract.models import StockEntry, StockEntryItem, SupplierTransaction
 
 
 class StockEntryService:
-
     @staticmethod
     @transaction.atomic
-    def create_entry(*, supplier, store, items, paid_amount, payment_type, user):
-        # ✅ YAXSHI: Kirim yaratish, batch update, itemlar va transaction bitta `transaction.atomic` ichida.
-        # 1. Header yaratish
+    def create_entry(*, supplier, store, items, cash_amount, card_amount, user):
+        total_entry_amount = sum(
+            item["purchase_price"] * item["quantity"] for item in items
+        )
+
+        # Entry yaratish — paid_amount, payment_type, debt_amount
+        # StockEntry.save() ichida avtomatik hisoblanadi
         entry = StockEntry.objects.create(
             supplier=supplier,
             store=store,
-            paid_amount=paid_amount,
-            payment_type=payment_type,
+            total_amount=total_entry_amount,
+            cash_amount=cash_amount,
+            card_amount=card_amount,
             created_by=user
         )
 
-        total_entry_amount = Decimal("0")
+        product_ids = [item["product"].id for item in items]
+
+        existing_batches = {
+            batch.product_id: batch
+            for batch in ProductBatch.objects.select_for_update().filter(
+                store=store,
+                product_id__in=product_ids
+            )
+        }
+
+        batches_to_update = []
+        batches_to_create = []
         item_objs = []
 
-        # 2. Mahsulotlarni aylanish
         for item in items:
-            # ⚠️ MUAMMO [PERFORMANCE]: Har item uchun ProductBatch lookup va update/create loop ichida bajariladi.
-            # Sabab: batchlar product_id bo'yicha oldindan select_for_update bilan xaritalanmagan.
-            # Natija: ko'p itemli kirimda transaction uzoq lock ushlab turadi va query soni itemlar soniga bog'liq bo'ladi.
-            # ✅ YECHIM:
-            # product_ids = [item["product"].id for item in items]
-            # batches = ProductBatch.objects.select_for_update().filter(store=store, product_id__in=product_ids)
-            # ProductBatch.objects.bulk_update(updated_batches, ["quantity", "purchase_price", "selling_price"])
             product = item["product"]
             qty = item["quantity"]
             p_price = item["purchase_price"]
             s_price = item["selling_price"]
-
-            line_total = p_price * qty
-            total_entry_amount += line_total
-
-            # 🔥 Race condition oldini olish uchun select_for_update
-            batch = ProductBatch.objects.select_for_update().filter(
-                store=store,
-                product=product
-            ).first()
-
-            if batch:
-                # 🔄 Mavjud batchni yangilash
-                ProductBatch.objects.filter(id=batch.pk).update(
-                    quantity=F("quantity") + qty,
-                    purchase_price=p_price,
-                    selling_price=s_price
-                )
-            else:
-                # ➕ Yangi batch yaratish (barcode va shtrix_code bilan)
-                # ⚠️ MUAMMO [PERFORMANCE]: Barcode image generation transaction ichida bajarilmoqda.
-                # Sabab: fayl/rasm generatsiyasi DB lock ushlab turgan paytda CPU/I/O ishlatadi.
-                # Natija: kirim transactioni uzayadi, parallel requestlar kutib qolishi mumkin.
-                # ✅ YECHIM:
-                # barcode yaratishni qoldirib, shtrix_code image generationni transaction.on_commit yoki background taskga chiqarish.
-
-                ProductBatch.objects.create(
-                    product=product,
-                    store=store,
-                    quantity=qty,
-                    purchase_price=p_price,
-                    selling_price=s_price
-                )
+            w_price = item["wholesale_price"]
 
             item_objs.append(
                 StockEntryItem(
@@ -79,43 +51,160 @@ class StockEntryService:
                     product=product,
                     quantity=qty,
                     purchase_price=p_price,
-                    selling_price=s_price
+                    selling_price=s_price,
+                    wholesale_price=w_price,
                 )
             )
 
-        # 3. Itemlarni bulk yaratish
+            if product.id in existing_batches:
+                batch = existing_batches[product.id]
+                batch.quantity = F("quantity") + qty
+                batch.purchase_price = p_price
+                batch.selling_price = s_price
+                batch.wholesale_price = w_price
+                batches_to_update.append(batch)
+            else:
+                batches_to_create.append(
+                    ProductBatch(
+                        product=product,
+                        store=store,
+                        quantity=qty,
+                        purchase_price=p_price,
+                        selling_price=s_price,
+                        wholesale_price=w_price,
+                    )
+                )
+
+        if batches_to_update:
+            ProductBatch.objects.bulk_update(
+                batches_to_update,
+                ["quantity", "purchase_price", "selling_price", "wholesale_price"]
+            )
+        if batches_to_create:
+            ProductBatch.objects.bulk_create(batches_to_create)
+
         StockEntryItem.objects.bulk_create(item_objs)
 
-        # 4. Entry'ning umumiy summasini saqlash
-        entry.total_amount = total_entry_amount
-
-        if total_entry_amount < paid_amount:
-            raise ValidationError("To'lov umumiy narxdan oshib ketdi!")
-
-        entry.save()
-
-        # 5. QARZDORLIK LOGIKASI
-        debt_amount = total_entry_amount - paid_amount
-        if debt_amount > 0:
+        # Qarzdorlik — debt_amount endi entry.save() ichida hisoblangan
+        if entry.debt_amount > 0:
             SupplierTransaction.objects.create(
                 supplier=supplier,
                 entry=entry,
-                amount=debt_amount,
+                amount=entry.debt_amount,
                 type=SupplierTransaction.TransactionType.INVENTORY_IN,
                 note=f"Entry #{entry.pk} orqali qarzga mahsulot olindi"
             )
 
-        # eng oxirida
         handle_stock_entry(entry)
-
         return entry
 
 
-# ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 0
-# Performance muammolari: 2
-# Arxitektura muammolari: 0
-# Umumiy baho: 7 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [ProductBatch loop update strategiyasini bulk update/createga o'tkazish]
-# ═══════════════════════════════
+# from decimal import Decimal
+#
+# from django.db import transaction
+# from django.db.models import F
+# from rest_framework.exceptions import ValidationError
+#
+# from apps.inventory.services.inventory_hooks_service import handle_stock_entry
+# from apps.products.models import ProductBatch
+# from apps.contract.models import StockEntry, StockEntryItem, SupplierTransaction
+
+# class StockEntryService:
+#
+#     @staticmethod
+#     @transaction.atomic
+#     def create_entry(*, supplier, store, items, paid_amount, payment_type, user):
+#
+#         # 1. Validation: paid_amount ni oldindan hisoblash
+#         total_entry_amount = sum(
+#             item["purchase_price"] * item["quantity"] for item in items
+#         )
+#
+#         if total_entry_amount < paid_amount:
+#             raise ValidationError("To'lov umumiy narxdan oshib ketdi!")
+#
+#         # 2. Entry yaratish
+#         entry = StockEntry.objects.create(
+#             supplier=supplier,
+#             store=store,
+#             total_amount=total_entry_amount,
+#             paid_amount=paid_amount,
+#             payment_type=payment_type,
+#             created_by=user
+#         )
+#
+#         # 3. Barcha product_id larni oldindan yig'ish
+#         product_ids = [item["product"].id for item in items]
+#
+#         # 4. Mavjud batchlarni BITTA query bilan olish + lock
+#         existing_batches = {
+#             batch.product_id: batch
+#             for batch in ProductBatch.objects.select_for_update().filter(
+#                 store=store,
+#                 product_id__in=product_ids
+#             )
+#         }
+#
+#         batches_to_update = []
+#         batches_to_create = []
+#         item_objs = []
+#
+#         for item in items:
+#             product = item["product"]
+#             qty = item["quantity"]
+#             p_price = item["purchase_price"]
+#             s_price = item["selling_price"]
+#
+#             item_objs.append(
+#                 StockEntryItem(
+#                     entry=entry,
+#                     product=product,
+#                     quantity=qty,
+#                     purchase_price=p_price,
+#                     selling_price=s_price
+#                 )
+#             )
+#
+#             if product.id in existing_batches:
+#                 batch = existing_batches[product.id]
+#                 batch.quantity = F("quantity") + qty
+#                 batch.purchase_price = p_price
+#                 batch.selling_price = s_price
+#                 batches_to_update.append(batch)
+#             else:
+#                 batches_to_create.append(
+#                     ProductBatch(
+#                         product=product,
+#                         store=store,
+#                         quantity=qty,
+#                         purchase_price=p_price,
+#                         selling_price=s_price
+#                     )
+#                 )
+#
+#         # 5. Bulk operatsiyalar — minimal query
+#         if batches_to_update:
+#             ProductBatch.objects.bulk_update(
+#                 batches_to_update,
+#                 ["quantity", "purchase_price", "selling_price"]
+#             )
+#
+#         if batches_to_create:
+#             ProductBatch.objects.bulk_create(batches_to_create)
+#
+#         StockEntryItem.objects.bulk_create(item_objs)
+#
+#         # 6. Qarzdorlik logikasi
+#         debt_amount = total_entry_amount - paid_amount
+#         if debt_amount > 0:
+#             SupplierTransaction.objects.create(
+#                 supplier=supplier,
+#                 entry=entry,
+#                 amount=debt_amount,
+#                 type=SupplierTransaction.TransactionType.INVENTORY_IN,
+#                 note=f"Entry #{entry.pk} orqali qarzga mahsulot olindi"
+#             )
+#
+#         handle_stock_entry(entry)
+#
+#         return entry
