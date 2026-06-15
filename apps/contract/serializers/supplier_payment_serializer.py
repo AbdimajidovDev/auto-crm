@@ -20,6 +20,7 @@ class SupplierPaymentSerializer(serializers.Serializer):
     def validate(self, data):
         if data["entry"].supplier_id != data["supplier"].id:
             raise serializers.ValidationError("Entry supplierga tegishli emas")
+        return data
 
     def validate_amount(self, value):
         if value <= 0:
