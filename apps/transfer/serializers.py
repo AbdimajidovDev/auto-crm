@@ -20,7 +20,7 @@ class TransferItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockTransferItem
         fields = (
-            'id', 'product', 'product_name', 'quantity', 'purchase_price', 'selling_price',
+            'id', 'product', 'product_name', 'sku', 'quantity', 'purchase_price', 'selling_price',
         )
         read_only_fields = ('id','product_name', 'purchase_price', 'selling_price',)
 
