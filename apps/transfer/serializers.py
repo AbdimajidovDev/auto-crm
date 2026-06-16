@@ -15,7 +15,7 @@ class TransferItemSerializer(serializers.ModelSerializer):
     quantity = serializers.IntegerField(min_value=1)
     product_name = serializers.CharField(source="product.name", read_only=True)
     # product_name = serializers.SerializerMethodField()
-    sku = serializers.SerializerMethodField(source='product.sku', read_only=True)
+    sku = serializers.CharField(source="product.sku", read_only=True)
 
     class Meta:
         model = StockTransferItem
