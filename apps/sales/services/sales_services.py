@@ -188,6 +188,13 @@ class SaleService:
                 due_date=debt_due_date
             )
 
+        # 🔻 LOW STOCK: sale reduced stock -> evaluate (after commit) for each product.
+        from apps.inventory.services import LowStockService
+        LowStockService.schedule_evaluation(
+            store=store,
+            product_ids=[item["product"] for item in items_data],
+        )
+
         return sale
 
 

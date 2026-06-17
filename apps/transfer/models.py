@@ -62,6 +62,8 @@ class Notification(TimestampMixin):
         TRANSFER_CREATED = "tc", "Transfer Created"
         TRANSFER_APPROVED = "ta", "Transfer Approved"
         TRANSFER_REJECTED = "tr", "Transfer Rejected"
+        LOW_STOCK_PURCHASE = "lp", "Low Stock - Purchase Required"
+        LOW_STOCK_TRANSFER = "lt", "Low Stock - Transfer Required"
 
     user = models.ForeignKey(
         "users.User",

@@ -156,6 +156,13 @@ class SaleReturnService:
             sale.status = Sale.Status.RETURNED
             sale.save(update_fields=["status"])
 
+        # 🔺 LOW STOCK: returns increased stock -> may resolve OPEN records.
+        from apps.inventory.services import LowStockService
+        returned_product_ids = [
+            sale_items_map[item["sale_item"]].product_id for item in data["items"]
+        ]
+        LowStockService.schedule_evaluation(store=store, product_ids=returned_product_ids)
+
         return return_obj
     
 

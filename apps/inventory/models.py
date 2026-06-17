@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Q
 
 from apps.common.models.timestamp_mixin import TimestampMixin
 from apps.products.models import Product
@@ -107,3 +108,58 @@ class InventoryAdjustment(TimestampMixin):
         indexes = [
             models.Index(fields=["session"]),
         ]
+
+
+class LowStockItem(TimestampMixin):
+    """
+    Historical low-stock event / replenishment requirement.
+
+    Lifecycle:
+      OPEN     -> stock <= min_stock, replenishment required
+      RESOLVED -> stock recovered above min_stock
+
+    Only ONE OPEN record may exist per (store, product) — enforced by a
+    partial unique constraint at the DB level (see Meta.constraints).
+    """
+
+    class ActionType(models.TextChoices):
+        PURCHASE = "purchase", "Purchase (supplier)"   # store.type == BASE
+        TRANSFER = "transfer", "Transfer (from base)"  # store.type == STORE
+
+    class Status(models.TextChoices):
+        OPEN = "open", "Open"
+        RESOLVED = "resolved", "Resolved"
+
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="low_stock_items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="low_stock_items")
+
+    current_quantity = models.IntegerField()
+    min_stock = models.PositiveIntegerField()
+
+    action_type = models.CharField(max_length=10, choices=ActionType.choices)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)
+
+    resolved_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "low_stock_item"
+        ordering = ["-created_at"]
+        constraints = [
+            # Guarantees at most one OPEN record per (store, product) even under
+            # concurrent requests — application checks are best-effort only.
+            models.UniqueConstraint(
+                fields=["store", "product"],
+                condition=Q(status="open"),
+                name="uniq_open_low_stock_per_store_product",
+            ),
+        ]
+        indexes = [
+            # List API filters by status (+ action_type/store/product) and orders by -created_at.
+            models.Index(fields=["status", "action_type"]),
+            models.Index(fields=["store", "status"]),
+            models.Index(fields=["product", "status"]),
+            models.Index(fields=["status", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"LowStock {self.store_id}/{self.product_id} [{self.status}]"
