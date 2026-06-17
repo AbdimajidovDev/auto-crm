@@ -1,4 +1,5 @@
 from apps.inventory.models import InventorySession, InventoryMovement
+from apps.inventory.services.low_stock_service import LowStockService
 
 
 def _get_active_session(store):
@@ -24,6 +25,13 @@ def handle_sale_item(sale_item):
 
 
 def handle_transfer_approved(transfer):
+    # 🔻 LOW STOCK: source store quantity decreased -> may cross threshold.
+    # Runs independently of an active inventory session (single query for ids).
+    LowStockService.schedule_evaluation(
+        store=transfer.from_store_id,
+        product_ids=list(transfer.items.values_list("product_id", flat=True)),
+    )
+
     session = _get_active_session(transfer.from_store)
     if not session:
         return
@@ -43,6 +51,12 @@ def handle_transfer_approved(transfer):
 
 
 def handle_transfer_in(transfer):
+    # 🔺 LOW STOCK: destination store quantity increased -> may resolve an OPEN record.
+    LowStockService.schedule_evaluation(
+        store=transfer.to_store_id,
+        product_ids=list(transfer.items.values_list("product_id", flat=True)),
+    )
+
     session = _get_active_session(transfer.to_store)
     if not session:
         return
@@ -75,6 +89,13 @@ def handle_sale_return(return_obj, sale_item, quantity):
 
 
 def handle_stock_entry(entry, items=None):
+    # 🔺 LOW STOCK: incoming stock increased quantity -> may resolve OPEN records.
+    if items is not None:
+        entry_product_ids = [item.product_id for item in items]
+    else:
+        entry_product_ids = list(entry.items.values_list("product_id", flat=True))
+    LowStockService.schedule_evaluation(store=entry.store_id, product_ids=entry_product_ids)
+
     session = _get_active_session(entry.store)
     if not session:
         return

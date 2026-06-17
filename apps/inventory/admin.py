@@ -5,7 +5,8 @@ from apps.inventory.models import (
     InventoryCount,
     InventorySnapshot,
     InventoryMovement,
-    InventoryAdjustment
+    InventoryAdjustment,
+    LowStockItem,
 )
 
 
@@ -40,3 +41,14 @@ class InventoryMovementAdmin(admin.ModelAdmin):
 class InventoryAdjustmentAdmin(admin.ModelAdmin):
     list_display = ('id', 'session', 'product', 'difference')
     list_filter = ('session',)
+
+
+@admin.register(LowStockItem)
+class LowStockItemAdmin(admin.ModelAdmin):
+    list_display = (
+        'id', 'store', 'product', 'current_quantity', 'min_stock',
+        'action_type', 'status', 'resolved_at', 'created_at',
+    )
+    list_filter = ('status', 'action_type', 'store')
+    list_select_related = ('store', 'product')
+    search_fields = ('product__name', 'store__name')
