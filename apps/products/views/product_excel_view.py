@@ -12,9 +12,11 @@ from rest_framework.views import APIView
 
 from apps.products.services.product_import_service import ProductImportService
 
+from django.conf import settings
 
 TEMPLATE_PATH = os.path.join(
-    os.path.dirname(__file__),   # bu fayl joylashgan papka
+    settings.BASE_DIR,
+    "core",
     "templates",
     "mahsulot_shablon.xlsx",
 )
