@@ -20,7 +20,7 @@ from apps.products.views.product_batch_view import (
     ProductLocationDetailView,
     ProductBatchDetailView,
 )
-
+from apps.products.views.product_excel_view import ProductImportAPIView, ProductImportTemplateAPIView
 
 urlpatterns = [
 
@@ -48,4 +48,9 @@ urlpatterns = [
     # Brand
     path("brand/", BrandListCreateAPIView.as_view(),),
     path("brand/<int:pk>/", BrandRetrieveUpdateDestroyAPIView.as_view(),),
+
+    # Excel Import, Export
+    path("products/import/",          ProductImportAPIView.as_view()),
+    path("products/import/template/", ProductImportTemplateAPIView.as_view()),
+
 ]
