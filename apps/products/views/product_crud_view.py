@@ -18,6 +18,7 @@ from apps.products.serializers.product_crud_serializer import (
     ProductUpdateSerializer,
 )
 from apps.products.services.product_crud_service import ProductService
+from apps.inventory.services import LowStockService
 
 from django.db.models import Prefetch
 
@@ -198,6 +199,7 @@ class ProductListAPIView(generics.ListAPIView):
                 "id",
                 "name",
                 "description",
+                "min_stock",
 
                 "sku",
                 "barcode",
@@ -322,6 +324,7 @@ class ProductDetailAPIView(APIView):
     )
     def put(self, request, pk):
         product = get_object_or_404(Product, pk=pk)
+        old_min_stock = product.min_stock
 
         serializer = ProductUpdateSerializer(
             product,
@@ -331,6 +334,11 @@ class ProductDetailAPIView(APIView):
 
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # Threshold o'zgarsa, mahsulotni saqlovchi barcha do'konlar bo'yicha
+        # low-stock holatini qayta baholaymiz (on_commit orqali).
+        if product.min_stock != old_min_stock:
+            LowStockService.reevaluate_product(product)
 
         return Response('Product successfully updated!', status=200)
 

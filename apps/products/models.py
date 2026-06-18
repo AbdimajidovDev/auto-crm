@@ -69,6 +69,9 @@ class Product(TimestampMixin):
         choices=ProductStatus.choices,
         default=ProductStatus.ACTIVE
     )
+    # 0 => threshold monitoring disabled for this product.
+    # PositiveIntegerField => DB-level non-negative guarantee (CHECK constraint).
+    min_stock = models.PositiveIntegerField(default=0)
 
     def get_category_prefix(self):
         if not self.category:
@@ -143,9 +146,6 @@ class ProductBatch(TimestampMixin):
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
     wholesale_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
-    # 0 => threshold monitoring disabled for this product/store pair.
-    # PositiveIntegerField => DB-level non-negative guarantee (CHECK constraint).
-    min_stock = models.PositiveIntegerField(default=0)
     is_active = models.BooleanField(default=True)
 
     class Meta:

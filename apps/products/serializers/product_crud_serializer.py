@@ -135,6 +135,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "sku", "barcode", "shtrix_code",
             "unit_measurement", "unit_measurement_name",
             "description",
+            "min_stock",
             "status",
             "created_at",
             "images",
@@ -204,6 +205,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'name_uz_cyrl',
             'description_uz',
             'description_uz_cyrl',
+            'min_stock',
             'images'
         )
 
@@ -248,7 +250,7 @@ class ProductGetSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = (
-            "id", "name", "description", "category", "category_name", "created_at"
+            "id", "name", "description", "min_stock", "category", "category_name", "created_at"
         )
 
     def get_category_name(self, obj):
@@ -276,6 +278,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "unit_measurement",
             "name",
             "description",
+            "min_stock",
             "new_images",
             "delete_image_ids",
         )

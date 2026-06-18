@@ -27,13 +27,16 @@ class LowStockTestBase(TestCase):
         )
 
     def make_batch(self, store, product, quantity, min_stock):
+        # min_stock now lives on Product, so set the threshold there.
+        if product.min_stock != min_stock:
+            product.min_stock = min_stock
+            product.save(update_fields=["min_stock"])
         return ProductBatch.objects.create(
             store=store,
             product=product,
             quantity=quantity,
             purchase_price=10,
             selling_price=20,
-            min_stock=min_stock,
         )
 
 

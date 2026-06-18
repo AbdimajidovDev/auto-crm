@@ -58,6 +58,24 @@ class LowStockService:
         product_id = product.id if hasattr(product, "id") else product
         return LowStockService.evaluate_batch(store=store, product_ids=[product_id])
 
+    @staticmethod
+    def reevaluate_product(product):
+        """
+        Re-run low-stock evaluation for a product across EVERY store that carries
+        it. Call this when the product-level `min_stock` threshold changes, so
+        OPEN/RESOLVED records (and notifications) reflect the new threshold
+        without waiting for the next stock mutation.
+        """
+        product_id = product.id if hasattr(product, "id") else product
+        store_ids = (
+            ProductBatch.objects
+            .filter(product_id=product_id)
+            .values_list("store_id", flat=True)
+            .distinct()
+        )
+        for store_id in store_ids:
+            LowStockService.schedule_evaluation(store=store_id, product_ids=[product_id])
+
     # =====================================================================
     # CORE
     # =====================================================================
@@ -77,12 +95,14 @@ class LowStockService:
         store_obj = store if isinstance(store, Store) else Store.objects.get(id=store)
 
         with transaction.atomic():
-            # 1 query: current stock + threshold per product (aggregated across batches).
+            # 1 query: current stock per (store, product) + the product-level
+            # threshold (min_stock now lives on Product, so it is identical across
+            # a product's batches — Max() just collapses the join to one value).
             stock_rows = (
                 ProductBatch.objects
                 .filter(store=store_obj, product_id__in=ids)
                 .values("product_id")
-                .annotate(qty=Sum("quantity"), threshold=Max("min_stock"))
+                .annotate(qty=Sum("quantity"), threshold=Max("product__min_stock"))
             )
             stock_map = {row["product_id"]: row for row in stock_rows}
 
