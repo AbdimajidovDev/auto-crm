@@ -69,14 +69,18 @@ class StockEntryCreateSerializer(serializers.Serializer):
 class StockEntryItemListSerializer(serializers.ModelSerializer):
     barcode = serializers.SerializerMethodField()
     shtrix_code = serializers.SerializerMethodField()
+    sku = serializers.SerializerMethodField()
 
     class Meta:
         model = StockEntryItem
         fields = (
             "id", "product", "quantity",
             "purchase_price", "selling_price",
-            "barcode", "shtrix_code",
+             "sku", "barcode", "shtrix_code",
         )
+
+    def get_sku(self, obj):
+        return obj.product.sku if obj.product else None
 
     def get_barcode(self, obj):
         return obj.product.barcode if obj.product else None
