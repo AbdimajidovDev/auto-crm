@@ -1,3 +1,4 @@
+import barcode
 from rest_framework import serializers
 
 from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
@@ -194,6 +195,15 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         default=list
     )
 
+    # barcode va sku — ixtiyoriy. Kelsa berilgan qiymat ishlatiladi,
+    # kelmasa model save() ichida avtomatik generatsiya qilinadi.
+    barcode = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=13
+    )
+    sku = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=64
+    )
+
     class Meta:
         model = Product
         fields = (
@@ -206,8 +216,47 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'description_uz',
             'description_uz_cyrl',
             'min_stock',
+            'barcode',
+            'sku',
             'images'
         )
+
+    def validate_barcode(self, value):
+        # Bo'sh kelsa — None, save() avtomatik generatsiya qiladi
+        if not value:
+            return None
+
+        value = value.strip()
+        if not value.isdigit():
+            raise serializers.ValidationError(
+                "Barcode faqat raqamlardan iborat bo'lishi kerak."
+            )
+
+        # EAN-13 formatga normallashtirish (12-13 raqam, checksum bilan).
+        # Bu self.barcode va generatsiya qilingan shtrix rasm mos kelishini kafolatlaydi.
+        try:
+            ean = barcode.get_barcode_class("ean13")
+            full_code = ean(value).get_fullcode()
+        except Exception:
+            raise serializers.ValidationError(
+                "Barcode yaroqli EAN-13 formatda bo'lishi kerak (12-13 raqam)."
+            )
+
+        if Product.objects.filter(barcode=full_code).exists():
+            raise serializers.ValidationError("Bu barcode allaqachon mavjud.")
+
+        return full_code
+
+    def validate_sku(self, value):
+        # Bo'sh kelsa — None, save() avtomatik generatsiya qiladi
+        if not value:
+            return None
+
+        value = value.strip()
+        if Product.objects.filter(sku=value).exists():
+            raise serializers.ValidationError("Bu SKU allaqachon mavjud.")
+
+        return value
 
     def to_internal_value(self, data):
         """

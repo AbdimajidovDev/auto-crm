@@ -99,17 +99,26 @@ class Product(TimestampMixin):
         super().save(*args, **kwargs)
         if is_new:
             update_fields = []
+
+            # SKU: qo'lda kelmasa avtomatik generatsiya qilinadi
             if not self.sku:
                 self.sku = self.generate_sku()
                 update_fields.append("sku")
+
+            # BARCODE: qo'lda kelmasa avtomatik generatsiya qilinadi
             if not self.barcode:
                 self.barcode = generate_unique_barcode()
+                update_fields.append("barcode")
+
+            # SHTRIX CODE: barcode (qo'lda yoki avtomatik) uchun mos rasm yaratiladi
+            if self.barcode and not self.shtrix_code:
                 self.shtrix_code.save(
                     f"{self.barcode}.png",
                     generate_barcode_image(self.barcode),
                     save=False
                 )
-                update_fields.extend(["barcode", "shtrix_code"])
+                update_fields.append("shtrix_code")
+
             if update_fields:
                 super().save(update_fields=update_fields)
 
