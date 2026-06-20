@@ -1,7 +1,7 @@
-import barcode
 from rest_framework import serializers
 
 from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
+from apps.products.utils.barcode_utility import normalize_barcode, generate_barcode_image
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -226,17 +226,10 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         if not value:
             return None
 
-        value = value.strip()
-        if not value.isdigit():
-            raise serializers.ValidationError(
-                "Barcode faqat raqamlardan iborat bo'lishi kerak."
-            )
-
         # EAN-13 formatga normallashtirish (12-13 raqam, checksum bilan).
         # Bu self.barcode va generatsiya qilingan shtrix rasm mos kelishini kafolatlaydi.
         try:
-            ean = barcode.get_barcode_class("ean13")
-            full_code = ean(value).get_fullcode()
+            full_code = normalize_barcode(value)
         except Exception:
             raise serializers.ValidationError(
                 "Barcode yaroqli EAN-13 formatda bo'lishi kerak (12-13 raqam)."
@@ -320,6 +313,14 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         required=False
     )
 
+    # barcode va sku — ixtiyoriy. Kelsa yangilanadi, kelmasa (yoki bo'sh) o'zgarmaydi.
+    barcode = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=13
+    )
+    sku = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True, max_length=64
+    )
+
     class Meta:
         model = Product
         fields = (
@@ -328,6 +329,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "min_stock",
+            "barcode",
+            "sku",
             "new_images",
             "delete_image_ids",
         )
@@ -342,6 +345,40 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 
         return images
 
+    def validate_barcode(self, value):
+        # Bo'sh kelsa — o'zgartirmaymiz
+        if not value:
+            return None
+
+        try:
+            full_code = normalize_barcode(value)
+        except Exception:
+            raise serializers.ValidationError(
+                "Barcode yaroqli EAN-13 formatda bo'lishi kerak (12-13 raqam)."
+            )
+
+        qs = Product.objects.filter(barcode=full_code)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Bu barcode allaqachon mavjud.")
+
+        return full_code
+
+    def validate_sku(self, value):
+        # Bo'sh kelsa — o'zgartirmaymiz
+        if not value:
+            return None
+
+        value = value.strip()
+        qs = Product.objects.filter(sku=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Bu SKU allaqachon mavjud.")
+
+        return value
+
     def update(self, instance, validated_data):
         # ⚠️ MUAMMO [KRITIK]: Product update ichida bir nechta write operatsiya transaction bilan o'ralmagan.
         # Sabab: product save, image file delete, image rows delete va bulk_create alohida bajariladi.
@@ -354,10 +391,25 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         #     ProductImage.objects.bulk_create(...)
         new_images = validated_data.pop("new_images", [])
         delete_ids = validated_data.pop("delete_image_ids", [])
+        barcode_value = validated_data.pop("barcode", None)
+        sku_value = validated_data.pop("sku", None)
 
         # product fields update
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
+
+        # barcode qo'lda o'zgartirilsa — yangilanadi va mos shtrix rasm qayta yaratiladi
+        if barcode_value and barcode_value != instance.barcode:
+            instance.barcode = barcode_value
+            instance.shtrix_code.save(
+                f"{barcode_value}.png",
+                generate_barcode_image(barcode_value),
+                save=False,
+            )
+
+        # sku qo'lda o'zgartirilsa — yangilanadi
+        if sku_value:
+            instance.sku = sku_value
 
         instance.save()
 

@@ -3,6 +3,7 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 
 from apps.products.models import Product, Category, Brand, ProductUnitMeasurement
+from apps.products.utils.barcode_utility import normalize_barcode
 
 
 VALID_STATUSES = {
@@ -24,6 +25,8 @@ HEADER_MAP = {
     "status":           "status",
     "min. qoldiq":      "min_stock",
     "minimal qoldiq":   "min_stock",
+    "shtrix kod":       "barcode",
+    "artikul":          "sku",
     # Inglizcha
     "name":             "name",
     "category":         "category",
@@ -31,6 +34,8 @@ HEADER_MAP = {
     "unit_measurement": "unit_measurement",
     "description":      "description",
     "min_stock":        "min_stock",
+    "barcode":          "barcode",
+    "sku":              "sku",
 }
 
 
@@ -76,9 +81,17 @@ class ProductImportService:
         brand_map    = cls._build_brand_map(raw_brands)
         unit_map     = cls._build_unit_map(raw_units)
 
+        # barcode/sku ixtiyoriy ustunlar — bazada mavjudlarini oldindan yig'amiz (N+1 oldini olish)
+        has_barcode = "barcode" in col
+        has_sku     = "sku" in col
+        existing_barcodes = cls._build_existing_barcodes(data_rows, col) if has_barcode else set()
+        existing_skus     = cls._build_existing_skus(data_rows, col) if has_sku else set()
+
         # Qatorlarni parse qilish
         to_create = []
         errors    = []
+        seen_barcodes = set()
+        seen_skus     = set()
 
         for row_num, row in enumerate(data_rows, start=2):
             name = cls._cell(row, col["name"])
@@ -91,6 +104,32 @@ class ProductImportService:
             unit_name  = cls._cell(row, col["unit_measurement"]) or "dona"
             min_stock  = cls._parse_int(cls._cell(row, col["min_stock"]), default=0)
 
+            # BARCODE: kelsa normallashtiriladi + takror tekshiriladi, kelmasa None (avtomatik)
+            barcode_val = None
+            if has_barcode:
+                raw_bc = cls._cell(row, col["barcode"])
+                if raw_bc:
+                    try:
+                        barcode_val = normalize_barcode(raw_bc)
+                    except ValueError:
+                        errors.append({"row": row_num, "error": "barcode yaroqsiz (faqat 12-13 raqamli EAN-13)"})
+                        continue
+                    if barcode_val in existing_barcodes or barcode_val in seen_barcodes:
+                        errors.append({"row": row_num, "error": f"barcode takrorlangan: {barcode_val}"})
+                        continue
+                    seen_barcodes.add(barcode_val)
+
+            # SKU: kelsa takror tekshiriladi, kelmasa None (avtomatik)
+            sku_val = None
+            if has_sku:
+                raw_sku = cls._cell(row, col["sku"])
+                if raw_sku:
+                    if raw_sku in existing_skus or raw_sku in seen_skus:
+                        errors.append({"row": row_num, "error": f"sku takrorlangan: {raw_sku}"})
+                        continue
+                    seen_skus.add(raw_sku)
+                    sku_val = raw_sku
+
             to_create.append((row_num, Product(
                 name=name,
                 category=category_map.get(cls._cell(row, col["category"]).lower()),
@@ -99,6 +138,8 @@ class ProductImportService:
                 description=cls._cell(row, col["description"]),
                 status=status,
                 min_stock=min_stock,
+                barcode=barcode_val,
+                sku=sku_val,
             )))
 
         if not to_create:
@@ -138,6 +179,35 @@ class ProductImportService:
             return max(parsed, 0)   # manfiy bo'lmasin
         except (ValueError, TypeError):
             return default
+
+    @staticmethod
+    def _build_existing_barcodes(data_rows, col) -> set:
+        provided = set()
+        for r in data_rows:
+            raw = ProductImportService._cell(r, col["barcode"])
+            if raw:
+                try:
+                    provided.add(normalize_barcode(raw))
+                except ValueError:
+                    pass
+        if not provided:
+            return set()
+        return set(
+            Product.objects.filter(barcode__in=provided).values_list("barcode", flat=True)
+        )
+
+    @staticmethod
+    def _build_existing_skus(data_rows, col) -> set:
+        provided = {
+            ProductImportService._cell(r, col["sku"])
+            for r in data_rows
+        }
+        provided.discard("")
+        if not provided:
+            return set()
+        return set(
+            Product.objects.filter(sku__in=provided).values_list("sku", flat=True)
+        )
 
     @staticmethod
     def _build_category_map(names: set) -> dict:

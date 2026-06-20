@@ -25,3 +25,25 @@ def generate_barcode_image(barcode_number: str):
     ean = EAN(barcode_number, writer=ImageWriter())
     ean.write(buffer, options={"write_text": True})
     return ContentFile(buffer.getvalue(), name=f"{barcode_number}.png")
+
+
+def normalize_barcode(value: str) -> str:
+    """
+    Qo'lda kiritilgan barcode'ni EAN-13 formatga keltiradi
+    (12-13 raqam -> checksum bilan 13 raqam).
+    Bu self.barcode bilan generatsiya qilinadigan shtrix rasm mos kelishini kafolatlaydi.
+    Yaroqsiz qiymatda ValueError ko'taradi.
+    """
+    value = (value or "").strip()
+    if not value.isdigit():
+        raise ValueError("Barcode faqat raqamlardan iborat bo'lishi kerak.")
+    # EAN-13 13 dan uzun qiymatni jim-jit kesib oladi — buni oldini olamiz.
+    if len(value) not in (12, 13):
+        raise ValueError("Barcode 12 yoki 13 raqamdan iborat bo'lishi kerak.")
+    ean = barcode.get_barcode_class("ean13")
+    try:
+        return ean(value).get_fullcode()
+    except Exception as e:
+        # python-barcode xatolarini (NumberOfDigitsError va h.k.) ValueError'ga keltiramiz,
+        # shunda chaqiruvchilar yagona `except ValueError` bilan ushlay oladi.
+        raise ValueError("Barcode yaroqli EAN-13 formatda bo'lishi kerak (12-13 raqam).") from e
