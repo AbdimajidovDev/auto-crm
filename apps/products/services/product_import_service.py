@@ -1,5 +1,6 @@
 import openpyxl
 from django.db import transaction
+from django.db.models.functions import Lower
 from django.core.exceptions import ValidationError
 
 from apps.products.models import Product, Category, Brand, ProductUnitMeasurement
@@ -88,15 +89,18 @@ class ProductImportService:
         existing_skus     = cls._build_existing_skus(data_rows, col) if has_sku else set()
 
         # Qatorlarni parse qilish
+        # skipped — import QILINMAGAN qatorlar (sabab bilan)
+        # warnings — import QILINGAN, lekin e'tibor talab qiluvchi qatorlar (kategoriya/brend topilmadi)
         to_create = []
-        errors    = []
+        skipped   = []
+        warnings  = []
         seen_barcodes = set()
         seen_skus     = set()
 
         for row_num, row in enumerate(data_rows, start=2):
             name = cls._cell(row, col["name"])
             if not name:
-                errors.append({"row": row_num, "error": "name bo'sh — qator o'tkazib yuborildi"})
+                skipped.append({"row": row_num, "reason": "name bo'sh"})
                 continue
 
             status_raw = cls._cell(row, col["status"]).lower()
@@ -112,10 +116,10 @@ class ProductImportService:
                     try:
                         barcode_val = normalize_barcode(raw_bc)
                     except ValueError:
-                        errors.append({"row": row_num, "error": "barcode yaroqsiz (faqat 12-13 raqamli EAN-13)"})
+                        skipped.append({"row": row_num, "reason": "barcode yaroqsiz (faqat 12-13 raqamli EAN-13)"})
                         continue
                     if barcode_val in existing_barcodes or barcode_val in seen_barcodes:
-                        errors.append({"row": row_num, "error": f"barcode takrorlangan: {barcode_val}"})
+                        skipped.append({"row": row_num, "reason": f"barcode takrorlangan: {barcode_val}"})
                         continue
                     seen_barcodes.add(barcode_val)
 
@@ -125,15 +129,27 @@ class ProductImportService:
                 raw_sku = cls._cell(row, col["sku"])
                 if raw_sku:
                     if raw_sku in existing_skus or raw_sku in seen_skus:
-                        errors.append({"row": row_num, "error": f"sku takrorlangan: {raw_sku}"})
+                        skipped.append({"row": row_num, "reason": f"sku takrorlangan: {raw_sku}"})
                         continue
                     seen_skus.add(raw_sku)
                     sku_val = raw_sku
 
+            # KATEGORIYA / BREND: topilmasa qator BARIBIR import qilinadi (None bilan),
+            # lekin foydalanuvchi bilishi uchun warnings ro'yxatiga yoziladi.
+            cat_raw = cls._cell(row, col["category"])
+            category = category_map.get(cat_raw.lower()) if cat_raw else None
+            if cat_raw and category is None:
+                warnings.append({"row": row_num, "error": f"kategoriya topilmadi: '{cat_raw}' — kategoriyasiz saqlandi"})
+
+            brand_raw = cls._cell(row, col["brand"])
+            brand = brand_map.get(brand_raw.lower()) if brand_raw else None
+            if brand_raw and brand is None:
+                warnings.append({"row": row_num, "error": f"brend topilmadi: '{brand_raw}' — brendsiz saqlandi"})
+
             to_create.append((row_num, Product(
                 name=name,
-                category=category_map.get(cls._cell(row, col["category"]).lower()),
-                brand=brand_map.get(cls._cell(row, col["brand"]).lower()),
+                category=category,
+                brand=brand,
                 unit_measurement=unit_map.get(unit_name.lower()),
                 description=cls._cell(row, col["description"]),
                 status=status,
@@ -142,27 +158,24 @@ class ProductImportService:
                 sku=sku_val,
             )))
 
-        if not to_create:
-            return {"created": 0, "skipped": len(data_rows), "errors": errors}
-
-        # Har birini alohida save() — barcode/sku generatsiya bo'lishi uchun
+        # Har birini ALOHIDA savepoint ichida save() —
+        #   1) barcode/sku generatsiya bo'lishi uchun (model.save() ichida)
+        #   2) bitta qatordagi xato (masalan dublikat) butun importni bekor qilmasligi uchun.
+        #      transaction.atomic() bloki ichida DB xatosidan keyin transaction "buziladi",
+        #      shuning uchun har bir save() o'zining savepoint'iga o'raladi.
         created_count = 0
-        with transaction.atomic():
-            for row_num, product in to_create:
-                try:
+        for row_num, product in to_create:
+            try:
+                with transaction.atomic():
                     product.save()
-                    created_count += 1
-                except Exception as e:
-                    errors.append({"row": row_num, "error": str(e)})
-
-        skipped = len(data_rows) - created_count - len(
-            [e for e in errors if "o'tkazib yuborildi" in e["error"]]
-        )
+                created_count += 1
+            except Exception as e:
+                skipped.append({"row": row_num, "reason": cls._humanize_db_error(e)})
 
         return {
             "created": created_count,
-            "skipped": max(skipped, 0),
-            "errors":  errors,
+            "skipped": skipped,
+            "errors":  warnings,
         }
 
     # ── Yordamchi metodlar ────────────────────────────────────────────────────
@@ -179,6 +192,17 @@ class ProductImportService:
             return max(parsed, 0)   # manfiy bo'lmasin
         except (ValueError, TypeError):
             return default
+
+    @staticmethod
+    def _humanize_db_error(exc: Exception) -> str:
+        text = str(exc).lower()
+        if "barcode" in text and "unique" in text:
+            return "barcode bazada mavjud (dublikat)"
+        if "sku" in text and "unique" in text:
+            return "sku bazada mavjud (dublikat)"
+        if "unique" in text:
+            return "takrorlanuvchi qiymat (dublikat)"
+        return f"saqlashda xato: {exc}"
 
     @staticmethod
     def _build_existing_barcodes(data_rows, col) -> set:
@@ -211,27 +235,41 @@ class ProductImportService:
 
     @staticmethod
     def _build_category_map(names: set) -> dict:
-        if not names:
+        lowered = {n.lower() for n in names if n}
+        if not lowered:
             return {}
-        return {c.name.lower(): c for c in Category.objects.filter(name__in=names)}
+        # Case-insensitive moslik: Lower("name") asosida solishtiramiz.
+        qs = Category.objects.annotate(_lname=Lower("name")).filter(_lname__in=lowered)
+        return {c.name.lower(): c for c in qs}
 
     @staticmethod
     def _build_brand_map(names: set) -> dict:
-        if not names:
+        lowered = {n.lower() for n in names if n}
+        if not lowered:
             return {}
-        return {b.name.lower(): b for b in Brand.objects.filter(name__in=names)}
+        qs = Brand.objects.annotate(_lname=Lower("name")).filter(_lname__in=lowered)
+        return {b.name.lower(): b for b in qs}
 
     @staticmethod
     def _build_unit_map(names: set) -> dict:
+        names = {n for n in names if n}
         names.add("dona")
-        existing = ProductUnitMeasurement.objects.filter(measurement__in=names)
+        lowered = {n.lower() for n in names}
+
+        existing = ProductUnitMeasurement.objects.annotate(
+            _lname=Lower("measurement")
+        ).filter(_lname__in=lowered)
         unit_map = {u.measurement.lower(): u for u in existing}
 
-        new_units = [
-            ProductUnitMeasurement(measurement=name)
-            for name in names
-            if name.lower() not in unit_map
-        ]
+        # Yangi o'lchov birliklarini lower bo'yicha unikal qilib yaratamiz.
+        seen = set(unit_map.keys())
+        new_units = []
+        for name in names:
+            key = name.lower()
+            if key not in seen:
+                seen.add(key)
+                new_units.append(ProductUnitMeasurement(measurement=name))
+
         if new_units:
             for u in ProductUnitMeasurement.objects.bulk_create(new_units):
                 unit_map[u.measurement.lower()] = u
