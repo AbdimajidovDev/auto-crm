@@ -6,6 +6,8 @@ from apps.contract.views import (
     SupplierListAPIView,
     StockEntryCreateAPIView,
     StockEntryListAPIView,
+    StockEntryImportAPIView,
+    StockEntryImportTemplateAPIView,
 )
 from apps.contract.views.supplier_payment_view import SupplierPaymentAPIView, SupplierPaymentListAPIView
 
@@ -18,6 +20,11 @@ urlpatterns = [
     # Kirim
     path("entry/list/", StockEntryListAPIView.as_view()),
     path("entry/create/", StockEntryCreateAPIView.as_view()),
+
+    # Kirim — Excel import
+    path("entry/import/", StockEntryImportAPIView.as_view()),
+    path("entry/import/template/", StockEntryImportTemplateAPIView.as_view()),
+
     path("supplier-payments/create/", SupplierPaymentAPIView.as_view()),
     path("supplier-payments/<int:entry_id>/", SupplierPaymentListAPIView.as_view()),
 ]
