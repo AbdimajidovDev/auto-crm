@@ -36,4 +36,5 @@ LOCAL_APPS = [
     "apps.debts",
     "apps.reports",
     "apps.inventory",
+    "apps.writeoff",
 ]

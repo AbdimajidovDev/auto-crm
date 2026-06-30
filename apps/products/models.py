@@ -162,6 +162,16 @@ class ProductBatch(TimestampMixin):
         indexes = [
             models.Index(fields=["store", "product"]),
         ]
+        constraints = [
+            # Har (do'kon, mahsulot) uchun BITTA partiya — ilova mantig'i shunga
+            # tayanadi (transfer/kirim servislari batch'ni .get()/yangilash bilan
+            # ishlatadi). Bu migratsiyani tasodifan ikki marta ishga tushirsa,
+            # qoldiqni jimgina ikki barobar qilish o'rniga XATO beradi.
+            models.UniqueConstraint(
+                fields=["store", "product"],
+                name="uniq_product_batch_store_product",
+            ),
+        ]
 
     def __str__(self):
         return f'Batches {self.store.name} {self.product.name}'

@@ -203,6 +203,17 @@ class InventoryService:
             for s in InventorySnapshot.objects.filter(session=session)
         }
 
+        # Narxlar xaritasi — kamomad spisaniyesi uchun (tannarx/sotuv narxi).
+        price_map = {
+            pb["product_id"]: (pb["purchase_price"], pb["selling_price"])
+            for pb in ProductBatch.objects
+            .filter(store=session.store, product_id__in=list(snapshots.keys()))
+            .values("product_id", "purchase_price", "selling_price")
+        }
+
+        # Kam chiqqan (topilmagan) tovarlar — finalize oxirida avtomatik spisaniye qilinadi.
+        shortages = []
+
         # 🔥 SNAPSHOT BO‘YICHA YURAMIZ (MUHIM)
         for product_id, expected in snapshots.items():
 
@@ -231,6 +242,16 @@ class InventoryService:
 
             diff = final - expected
 
+            # Kamomad (kam chiqqan) — keyin avtomatik spisaniye uchun yig'amiz.
+            if diff < 0:
+                p_price, s_price = price_map.get(product_id, (0, 0))
+                shortages.append({
+                    "product_id": product_id,
+                    "quantity": -diff,
+                    "purchase_price": p_price,
+                    "selling_price": s_price,
+                })
+
             if diff != 0: # diff
                 # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida har product uchun alohida UPDATE bajariladi.
                 # Sabab: o'zgaradigan batchlar oldindan yig'ilib `bulk_update` qilinmagan.
@@ -244,6 +265,17 @@ class InventoryService:
                 ).update(
                     quantity= final
                 )
+
+        # 🔻 KAMOMAD SPISANIYESI: inventarizatsiyada topilmagan tovarlar uchun
+        # avtomatik audit yozuvi. Qoldiq yuqorida allaqachon to'g'rilangani sababli
+        # bu yerda stock QAYTA kamaytirilmaydi (record-only).
+        if shortages:
+            from apps.writeoff.services import WriteOffService
+            WriteOffService.record_inventory_shortage(
+                session=session,
+                shortages=shortages,
+                user=session.started_by,
+            )
 
         session.status = InventorySession.Status.COMPLETED
         session.save(update_fields=["status"])
