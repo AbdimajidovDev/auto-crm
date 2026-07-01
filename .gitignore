@@ -211,5 +211,5 @@ assets/media/*
 assets/staticfiles/*
 assets/staticfiles/
 
-docs/
-docs/*
+#docs/
+#docs/*
