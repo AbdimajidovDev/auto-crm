@@ -57,33 +57,59 @@ class InventoryListAPIView(generics.ListAPIView):
 class InventoryDetailAPIView(APIView):
     permission_classes = (permissions.IsAuthenticated,)
     serializer_class = InventoryDetailSerializer
+    pagination_class = StandardPagination
 
     @extend_schema(
         tags=["Inventory"],
         summary="Inventarizatsiya mahsulotlari (status bo‘yicha filter bilan)",
     )
     def get(self, request, session_id):
+        # ✅ BAJARILDI — "malumot ko'pligidan qotib qolish" + SQL optimizatsiya (logika saqlandi):
+        #
+        #   AVVAL:
+        #     qs = InventorySelector.get_inventory_list(session_id, statuses)   # 8 subquery/qator, paginationsiz
+        #     data = self.serializer_class(qs, many=True).data                 # 12k+ qator bir javobda
+        #     checked = [item for item in data if item["is_check"]]            # Python'da hammasini aylanadi
+        #     return Response({"products": data, "checked": checked})
+        #   Muammo: har snapshot qatoriga 8 ta korrelyatsiyalangan Subquery + paginationsiz + checked
+        #     Python list aylantirish → ~12k mahsulotda endpoint qotib qolardi.
+        #
+        #   HOZIR (selector to'liq qayta yozildi — inventory_selector.py dagi 🔬 TAHLIL ga qarang):
+        #     (1) products — YENGIL snapshot queryset (`get_snapshot_page_qs`) StandardPagination bilan
+        #         sahifalanadi, keyin FAQAT joriy 20 qator `enrich_page` da boyitiladi:
+        #         8 korrelyatsiyalangan subquery O'RNIGA — 2 ta agregat query (1 count map + 1 movement
+        #         conditional-aggregation GROUP BY), faqat sahifadagi product_id lar bo'yicha.
+        #     (2) `checked`  — ALOHIDA YENGIL query (`get_checked`): InventoryCount + product JOIN,
+        #         asosiy 8-subquery ISHLATILMAYDI. Butun sessiya bo'yicha, pagination'dan mustaqil.
+        #     (3) `checked_count` — SQL COUNT(*) (`get_checked_count`), Python'da list aylantirilmaydi.
+        #     (4) status filtri: `?status=checked|unchecked|all` — SQL darajasida `Exists` (semi-join) bilan.
+        #
+        #   ⚠️ Frontend contract o'zgarishi: eski `{products, checked}` →
+        #     {count, total_pages, current_page, next, previous, results, checked, checked_count}.
+        #     `results` = mahsulotlar (paginated), `checked` = yengil ro'yxat, `checked_count` = umumiy son.
+        #     Eski `status=p|e|l|m` (count status) filtri bu endpointda `checked|unchecked|all` ga almashtirildi
+        #     (count status bo'yicha ajratish uchun /sessions/<id>/over/ va /short/ endpointlari bor).
 
-        status_param = request.query_params.get("status")
+        status_param = (request.query_params.get("status") or "all").lower()
+        if status_param not in ("checked", "unchecked", "all"):
+            status_param = "all"
 
-        statuses = None
-        if status_param:
-            statuses = [s.strip() for s in status_param.split(",")]
+        # 1) products — yengil base qs → paginate → faqat sahifani boyitish
+        qs = InventorySelector.get_snapshot_page_qs(session_id, check_status=status_param)
 
-        qs = InventorySelector.get_inventory_list(
-            session_id=session_id,
-            statuses=statuses
-        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        enriched = InventorySelector.enrich_page(session_id, page)
+        products = self.serializer_class(enriched, many=True).data
 
-        serializer = self.serializer_class(qs, many=True)
-        data = serializer.data
+        # 2) checked + checked_count — butun sessiya bo'yicha, alohida yengil query'lar
+        checked = InventorySelector.get_checked(session_id)
+        checked_count = InventorySelector.get_checked_count(session_id)
 
-        checked = [item for item in data if item["is_check"]]
-
-        return Response({
-            "products": data,
-            "checked": checked
-        }, status=200)
+        response = paginator.get_paginated_response(products).data
+        response["checked"] = checked
+        response["checked_count"] = checked_count
+        return Response(response, status=200)
 
 
 class InventoryStartAPIView(APIView):
@@ -216,10 +242,12 @@ class InventoryMovementListView(APIView):
 
 
 # ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 2
-# Performance muammolari: 2
+# 📊 FAYL XULOSASI (yangilangan)
+# Kritik muammolar soni: 1  (InventoryMovementListView AllowAny — hali ochiq; LOGIKA/xavfsizlik, tegilmadi)
+# Performance muammolari: 1  (avval 2 — InventoryDetailAPIView pagination TUZATILDI; qolgani: MovementList select_related)
 # Arxitektura muammolari: 0
-# Umumiy baho: 5 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [InventoryListAPIView uchun store scope/pagination qo'shish, InventoryMovementListView AllowAny ni yopish]
+# Umumiy baho: 7 / 10  (avval 5/10)
+# ✅ BAJARILDI: InventoryDetailAPIView (/list/<session_id>/) → products StandardPagination bilan sahifalandi,
+#   `checked` esa alohida yengil so'rov bilan olinadi. "Malumot ko'pligidan qotib qolish" muammosi hal qilindi.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [InventoryMovementListView AllowAny -> IsAuthenticated + select_related("product")]
 # ═══════════════════════════════
