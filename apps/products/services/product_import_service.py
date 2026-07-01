@@ -163,6 +163,21 @@ class ProductImportService:
         #   2) bitta qatordagi xato (masalan dublikat) butun importni bekor qilmasligi uchun.
         #      transaction.atomic() bloki ichida DB xatosidan keyin transaction "buziladi",
         #      shuning uchun har bir save() o'zining savepoint'iga o'raladi.
+        # ⚠️ MUAMMO [PERF]: Katta importda (masalan qoldiq faylidan ~12.5k mahsulot) bu sikl
+        # har qatorga ALOHIDA INSERT + alohida savepoint (BEGIN/RELEASE) yuboradi.
+        # Natija: ~N ta round-trip DB'ga → import bir necha daqiqa cho'zilishi va so'rov davomida
+        # bloklanish (ayniqsa import HTTP request ichida sinxron bajarilsa) mumkin.
+        # Sabab tushunarli: barcode/sku model.save() ichida generatsiya bo'ladi va bitta dublikat
+        # butun importни buzmasligi kerak. Lekin ikkalasini ham bulk yo'l bilan yechish mumkin.
+        # ✅ YECHIM (production):
+        #   1) barcode/sku'ni save()'dan tashqarida, sikldan oldin generatsiya qilib obyektga o'rnatish
+        #      (yoki DB default/sekvensiya), so'ng bloklarga bo'lib bulk_create ishlatish:
+        #        Product.objects.bulk_create(chunk, batch_size=500, ignore_conflicts=True)
+        #      ignore_conflicts unique dublikatlarни butun importни buzmasdan o'tkazib yuboradi.
+        #   2) Xato qatorlarni aniq hisoblash kerak bo'lsa: avval mavjud barcode/sku'larni bitta
+        #      query bilan ajratib (yuqorida allaqachon bor _existing_* metodlari), toza qatorlarni
+        #      bulk_create qilish → dublikatlar allaqachon "skipped"ga tushadi, per-row try/except shart emas.
+        #   3) Import og'ir bo'lsa — uni Celery/async task'ga ko'chirib, HTTP request'ni bloklamaslik.
         created_count = 0
         for row_num, product in to_create:
             try:
@@ -275,3 +290,15 @@ class ProductImportService:
                 unit_map[u.measurement.lower()] = u
 
         return unit_map
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1  (yakuniy save() sikli — har qatorga alohida INSERT + savepoint)
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Izoh: ✅ YAXSHI — kategoriya/brend/birlik map'lari va mavjud barcode/sku bulk query bilan
+#   oldindan olinadi (N+1 lookup yo'q). Yagona zaif joy — yakuniy per-row save() sikli.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [import'ni bulk_create(batch_size, ignore_conflicts) ga o'tkazish; og'ir importni async task'ga]
+# ═══════════════════════════════

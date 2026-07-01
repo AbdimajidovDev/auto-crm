@@ -1,3 +1,5 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Butunlay kommentlangan — O'LIK/DUBLIKAT kod. Jonli top-products mantiqi
+#   `reports/services/top_product_service.py` / `report_service.py` da. O'chirilishi tavsiya. GET perf ta'siri yo'q.
 # from django.db.models import Sum
 # from apps.sales.models import SaleItem
 #

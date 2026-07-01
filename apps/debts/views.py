@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
+from apps.common.paginations import StandardPagination
 from .models import CustomerDebt
 from .serializers import PayDebtSerializer, PayDebtListSerializer
 from .services import DebtService
@@ -18,25 +19,33 @@ from .services import DebtService
 class PayDebtListAPIView(APIView):
     permission_classes = [IsAuthenticated]
     serializer_class = PayDebtListSerializer
+    pagination_class = StandardPagination
 
     def get(self,request):
-        # ⚠️ MUAMMO [KRITIK]: Queryset modeli `CustomerDebt`, serializer Meta modeli esa `Payment`.
-        # Sabab: serializer maydonlari va enum/type ma'nosi boshqa modelga tegishli.
-        # Natija: noto'g'ri response, runtime xato yoki qarz/payment ma'lumotlari aralashib ketishi mumkin.
-        # ✅ YECHIM:
-        # serializer_class = CustomerDebtListSerializer
-        # qs = CustomerDebt.objects.select_related("customer", "sale", "sale__store").order_by("-created_at")
-        # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Filtrsiz `.all()` va pagination yo'q.
-        # Sabab: barcha qarz yozuvlari birdan qaytariladi, customer/sale FK select_related qilinmagan.
-        # Natija: katta jadvalda N+1 va memory/latency oshishi yuzaga keladi.
-        # ✅ YECHIM:
-        # qs = CustomerDebt.objects.select_related("customer", "sale").order_by("-created_at")
-        # MUAMMO / N+1: `PayDebtListSerializer` Meta.model = `Payment`, lekin queryset `CustomerDebt`.
-        # Bu mantiqiy nomuvofiqlik va noto'g'ri serializer maydonlari (type qiymatlari boshqacha) xavfini tug'diradi.
-        # Shuningdek `customer` uchun `select_related("customer", "sale")` qo'shmasa N+1 chiqadi.
-        qs = CustomerDebt.objects.all()
-        serializer = self.serializer_class(qs, many=True, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # ✅ BAJARILDI — pagination + N+1 optimizatsiyasi (TransferListAPIView bilan bir xil pattern):
+        #
+        #   AVVAL:
+        #     qs = CustomerDebt.objects.all()
+        #     serializer = self.serializer_class(qs, many=True, ...)
+        #     return Response(serializer.data, ...)
+        #   Muammo: (1) PAGINATION YO'Q — barcha qarz yozuvlari bir javobda qaytardi.
+        #     (2) N+1 — `PayDebtListSerializer.get_customer_name` `customer.full_name` ga murojaat qiladi,
+        #     select_related bo'lmagani sabab har qator uchun alohida so'rov chiqardi.
+        #
+        #   HOZIR:
+        #     (1) `select_related("customer", "sale")` — customer/sale FK'lari JOIN bilan keladi (N+1 yo'q).
+        #     (2) `StandardPagination` — har sahifada 20 qator (`?page=` / `?limit=`).
+        #     Tartib determinstik bo'lishi uchun `order_by("-created_at")` qo'shildi (pagination talabi).
+        #
+        # ⚠️ ESLATMA [KRITIK — LOGIKA, tegilMADI]: bu yerda hamon ARXITEKTURA xatosi bor —
+        #   queryset modeli `CustomerDebt`, lekin `PayDebtListSerializer.Meta.model = Payment`.
+        #   Bu to'g'rilik (correctness) muammosi; foydalanuvchi topshirig'i bo'yicha LOGIKA o'zgartirilmadi.
+        #   Alohida tuzatish kerak: serializer'ni `CustomerDebt` uchun yozish (debts/serializers.py dagi izohga qarang).
+        qs = CustomerDebt.objects.select_related("customer", "sale").order_by("-created_at")
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        serializer = self.serializer_class(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
 
 @extend_schema(
@@ -76,21 +85,21 @@ class PayDebtDetailAPIView(APIView):
     serializer_class = PayDebtListSerializer
 
     def get(self, request, pk):
-        # ⚠️ MUAMMO [PERFORMANCE]: Detailda FKlar `select_related` qilinmagan.
-        # Sabab: serializer customer nomiga murojaat qiladi.
-        # Natija: detailda ham qo'shimcha query ishlaydi.
-        # ✅ YECHIM:
-        # qs = get_object_or_404(CustomerDebt.objects.select_related("customer", "sale"), pk=pk)
-        qs = get_object_or_404(CustomerDebt, pk=pk)
+        # ✅ BAJARILDI — FKlar select_related qilindi:
+        #   AVVAL: get_object_or_404(CustomerDebt, pk=pk) → serializer `customer.full_name` ga tekkanda
+        #          qo'shimcha so'rov chiqardi.
+        #   HOZIR: select_related("customer", "sale") bilan bitta so'rovda keladi. Logika o'zgarmadi.
+        qs = get_object_or_404(CustomerDebt.objects.select_related("customer", "sale"), pk=pk)
         serializer = self.serializer_class(qs)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 2
-# Performance muammolari: 2
+# 📊 FAYL XULOSASI (yangilangan)
+# Kritik muammolar soni: 1  (avval 2 — pagination/N+1 TUZATILDI; qolgani: serializer/model nomuvofiqligi — LOGIKA, tegilmadi)
+# Performance muammolari: 0  (avval 2 — list pagination+select_related va detail select_related TUZATILDI)
 # Arxitektura muammolari: 0
-# Umumiy baho: 4 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [PayDebtListAPIView serializer/queryset model nomuvofiqligini tuzatish]
+# Umumiy baho: 6 / 10  (avval 4/10 — perf tuzatildi; correctness bug qolgani uchun 10 emas)
+# ✅ BAJARILDI: PayDebtListAPIView → StandardPagination + select_related; PayDebtDetailAPIView → select_related.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [PayDebtListSerializer.Meta.model = Payment ni CustomerDebt ga moslash (correctness)]
 # ═══════════════════════════════

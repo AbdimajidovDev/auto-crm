@@ -26,6 +26,9 @@ def _assert_store_access(user, store):
 
 
 def _scoped_queryset(user):
+    # ✅ YAXSHI: select_related("store","created_by") — serializerdagi store_name/created_by_name
+    #   (source=) N+1 siz. items_count annotate qilingan — serializer IntegerField sifatida o'qiydi,
+    #   har qator uchun alohida COUNT query yo'q.
     qs = (
         WriteOff.objects
         .select_related("store", "created_by")
@@ -33,6 +36,12 @@ def _scoped_queryset(user):
     )
     if user.is_superuser:
         return qs
+    # ⚠️ MUAMMO [PERF]: non-superuser filtri store__user_links ga JOIN qo'shadi. Bu JOIN
+    #   annotate(Count("items")) bilan bir vaqtda ishlaganda kartezian ko'payish xavfi bor:
+    #   items_count = (items soni) × (mos user_links qatorlari soni). Odatda user+is_active
+    #   bo'yicha 1 qator bo'lgani uchun inflatsiya bo'lmaydi, lekin bitta userda bir do'konga
+    #   bir nechta aktiv link bo'lsa — items_count ikki-uch barobar noto'g'ri chiqadi.
+    # ✅ YECHIM: Count'ni distinct qiling — annotate(items_count=Count("items", distinct=True)).
     return qs.filter(
         store__user_links__user=user,
         store__user_links__is_active=True,
@@ -57,6 +66,8 @@ class WriteOffListAPIView(APIView):
     def get(self, request):
         qs = _scoped_queryset(request.user)
 
+        # ✅ YAXSHI: store va reason filtrlari indekslangan (models: Index(["store","reason"]),
+        #   reason db_index=True) — filtrlangan ro'yxat full-table scan qilmaydi.
         store = request.query_params.get("store")
         if store:
             qs = qs.filter(store_id=store)
@@ -65,6 +76,7 @@ class WriteOffListAPIView(APIView):
         if reason:
             qs = qs.filter(reason=reason)
 
+        # ✅ YAXSHI: ro'yxat har doim paginate qilinadi — 6.4k spisaniye bir requestda qaytmaydi.
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(qs, request, view=self)
         serializer = WriteOffListSerializer(page, many=True)
@@ -153,3 +165,18 @@ class WriteOffDetailAPIView(APIView):
         write_off = self._get_object(request, pk)
         WriteOffService.delete_write_off(write_off=write_off)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak:
+#   [_scoped_queryset: annotate(Count("items")) + user_links JOIN kartezian xavfi —
+#    Count("items", distinct=True) qo'ying]
+# Izoh: List paginated + indekslangan filtrlar + select_related + annotate items_count
+#       (N+1 yo'q). Detail/Create prefetch_related("items__product") bilan N+1 dan himoyalangan.
+#       Yagona real xavf — non-superuser scope JOIN'i bilan Count inflatsiyasi (distinct yechadi).
+# ═══════════════════════════════

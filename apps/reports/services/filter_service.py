@@ -1,3 +1,5 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Butunlay kommentlangan — O'LIK/DUBLIKAT kod. Jonli store filtri
+#   `store_scope_service.py` (ReportStoreScope.resolve) da. O'chirilishi tavsiya. GET perf ta'siri yo'q.
 # # apps/reports/services/filter_service.py
 # from rest_framework.exceptions import ValidationError
 #

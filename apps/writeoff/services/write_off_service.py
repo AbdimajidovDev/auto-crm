@@ -224,3 +224,19 @@ class WriteOffService:
         if fields:
             write_off.save(update_fields=fields)
         return write_off
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 10 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# Izoh: Bu write-path (GET emas), lekin query-hygiene namunaviy:
+#   - Batchlar loop DAN TASHQARIDA bitta filter(product_id__in=...) + select_for_update bilan
+#     olinadi (loop ichida query yo'q).
+#   - Stock o'zgarishlari F() ifodalari bilan bulk_update, itemlar bulk_create.
+#   - Low-stock baholash transaction.on_commit orqali rejalashtiriladi (asosiy tranzaksiyani
+#     bloklamaydi). N+1 va loop-ichi-query muammolari yo'q.
+# ═══════════════════════════════

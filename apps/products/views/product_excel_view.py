@@ -59,9 +59,22 @@ class ProductImportTemplateAPIView(APIView):
         if not os.path.exists(TEMPLATE_PATH):
             return Response({"detail": "Shablon fayl topilmadi."}, status=404)
 
+        # ✅ YAXSHI: GET faqat statik shablon faylni `FileResponse` (stream) orqali qaytaradi —
+        # DB so'rovi yo'q, xotiraga to'liq yuklamaydi. Bu GET tomonida perf muammosi yo'q.
         return FileResponse(
             open(TEMPLATE_PATH, "rb"),
             as_attachment=True,
             filename="mahsulot_shablon.xlsx",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0  (bu view'ning o'zida — og'irlik POST import servisida, product_import_service.py ga qarang)
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: GET (shablon yuklab olish) stream bilan — yaxshi. Import og'irligi ProductImportService ichida (alohida auditlangan).
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [product_import_service.py dagi per-row save() sikli — bulk_create]
+# ═══════════════════════════════

@@ -134,6 +134,11 @@ class KPIService:
         # Joriy + oldingi davrni bitta aggregate'da emas,
         # Django ORM bitta queryset'da ikki range aggregate qila olmaydi —
         # shuning uchun ikkita query, lekin har biri bitta SQL.
+        # ⚠️ MUAMMO [PERF]: cur/prev aggregate'lar Sale (65k qator) ustidan created_at__range
+        # bilan ishlaydi. Sale.created_at (auto_now_add) ustida db_index YO'Q — natijada har
+        # aggregate uchun sana oralig'ini topishda range scan og'irlashadi.
+        # ✅ YECHIM: Sale modeliga index qo'yish, masalan:
+        #   class Meta: indexes = [models.Index(fields=["store", "created_at"])]
         cur  = sales_qs.aggregate(
             revenue=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()),
             paid   =Coalesce(Sum("paid_amount"),  Value(Decimal("0")), output_field=DecimalField()),
@@ -158,6 +163,11 @@ class KPIService:
             is_active=True,
         )
         low_stock_qs = _apply_store_filter(low_stock_qs, store_id)
+        # ⚠️ MUAMMO [PERF]: .count() ProductBatch (12.5k) ustida quantity__lt=5 va is_active
+        # filtri bilan ishlaydi. quantity ustida index YO'Q — COUNT uchun to'liq skan.
+        # Bu KPI'da har chaqiruvda alohida SQL bo'ladi (aggregate'larga qo'shilmagan).
+        # ✅ YECHIM: quantity/is_active ustiga composite index qo'yish
+        #   models.Index(fields=["store", "quantity"]) — kam qolgan tovarlarni tez topish uchun.
         low_stock_count = low_stock_qs.count()
 
         return {
@@ -192,6 +202,12 @@ class TopPartsService:
 
     @staticmethod
     def get(store_id: str | None, dr: DateRange) -> list[dict]:
+        # ⚠️ MUAMMO [PERF]: .select_related("product") bu yerda BEHUDA — pastda .values()
+        # ishlatilgani uchun ORM select_related JOIN'ini tashlab yuboradi (values o'zi kerakli
+        # ustunlarni join qiladi). Chalkashlik keltiradi, real foyda bermaydi.
+        # Bundan muhimi: filter SaleItem(65k) -> Sale JOIN orqali sale__created_at__range bo'yicha
+        # boradi, Sale.created_at indekssiz — katta oraliqda sekin.
+        # ✅ YECHIM: select_related'ni olib tashlash (values bilan keraksiz) + Sale.created_at index.
         qs = (
             SaleItem.objects
             .filter(sale__created_at__range=(dr.current_from, dr.current_to))
@@ -314,6 +330,11 @@ class ChartService:
 
     @staticmethod
     def get(store_id: str | None, dr: DateRange, period: str) -> dict:
+        # ⚠️ MUAMMO [PERF]: Chart uchun Sale(65k) created_at__range bo'yicha filtrlanadi va
+        # keyin TruncDay/TruncWeek/TruncMonth bilan GROUP BY qilinadi. created_at indekssiz +
+        # Trunc funksiyasi ustidan guruhlash — katta oraliqda (yearly=365 kun) og'ir.
+        # ✅ YECHIM: Sale.created_at index; guruhlash tez-tez bo'lsa oldindan agregatlangan
+        # (kunlik jamlanma) jadval ko'rib chiqilsin.
         qs = Sale.objects.filter(
             created_at__range=(dr.current_from, dr.current_to)
         )
@@ -383,3 +404,15 @@ class ChartService:
         labels = UZ_MONTHS[:]
         values = [data_map.get(m, Decimal("0")) for m in range(1, 13)]
         return {"labels": labels, "data": values}
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 4  (Sale.created_at indekssiz aggregate — KPI/Chart/TopParts;
+#                             ProductBatch.quantity indekssiz .count(); values bilan behuda select_related)
+# Arxitektura muammolari: 0
+# Umumiy baho: 6 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [Sale(store, created_at) va ProductBatch(store, quantity) indekslarini qo'shish]
+# Eslatma: LowStockService va RecentSalesService only()+slice bilan namunali yozilgan (✅).
+# ═══════════════════════════════

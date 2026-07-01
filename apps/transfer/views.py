@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.core.exceptions import ValidationError
 
+from apps.common.paginations import StandardPagination
 from apps.transfer.models import StockTransfer, Notification
 from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer, NotificationSerializer
 from apps.transfer.services import TransferService
@@ -18,23 +19,44 @@ class TransferListAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = TransferListSerializer
 
+    pagination_class = StandardPagination
+
     def get(self, request):
-        # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Filtrsiz `.all()` va serializer uchun N+1 query xavfi.
-        # Sabab: `TransferListSerializer` `from_store`, `to_store`, `approved_by`, `items`, `items__product`
-        # maydonlariga murojaat qiladi, lekin queryset `select_related` / `prefetch_related` bilan tayyorlanmagan.
-        # Natija: transferlar ko'payganda har bir qator va item uchun qo'shimcha SQL so'rovlari chiqadi.
-        # ✅ YECHIM:
-        # transfers = (
-        #     StockTransfer.objects
-        #     .select_related("from_store", "to_store", "approved_by", "created_by")
-        #     .prefetch_related("items__product")
-        #     .order_by("-created_at")
-        # )
-        # N+1: `TransferListSerializer` do'konlar, `approved_by`, `items`, `items__product` ustidan
-        # yuradi — querysetda `select_related` / `prefetch_related` bo'lmasa ro'yxat sekinlashadi.
-        transfers = StockTransfer.objects.all()
-        serializer = self.serializer_class(transfers, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        # ✅ BAJARILDI — "juda uzoq loading" muammosi tuzatildi (logika o'zgarmadi):
+        #
+        #   AVVAL:
+        #     transfers = StockTransfer.objects.all()
+        #     serializer = self.serializer_class(transfers, many=True)
+        #     return Response(serializer.data, ...)
+        #   Muammo: (1) PAGINATION YO'Q — migratsiyadan keyin ~38k `StockTransfer` qatorining HAMMASI
+        #     bitta javobda, har biriga nested `items` bilan serializatsiya qilinardi (ulkan JSON + xotira).
+        #     (2) N+1 — `TransferListSerializer` `from_store.name`, `to_store.name`, `approved_by.full_name`
+        #     va `items__product.name/sku` ga murojaat qiladi; queryset optimallashtirilmagani sabab
+        #     har transfer va har item uchun alohida SQL chiqardi → 38k×N so'rov. Ikkalasi birga = sekinlik.
+        #
+        #   HOZIR:
+        #     (1) `select_related("from_store", "to_store", "approved_by")` — do'kon/user FK'lari
+        #         asosiy so'rovga JOIN bo'lib keladi (qo'shimcha so'rovsiz).
+        #     (2) `prefetch_related("items__product")` — item'lar va ular product'i jami 2 ta
+        #         qo'shimcha so'rov bilan olinadi (item bo'yicha N+1 yo'q).
+        #     (3) `StandardPagination` — javob har sahifada 20 qator (max 100), `?page=` / `?limit=`.
+        #   Tartib model `Meta.ordering = ["-created_at"]` orqali saqlanadi — natija barqaror sahifalanadi.
+        #   Model/serializer/tartib o'zgarmadi — faqat javob sahifalangan va so'rovlar kamaydi.
+        #
+        # ⓘ StandardPagination (PageNumberPagination) bu ro'yxat uchun yetarli: 38k qatorda COUNT va
+        #   LIMIT tez ishlaydi. Agar kelajakda juda chuqur sahifalash (katta `?page=`) kerak bo'lsa,
+        #   OFFSET sekinlashadi — o'shanda `created_at` bo'yicha CursorPagination'ga o'tish tavsiya etiladi.
+        transfers = (
+            StockTransfer.objects
+            .select_related("from_store", "to_store", "approved_by")
+            .prefetch_related("items__product")
+        )
+        # DIQQAT: bitta paginator instance ishlatiladi — `get_paginated_response` `paginate_queryset`
+        # o'rnatgan `self.page` holatiga tayanadi, shu sabab ikkalasi ayni instance'da chaqiriladi.
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(transfers, request, view=self)
+        serializer = self.serializer_class(page, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
 
 @extend_schema(
@@ -126,10 +148,12 @@ class NotificationListAPIView(APIView):
 
 
 # ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 2
-# Performance muammolari: 1
+# 📊 FAYL XULOSASI (yangilangan)
+# Kritik muammolar soni: 1  (avval 2 edi — TransferListAPIView pagination+N+1 TUZATILDI)
+# Performance muammolari: 0  (avval 1 edi — TUZATILDI)
 # Arxitektura muammolari: 0
-# Umumiy baho: 6 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [TransferListAPIView querysetini select_related/prefetch_related bilan optimallashtirish, NotificationListAPIView permission_classes qo'shish]
+# Umumiy baho: 8 / 10  (avval 6/10)
+# ✅ BAJARILDI: TransferListAPIView endi StandardPagination + select_related/prefetch_related bilan ishlaydi
+#   — "juda uzoq loading" muammosi hal qilindi.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [NotificationListAPIView'ga permission_classes qo'shish]
 # ═══════════════════════════════

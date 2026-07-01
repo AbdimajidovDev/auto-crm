@@ -29,6 +29,12 @@ class _BaseLowStockListView(generics.ListAPIView):
     status_value = None
 
     def get_queryset(self):
+        # ✅ YAXSHI: status bo'yicha filtr indekslangan (models: Index(["status", "action_type"]),
+        #   Index(["status", "-created_at"])) — full-table scan yo'q, ordering ham indeksdan foydalanadi.
+        # ✅ YAXSHI: select_related("store", "product") — serializerdagi store_name/product_name
+        #   (source=, SerializerMethodField EMAS) N+1 siz bitta JOIN bilan hal bo'ladi.
+        # ✅ YAXSHI: bu GET endpoint tayyor LowStockItem yozuvlarini o'qiydi (12.5k ProductBatch
+        #   ustidan og'ir aggregate emas). Og'ir baholash write-path'da hisoblab qo'yilgan — o'qish arzon.
         return (
             LowStockItem.objects
             .filter(status=self.status_value)
@@ -67,3 +73,18 @@ class LowStockListAPIView(_BaseLowStockListView):
 class LowStockHistoryAPIView(_BaseLowStockListView):
     status_value = LowStockItem.Status.RESOLVED
     ordering = ["-resolved_at", "-created_at"]
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 10 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# Izoh: Ikkala endpoint ham paginated, filterlangan, indekslangan status bo'yicha
+#       filter va select_related bilan N+1 dan himoyalangan. DRY base klass.
+#       History ordering(-resolved_at) uchun (status, -created_at) indeksi bor,
+#       lekin resolved_at bo'yicha alohida indeks yo'q — hajm o'sganda faqat shu
+#       bir tartiblash uchun (status, -resolved_at) indeksini ko'rib chiqish mumkin.
+# ═══════════════════════════════

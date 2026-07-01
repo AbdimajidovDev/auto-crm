@@ -49,6 +49,13 @@ class ProfileView(RetrieveAPIView):
             )
 
         # ── history prefetch — bitta SQL ────────────────────
+        # ✅ YAXSHI: stores uchun role `Subquery` orqali annotate qilingan — StoreUser bo'yicha N+1 yo'q.
+        # ⚠️ MUAMMO [PERF]: `Prefetch("history", ...)` foydalanuvchining BARCHA history qatorlarini yuklaydi.
+        # Sabab: UserHistory har login/logout'da yoziladi — bir user uchun vaqt o'tib minglab qator to'planadi.
+        #        Serializer `get_history` faqat oxirgi 5 tasini ko'rsatadi, qolgani behuda o'qiladi.
+        # ✅ YECHIM: history'ni cheklangan alohida so'rov bilan olish (Prefetch'da LIMIT ishlamaydi):
+        #     recent = list(UserHistory.objects.filter(user=user).order_by("-created_at")[:5])
+        #     user_with_history.recent_history = recent   # serializer shu atributdan foydalanadi
         user_with_history = (
             User.objects
             .prefetch_related(
@@ -64,3 +71,13 @@ class ProfileView(RetrieveAPIView):
         user_with_history.prefetched_stores = stores
 
         return user_with_history
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [history prefetch'ini oxirgi 5 qator bilan cheklash — o'sib boruvchi UserHistory jadvalidan butun tarixni yuklamaslik]
+# ═══════════════════════════════

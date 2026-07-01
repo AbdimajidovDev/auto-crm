@@ -54,7 +54,13 @@ class WriteOffItemSerializer(serializers.ModelSerializer):
         ]
 
 
+# ✅ YAXSHI: WriteOffItemSerializer product ma'lumotlarini source= orqali oladi
+#   (SerializerMethodField EMAS) — Detail viewdagi prefetch_related("items__product") bilan
+#   N+1 bo'lmaydi. items ni loop ichida qayta so'rov yo'q.
 class WriteOffListSerializer(serializers.ModelSerializer):
+    # ✅ YAXSHI: store_name/created_by_name source= bilan — view select_related bergani uchun
+    #   qo'shimcha query yo'q. items_count annotate'dan IntegerField sifatida o'qiladi,
+    #   har qator uchun alohida COUNT so'rovi (N+1) bo'lmaydi.
     store_name = serializers.CharField(source="store.name", read_only=True)
     reason_display = serializers.CharField(source="get_reason_display", read_only=True)
     created_by_name = serializers.CharField(source="created_by.full_name", read_only=True, default=None)
@@ -82,3 +88,16 @@ class WriteOffDetailSerializer(serializers.ModelSerializer):
             "comment", "total_amount", "created_by", "created_by_name",
             "inventory_session", "created_at", "items",
         ]
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 10 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# Izoh: Barcha related maydonlar source= orqali (SerializerMethodField/loop ichida query yo'q).
+#       items_count annotate'dan o'qiladi. N+1 faqat view select_related/prefetch bermasa
+#       yuzaga keladi — write_off_view'da to'g'ri berilgan.
+# ═══════════════════════════════

@@ -29,9 +29,22 @@ class BrandSerializer(serializers.ModelSerializer):
                 id=self.instance.id
             )
 
+        # ✅ YAXSHI: `name` ustunida `db_index=True` bor (Brand modeli), shu sabab bu `iexact` mavjudlik
+        # tekshiruvi indeksdan foydalanadi — validatsiya arzon. Faqat write (POST/PUT) yo'lida ishlaydi.
         if qs.exists():
             raise serializers.ValidationError(
                 "Bunday brand mavjud."
             )
 
         return value
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: Oddiy ModelSerializer, 2 ta maydon, GET tomonida N+1 yo'q. Validatsiya faqat write yo'lida.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# ═══════════════════════════════

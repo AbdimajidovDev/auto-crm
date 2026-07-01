@@ -87,6 +87,10 @@ class InventoryOverCountView(_InventoryResultBaseView):
     """
 
     def get_queryset(self):
+        # ✅ YAXSHI: session olish get_object_or_404 orqali (bir query), keyin
+        # butun DB logikasi servicega delegatsiya qilingan — view yupqa.
+        # ✅ YAXSHI: pagination + filter + search + ordering base view'da konfiguratsiya qilingan,
+        # ro'yxat hech qachon paginationsiz qaytmaydi.
         session = self._get_session()
         return InventoryResultService.over_counts(session.pk)
 
@@ -119,3 +123,19 @@ class InventoryShortCountView(_InventoryResultBaseView):
     def get_queryset(self):
         session = self._get_session()
         return InventoryResultService.short_counts(session.pk)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# Izoh: View yupqa (SRP), base klass DRY, pagination/filter/search/ordering bor.
+#       DB logikasi InventoryResultService da — Subquery + select_related bilan
+#       N+1 va kartezian ko'payishdan himoyalangan. Yagona kichik nuqta:
+#       InventoryCount da (session, status) bo'yicha alohida indeks yo'q
+#       (unique_together (session, product) faqat session prefiksini qoplaydi) —
+#       lekin natijalar paginatsiyalangani uchun bu kritik emas.
+# ═══════════════════════════════

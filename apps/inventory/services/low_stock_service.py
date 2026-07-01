@@ -73,6 +73,12 @@ class LowStockService:
             .values_list("store_id", flat=True)
             .distinct()
         )
+        # ⚠️ MUAMMO [PERF]: loop ichida store bo'yicha alohida schedule_evaluation.
+        #   Har bir chaqiruv on_commit'ga bitta product_ids=[product_id] li evaluate_batch qo'yadi,
+        #   ya'ni N ta store uchun N ta alohida aggregate + N ta bulk sikli. Bir mahsulot ko'p
+        #   do'konda bo'lsa — bu ko'p mayda tranzaksiya. GET emas (min_stock o'zgarganda ishlaydi),
+        #   shuning uchun prioritet past, lekin store'lar bo'yicha guruhlab bitta rejalashtirishga
+        #   birlashtirsa bo'ladi.
         for store_id in store_ids:
             LowStockService.schedule_evaluation(store=store_id, product_ids=[product_id])
 
@@ -307,3 +313,16 @@ class LowStockService:
                 seen.add(pid)
                 ordered.append(pid)
         return ordered
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1  (reevaluate_product: store'lar bo'yicha loopда alohida schedule)
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: ✅ YAXSHI — evaluate_batch loop ichida query qilmaydi: stock + threshold bitta aggregate,
+#   mavjud OPEN yozuvlar bitta query, yaratish bulk_create, hal qilish bulk_update, xabarlar bulk_create.
+#   12.5k ProductBatch muhitida ham so'rov soni CHEGARALANGAN (N+1 yo'q). Bu GET emas — yozuv/hodisa yo'li.
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [reevaluate_product'da store_ids bo'yicha bitta guruhlangan rejalashtirish]
+# ═══════════════════════════════

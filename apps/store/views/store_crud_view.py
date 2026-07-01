@@ -26,6 +26,12 @@ class StoreListAPIView(APIView):
     serializer_classes = StoreListSerializer
 
     def get(self, request):
+        # ⚠️ MUAMMO [PERF]: Ro'yxat paginationsiz qaytadi — `store_list()` butun jadvalni (`.all()`) yuklaydi.
+        # Do'konlar soni odatda kichik, lekin har do'kon uchun serializerdagi `get_sellers` alohida
+        # `user_links` query yuboradi (N+1). 48k StockEntry emas, do'kon soni × sotuvchi query masshtabi.
+        # ✅ YECHIM: selectorda `prefetch_related("user_links__user")` (store_crud_selector.py da flag qilingan)
+        # + kerak bo'lsa StandardPagination qo'shish:
+        #   class StoreListAPIView(generics.ListAPIView): pagination_class = StandardPagination ...
         shops = StoreSelector.store_list()
         serializer = self.serializer_classes(shops, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -65,6 +71,11 @@ class StoreDetailAPIView(APIView):
         summary="- ID orqali bitta Do'kon malumotini olish",
     )
     def get(self, request, pk):
+        # ⚠️ MUAMMO [PERF]: `get_store(pk)` prefetchsiz bitta obyekt qaytaradi, `StoreDetailSerializer.get_sellers`
+        # esa `user_links.filter(is_active=True).select_related("user")` bilan qo'shimcha 1 query yuboradi.
+        # Bitta obyekt uchun kam xarajat, lekin barqaror query byudjeti uchun prefetch afzal.
+        # ✅ YECHIM: get_object_or_404 querysetiga
+        #   Prefetch("user_links", queryset=StoreUser.objects.filter(is_active=True).select_related("user"))
         store = StoreSelector.get_store(pk)
         serializer = self.serializer_class(store)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -89,3 +100,15 @@ class StoreDetailAPIView(APIView):
         store = StoreSelector.get_store(pk)
         store.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 2
+#   - StoreListAPIView.get: paginationsiz `.all()` + serializerda sellers N+1 (store_crud_selector.py da flag)
+#   - StoreDetailAPIView.get: sellers uchun prefetchsiz qo'shimcha query
+# Arxitektura muammolari: 0
+# Umumiy baho: 7 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [store_list querysetiga user_links prefetch + list pagination]
+# ═══════════════════════════════

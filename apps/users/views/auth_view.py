@@ -245,3 +245,14 @@ class ResetPasswordView(APIView):
             {"detail": "Password successfully reset."},
             status=status.HTTP_200_OK
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0  (barcha endpointlar POST — GET ro'yxat/queryset yo'q, ORM perf doirasida tekshiriladigan narsa yo'q)
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: GET performance auditi doirasida muammo yo'q. Har login/logout `UserHistory.objects.create(...)` yozadi —
+#        bu jadval tez o'sadi va ProfileView'dagi history prefetch'iga bevosita ta'sir qiladi (o'sha yerga qarang).
+# ═══════════════════════════════

@@ -107,6 +107,7 @@ class WriteOffItem(models.Model):
 """
 Excel orqali kiritilgan malumotlarni dbdan o'chirish:
 
+sql ga kirish:  psql -U avtoyon_user -h localhost -d avtoyon_db
 
 BEGIN;
 

@@ -97,3 +97,22 @@ class InventoryResultService:
     def short_counts(cls, session_id: int):
         """Kam chiqqan mahsulotlar (counted < system → status='l')."""
         return cls._base_queryset(session_id, status=InventoryCount.Status.LESS)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# Izoh:
+#   ✅ system_quantity correlated Subquery bilan hisoblanadi — annotate+JOIN kartezian
+#      ko'payishidan himoya (Sale namunasidagi kabi to'g'ri strategiya).
+#   ✅ select_related("product","product__category","product__unit_measurement") — serializerdagi
+#      product_name/category_name/unit_measurement N+1 siz.
+#   ✅ Natija view'da paginate qilingani uchun Subquery faqat sahifadagi qatorlar uchun ishlaydi.
+#   ⚠️ Kichik [PERF]: InventoryCount(session, status) uchun alohida composite indeks yo'q
+#      (unique_together (session, product) faqat session prefiksini beradi). Bir sessiyada
+#      juda ko'p count bo'lsa status bo'yicha filtr indekssiz — hozirgi hajmda kritik emas.
+# ═══════════════════════════════

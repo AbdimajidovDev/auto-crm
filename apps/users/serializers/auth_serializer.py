@@ -89,3 +89,14 @@ class UserHistorySerializer(serializers.ModelSerializer):
         model = UserHistory
         fields = ("id", "action", "ip_address", "user_agent", "created_at")
         read_only_fields = fields
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0  (barcha serializerlar POST/auth uchun — GET ro'yxat/queryset yo'q, N+1 xavfi yo'q)
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: GET performance doirasida muammo yo'q. (Perf tashqarisi: AdminLoginSerializer.validate ichida `print(...)`
+#        debug qatori qolib ketgan — production log shovqinini kamaytirish uchun olib tashlash tavsiya.)
+# ═══════════════════════════════

@@ -123,6 +123,22 @@ def _base_sales_qs(date_from: date, date_to: date, store_id: int | None):
     Qaytarilgan sotuvlarni chiqarib tashlagan, annotate qilingan asosiy Sales QS.
     SummaryService, BranchService va boshqalar uchun umumiy base.
     """
+    # ⚠️ MUAMMO [KRITIK/PERF]: `created_at__date__gte/lte` — `__date` transform ustunni SQL'da
+    # `DATE(created_at)` / `CAST(created_at AS date)` ga o'raydi. Bu so'rovni NON-SARGABLE qiladi:
+    # `created_at` ustunidagi indeks (hozir yo'q ham) bu holda ISHLAMAYDI, chunki index xom ustunga,
+    # so'rov esa funksiya natijasiga qo'yilgan. Natija: bu base QS SummaryService, BranchService,
+    # TopProducts va boshqa barcha report bloklarida ishlatilgani sabab, HAR report so'rovida ~65k
+    # Sale qatori TO'LIQ skanerlanadi (bir dashboard = bir necha shunday skan).
+    # ✅ YECHIM:
+    #   1) `__date` o'rniga xom datetime chegara bilan filtrlash (sargable, indeks ishlaydi):
+    #        from datetime import datetime, time
+    #        start = datetime.combine(date_from, time.min)          # 00:00:00
+    #        end   = datetime.combine(date_to,   time.max)          # 23:59:59.999999
+    #        .filter(created_at__gte=start, created_at__lte=end)
+    #      (yoki yarim-ochiq: created_at__lt = date_to + 1 kun)
+    #   2) Sale modeliga `created_at` (va `store`,`created_at`) kompozit indeksini qo'shish
+    #      — sales/models.py dagi izohga qarang.
+    #   3) Vaqt mintaqasi muhim bo'lsa, xom chegaralarni `timezone.make_aware` bilan hosil qilish.
     return (
         Sale.objects
         .filter(

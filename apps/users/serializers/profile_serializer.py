@@ -85,9 +85,26 @@ class ProfileSerializer(serializers.ModelSerializer):
         return None
 
     def get_history(self, obj) -> list:
+        # ⚠️ MUAMMO [PERF]: `obj.history.all()` prefetch qilingan BARCHA history obyektlarini Pythonda saralaydi,
+        # keyin `[:5]` bilan kesadi. UserHistory o'sib boruvchi jadval (har login/logout yozuv) — yuzlab/minglab
+        # qator xotiraga yuklanadi va Pythonda sort qilinadi, holbuki faqat 5 tasi kerak.
+        # Eslatma: view'dagi Prefetch allaqachon `-created_at` bo'yicha tartiblangan — bu qayta sort ortiqcha.
+        # ✅ YECHIM: DB darajasida cheklash. View'da `recent_history = UserHistory.objects....[:5]` qilib,
+        #   bu yerda `UserHistorySerializer(obj.recent_history, many=True).data` qaytarish.
         histories = sorted(
             obj.history.all(),
             key=lambda h: h.created_at,
             reverse=True,
         )[:5]
         return UserHistorySerializer(histories, many=True).data
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 1  (get_history barcha history'ni Pythonda sort+slice qiladi — DB LIMIT emas)
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak:
+#   [1] history'ni DB darajasida oxirgi 5 qatorga cheklab, serializerda qayta sort qilmaslik
+# ═══════════════════════════════

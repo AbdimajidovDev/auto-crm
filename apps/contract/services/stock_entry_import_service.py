@@ -205,6 +205,11 @@ class StockEntryImportService:
         if ws is None:
             raise ValidationError("Excel faylda ishchi varaq topilmadi.")
 
+        # YAXSHI: read_only=True + data_only=True - openpyxl formulalarni hisoblamaydi va lazy o'qiydi.
+        # MUAMMO [KRITIK]: list(ws.iter_rows(...)) BARCHA satrlarni bir zumda xotiraga materializatsiya qiladi.
+        #   ~48k qatorli faylda bu katta RAM va sekin request demak. iter_rows generatorining afzalligi yo'qoladi.
+        # YECHIM: satr sonini oldindan cheklash yoki chunk-lab ishlash:
+        #   MAX_ROWS = 5000; ws.max_row tekshiruvi yoki enumerate(ws.iter_rows(...)) ni generator sifatida uzatish.
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             raise ValidationError("Excel fayl bo'sh.")
@@ -234,6 +239,10 @@ class StockEntryImportService:
     @staticmethod
     def _build_product_maps(parsed) -> dict:
         """barcode/sku/nom bo'yicha bitta-bittadan query — faqat ACTIVE mahsulotlar."""
+        # YAXSHI: Mahsulotlar loop ichida emas, __in orqali 3 ta jamlangan query bilan olinadi (barcode/sku/name).
+        #   Bu N+1 ni oldini oladi - _resolve_product keyin faqat xotiradagi map'dan o'qiydi. Namunali yechim.
+        # Eslatma [PERF]: name uchun annotate(Lower("name")) filtri indeksdan foydalanmaydi (funktsional indeks yo'q),
+        #   agar Product jadvali katta bo'lsa nom bo'yicha qidiruv sekin bo'lishi mumkin. barcode/sku afzal.
         barcodes = {p["barcode"] for p in parsed if p["barcode"]}
         skus     = {p["sku"] for p in parsed if p["sku"]}
         names    = {p["name"].lower() for p in parsed if p["name"]}
@@ -346,3 +355,20 @@ class StockEntryImportService:
             if wholesale_price > selling_price:
                 return "optom narx sotish narxidan yuqori bo'lmasligi kerak"
         return None
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Bu servis GET emas, lekin Excel import xavfi shu yerda joylashgan.
+# YAXSHI: _build_product_maps mahsulotlarni __in bilan jamlab oladi - loop ichida query yo'q (N+1 yo'q);
+#   read_only + data_only bilan openpyxl ochiladi.
+# KRITIK: _read_sheet da list(ws.iter_rows()) butun faylni (~48k qator) xotiraga yuklaydi; satr/hajm limiti yo'q;
+#   import bitta atomic tranzaksiyada - katta faylda RAM/timeout/lock xavfi.
+# PERF: create_entry bitta chaqiriladi; agar u itemlarni loop ichida save qilsa (stock_entry_service.py da tekshirish
+#   kerak) bulk_create afzal.
+# Kritik muammolar soni: 1
+# Performance muammolari: 1 (nom bo'yicha Lower filtri indeksdan foydalanmaydi)
+# Arxitektura muammolari: 1 (massiv import sinxron - background task kerak)
+# Umumiy baho: 6 / 10
+# Prioritet boyicha birinchi hal qilinishi kerak: [iter_rows ni limit/chunk bilan cheklash + background task]
+# ═══════════════════════════════

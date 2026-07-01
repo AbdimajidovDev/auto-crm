@@ -48,6 +48,22 @@ class Sale(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+    # ⚠️ MUAMMO [KRITIK]: `created_at` indekssiz, `Sale` modelida umuman `Meta` (ordering/indexes) yo'q.
+    # Ma'lumot ko'chirilgandan keyin bu jadval ~65k qatorli. Deyarli barcha GET API shu ustunga tayanadi:
+    #   - SaleListAPIView: `ordering = ["-created_at"]` → indekssiz filesort (butun jadvalni saralaydi)
+    #   - reports/dashboard/chart/top-products: `created_at__range=(from, to)` → indekssiz full-table scan
+    #   - list ko'pincha `seller=user` yoki `store=...` bilan birga filtrlanadi.
+    # Natija: har bir dashboard/ro'yxat so'rovi 65k qatorni to'liq skanerlaydi → sekinlashuv real hajmda seziladi.
+    # ✅ YECHIM: kompozit indekslar qo'shib migratsiya yaratish (so'rov shabloniga mos):
+    #   class Meta:
+    #       ordering = ["-created_at"]
+    #       indexes = [
+    #           models.Index(fields=["-created_at"]),            # global ro'yxat/saralash
+    #           models.Index(fields=["store", "-created_at"]),   # do'kon kesimidagi report
+    #           models.Index(fields=["seller", "-created_at"]),  # sotuvchi bo'yicha ro'yxat (superuser bo'lmagan)
+    #           models.Index(fields=["status"]),                 # status bo'yicha filtr (db_index allaqachon bor)
+    #       ]
+    # Katta sana-oraliq report'lari uchun (kunlik yig'ma) alohida agregat/materialized jadval ham ko'rib chiqilsin.
 
     def __str__(self):
         return f"{self.store.name} {str(self.status)}"

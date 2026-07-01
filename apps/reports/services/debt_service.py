@@ -1,3 +1,7 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Bu fayl butunlay kommentlangan — O'LIK/DUBLIKAT kod. Jonli implementatsiya
+#   `reports/services/report_service.py` ichida (DebtService/SummaryService kabi). Bunday o'lik dublikatlar
+#   qaysi kod haqiqatda ishlayotganini chalg'itadi va texnik qarz to'playdi.
+# ✅ YECHIM: agar kerak bo'lmasa faylni o'chirish (git tarixida qoladi). GET perf muammosi yo'q (ishlamaydi).
 # from django.db.models import Sum, Q
 # from apps.debts.models import CustomerDebt
 # from apps.contract.models import SupplierTransaction

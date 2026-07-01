@@ -26,9 +26,23 @@ class StoreUserAttachAPIView(APIView):
             store_id=serializer.validated_data["store_id"]
         )
 
+        # ✅ YAXSHI: Javob store_user obyektidan FK id (`user_id`, `store_id`) orqali quriladi —
+        # bu related obyektni yuklamaydi (`store_user.user` emas), qo'shimcha query yo'q.
         return Response({
             "id": store_user.id,
             "user_id": store_user.user_id,
             "store_id": store_user.store_id,
             "role": store_user.role
         }, status=status.HTTP_201_CREATED)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Bu faylda GET endpoint yo'q — faqat POST (attach_user). Query performance nuqtai nazaridan
+# javob FK id'lari orqali quriladi, N+1 yo'q. Auth/duplicate tekshiruvlari servisda (store_user_service.py).
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [yo'q]
+# ═══════════════════════════════

@@ -23,6 +23,11 @@ class UserSerializer(serializers.ModelSerializer):
         check_valid_phone(phone)
         return phone
 
+    # ✅ YAXSHI: `active_store_links` view'dagi Prefetch(to_attr=...) dan keladi va `store` select_related qilingan,
+    # `hasattr` bilan himoyalangan — SerializerMethodField ichida qo'shimcha so'rov yo'q, N+1 xavfi yo'q.
+    # ⚠️ MUAMMO [ARXITEKTURA]: Ammo `active_store_links` faqat UsersListView'da beriladi. Prefetchsiz kelgan
+    # obyektlarda (masalan UsersDetailView.get) `hasattr` False bo'lib store_id/store_name jimgina None qaytadi.
+    # ✅ YECHIM: har ikkala view (list va detail) uchun bir xil prefetch qo'llash (yagona get_queryset helper).
     def get_store_id(self, obj):
         if hasattr(obj, "active_store_links") and obj.active_store_links:
             return obj.active_store_links[0].store.id
@@ -78,6 +83,11 @@ class UserResponseSerializer(serializers.ModelSerializer):
         fields = ["id", "phone_number", "full_name", "store", "email"]
 
     def get_store(self, obj):
+        # ✅ YAXSHI: UserResponseSerializer faqat SellerCreateAPIView'da (POST) bitta obyekt uchun ishlatiladi,
+        # shu bois bu yerdagi bittalik `store_links` so'rovi N+1 emas.
+        # ⚠️ MUAMMO [PERF]: Agar kelajakda bu serializer ro'yxatga qo'llansa — har obyektda alohida so'rov (N+1) bo'ladi.
+        # ✅ YECHIM: ro'yxat holatida view'da `Prefetch("store_links", ..., to_attr="active_store_links")` qilib,
+        #   bu yerda prefetch atributidan o'qish.
         store_link = (
             obj.store_links
             .filter(is_active=True)
@@ -89,3 +99,14 @@ class UserResponseSerializer(serializers.ModelSerializer):
             return None
 
         return store_link.store.name
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0  (joriy ishlatilishda N+1 yo'q — prefetch/single-obyekt bilan himoyalangan)
+# Arxitektura muammolari: 1  (UserSerializer store maydonlari prefetchga bog'liq, detail view'da bo'sh keladi)
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak:
+#   [1] store prefetch'ini list va detail view'lar o'rtasida birxillashtirish
+# ═══════════════════════════════

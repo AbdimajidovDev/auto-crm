@@ -53,6 +53,13 @@ class StockEntryImportAPIView(APIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
+        # ⚠️ MUAMMO [KRITIK]: Bitta requestda cheklovsiz katta Excel (~48k qator hajmiga yaqin) yuklanishi mumkin.
+        # Butun fayl xizmatda list(ws.iter_rows()) orqali xotiraga o'qiladi (stock_entry_import_service.py:208),
+        # so'ng barcha satrlar bitta @transaction.atomic ichida INSERT qilinadi. Natijada:
+        #   - katta faylda RAM portlashi va sekin/uzoq HTTP request (timeout xavfi),
+        #   - uzun tranzaksiya butun jadvalga lock/tiqilinch keltiradi.
+        # ✅ YECHIM: fayl hajmi/satr soniga limit (masalan MAX_ROWS=5000, file.size tekshiruvi),
+        #   katta importni Celery background taskka o'tkazish, xizmatda bulk_create(batch_size=...) bilan chunk commit.
         file = request.FILES.get("file")
         if not file:
             return Response({"detail": "file maydoni majburiy."}, status=400)
@@ -91,6 +98,9 @@ class StockEntryImportAPIView(APIView):
     @staticmethod
     def _resolve_base_store():
         """Kirim har doim asosiy do'konga (type='b') qilinadi — avtomatik aniqlanadi."""
+        # YAXSHI: type va is_active boyicha filtr indekslangan (Store.Meta.indexes) - full-scan yoq.
+        # MUAMMO [PERF]: count() + first() = 2 query. Dokon jadvali kichik, xavf past, lekin
+        # list(base_qs[:2]) bilan bitta queryda hal qilsa boladi.
         base_qs = Store.objects.filter(is_active=True, type=Store.StoreType.BASE)
         count = base_qs.count()
         if count == 0:
@@ -111,9 +121,24 @@ class StockEntryImportTemplateAPIView(APIView):
         if not os.path.exists(TEMPLATE_PATH):
             return Response({"detail": "Shablon fayl topilmadi."}, status=404)
 
+        # YAXSHI: Shablon FileResponse orqali stream qilinadi (butun fayl xotiraga bir martaga yuklanmaydi),
+        # DB ga ham murojaat yoq - bu GET tez va xavfsiz.
         return FileResponse(
             open(TEMPLATE_PATH, "rb"),
             as_attachment=True,
             filename="kirim_shablon.xlsx",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# POST (import): cheklovsiz katta Excel (~48k qator) bitta requestda xotiraga yuklanadi va bitta
+#   tranzaksiyada INSERT qilinadi - RAM/timeout/lock xavfi (asosiy sabab stock_entry_import_service.py da).
+# GET (template): FileResponse bilan streamlanadi, DB murojaati yoq - namunali yaxshi yechim.
+# Kritik muammolar soni: 1 (limitsiz massiv import)
+# Performance muammolari: 1 (_resolve_base_store 2 query)
+# Arxitektura muammolari: 1 (massiv import sinxron requestda - background task kerak)
+# Umumiy baho: 6 / 10
+# Prioritet boyicha birinchi hal qilinishi kerak: [import uchun satr/hajm limiti + background task + bulk_create]
+# ═══════════════════════════════

@@ -103,3 +103,19 @@ class ExcelExportService:
         output.seek(0)
 
         return output
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# Kritik muammolar soni: 0
+# Performance muammolari: 0
+# Arxitektura muammolari: 0
+# Umumiy baho: 9 / 10
+# Izoh: ✅ YAXSHI — bu servis DB'ga tegmaydi, faqat OLDINDAN AGGREGATSIYA qilingan `data` dict'ini
+#   (summary, filial statistikasi, top mahsulotlar, qarzlar) xlsx'ga yozadi. Bu ma'lumotlar CHEGARALANGAN
+#   (65k xom sotuv qatori EMAS), shu sabab `in_memory=True` BytesIO xotira uchun xavfsiz.
+#   ⚠️ ESLATMA: agar kelajakda bu yerga xom qatorlar (masalan har bir chek) qo'shilsa,
+#   butun workbook RAMda yig'ilgani sabab xotira bosimi paydo bo'ladi — u holda streaming/xlsxwriter
+#   `constant_memory=True` rejimiga o'tish kerak. Og'irlik data'ni yig'uvchi report_service'da (alohida auditlangan).
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [—]
+# ═══════════════════════════════

@@ -1,3 +1,5 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Butunlay kommentlangan — O'LIK/DUBLIKAT kod. Jonli SummaryService
+#   `reports/services/report_service.py` ichida. O'chirilishi tavsiya etiladi. GET perf ta'siri yo'q.
 # from datetime import timedelta
 #
 # from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper, OuterRef, Subquery, Value, Q

@@ -1,3 +1,7 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Bu fayl to'liq izoh (spek + mock JSON + model nusxalari) — ISHLAYDIGAN KOD YO'Q.
+#   Jonli KPI/dashboard mantiqi `reports/services/dashboard_service.py` (KPIService) da. Bu scratch/spec faylni
+#   docs/ ga ko'chirish yoki o'chirish tavsiya etiladi — kod bazasida chalg'ituvchi. GET perf ta'siri yo'q.
+#
 # AutoCRM loyihasi uchun Hisobot va statistikalar ni chiqarishimiz kerak. Hozir dashboard qismidagi hisobotni chiqaramiz uning json ko'rinishi quidagicha bo'ladi:
 #
 # {

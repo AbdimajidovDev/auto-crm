@@ -1,3 +1,5 @@
+# ⚠️ MUAMMO [ARXITEKTURA]: Butunlay kommentlangan — O'LIK/DUBLIKAT kod. Jonli BranchService
+#   `reports/services/report_service.py` ichida. GET perf ta'siri yo'q (ishlamaydi), lekin o'chirilishi kerak.
 # from django.db.models import Sum, Count, OuterRef, Subquery
 # from apps.sales.models import Sale, SaleReturn
 # from django.db.models import Sum, Count, F, Value, DecimalField

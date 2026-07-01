@@ -20,6 +20,15 @@ class SupplierPaymentListAPIView(APIView):
     serializer_class = SupplierPaymentListSerializer
 
     def get(self, request, entry_id):
+        # ✅ YAXSHI: `entry` FK bo'yicha filtrlangan — full-table scan yo'q, `entry_id` FK indeksidan foydalanadi.
+        # Bitta kirim tranzaksiyalari soni kichik, `SupplierPaymentListSerializer` esa supplier/entry ni
+        # PK id sifatida qaytaradi (related obyekt yuklanmaydi) — N+1 yo'q.
+        # ⚠️ MUAMMO [PERF]: Ro'yxat paginationsiz. Bitta entry uchun tranzaksiyalar kam bo'lgani uchun
+        # xavf past, lekin nazariy jihatdan chegara yo'q.
+        # ⚠️ MUAMMO [PERF]: `entry` obyekti faqat mavjudligini tekshirish uchun olinadi, ammo query
+        # `filter(entry=entry)` da yana ishlatiladi — `filter(entry_id=entry_id)` qilinsa `get_object_or_404`
+        # ortiqcha bo'lardi (2 query → 1). Agar validatsiya (404) kerak bo'lsa hozirgi holat maqbul.
+        # ✅ YECHIM (ixtiyoriy): qs = SupplierTransaction.objects.filter(entry_id=entry_id)
         entry = get_object_or_404(StockEntry, pk=entry_id)
         qs = SupplierTransaction.objects.filter(entry=entry)
         serializer = self.serializer_class(qs, many=True, context={"request": request})
@@ -52,3 +61,15 @@ class SupplierPaymentAPIView(APIView):
             "transaction_id": payment.id,
             "amount": payment.amount
         }, status=status.HTTP_201_CREATED)
+
+
+# ═══════════════════════════════
+# 📊 FAYL XULOSASI
+# GET (SupplierPaymentListAPIView): entry bo'yicha filtrlangan, N+1 yo'q; paginationsiz (kichik hajm — past xavf).
+# POST (SupplierPaymentAPIView): faqat yozuv, query performance muammosi yo'q.
+# Kritik muammolar soni: 0
+# Performance muammolari: 1 (paginationsiz ro'yxat + ortiqcha get_object_or_404 query)
+# Arxitektura muammolari: 0
+# Umumiy baho: 8 / 10
+# Prioritet bo'yicha birinchi hal qilinishi kerak: [filter(entry_id=entry_id) bilan 1 query'ga tushirish + kerak bo'lsa pagination]
+# ═══════════════════════════════
