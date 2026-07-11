@@ -1,7 +1,8 @@
 from rest_framework import serializers
 from decimal import Decimal
 
-from apps.sales.models import Payment
+from apps.sales.models import BankCard, Payment
+from apps.sales.services.payment_service import validate_payment_method
 
 
 class PayDebtListSerializer(serializers.ModelSerializer):
@@ -36,11 +37,22 @@ class PayDebtSerializer(serializers.Serializer):
     sale = serializers.IntegerField()
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     type = serializers.ChoiceField(choices=Payment.Type.choices)
+    bank_card = serializers.PrimaryKeyRelatedField(
+        queryset=BankCard.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
 
     def validate_amount(self, value):
         if value <= 0:
             raise serializers.ValidationError("Amount must be positive")
         return value
+
+    def validate(self, data):
+        # Sotuvdagi bilan bir xil markaziy qoida: card → bank_card majburiy, cash → taqiqlanadi
+        validate_payment_method(data['type'], data.get('bank_card'))
+        return data
 
 
 # ═══════════════════════════════

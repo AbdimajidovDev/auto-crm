@@ -38,7 +38,7 @@ class DebtService:
 
     @staticmethod
     @transaction.atomic
-    def pay_debt(*, sale_id, amount, payment_type):
+    def pay_debt(*, sale_id, amount, payment_type, bank_card=None):
 
         # 🔴 LOCK SALE (critical!)
         # ⚠️ MUAMMO [PERFORMANCE]: `select_related("customer")` ishlatilmagan.
@@ -71,6 +71,7 @@ class DebtService:
             customer=sale.customer,
             amount=amount,
             type=payment_type,
+            bank_card=bank_card,
             sale=sale  # 🔥 MUHIM
         )
 
@@ -81,6 +82,9 @@ class DebtService:
             amount=amount,
             type=CustomerDebt.Type.DECREASE
         )
+
+        # Qarz to'lovi sotuvning to'lov tarkibini o'zgartiradi (masalan, debt → card/mixed)
+        sale.recalculate_payment_type()
 
         return payment
 

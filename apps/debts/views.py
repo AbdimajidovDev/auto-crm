@@ -66,7 +66,8 @@ class PayDebtAPIView(APIView):
         payment = DebtService.pay_debt(
             sale_id=data["sale"],
             amount=data["amount"],
-            payment_type=data["type"]
+            payment_type=data["type"],
+            bank_card=data.get("bank_card"),
         )
 
         return Response({
