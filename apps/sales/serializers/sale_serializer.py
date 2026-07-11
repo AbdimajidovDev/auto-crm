@@ -2,10 +2,12 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 from apps.sales.models import (
+    BankCard,
     Sale,
     SaleItem,
     Payment,
 )
+from apps.sales.services.payment_service import validate_payment_method
 
 from decimal import Decimal
 
@@ -14,9 +16,12 @@ from decimal import Decimal
 # ─────────────────────────────────────────────
 
 class PaymentSerializer(serializers.ModelSerializer):
+    # N+1 yo'q: view querysetida payments prefetch'i select_related("bank_card") bilan keladi
+    bank_card_name = serializers.CharField(source="bank_card.name", read_only=True, default=None)
+
     class Meta:
         model = Payment
-        fields = ("id", "amount", "type", "created_at")
+        fields = ("id", "amount", "type", "bank_card", "bank_card_name", "is_refund", "created_at")
 
 
 class SaleItemSerializer(serializers.ModelSerializer):
@@ -82,6 +87,7 @@ class SaleListSerializer(serializers.ModelSerializer):
             "customer", "customer_name",
             "payments",
             "status",
+            "payment_type",
             "total_amount", "paid_amount", "debt",
             "total_increase", "total_decrease",
             "discount_type", "discount_value", "discount_amount",
@@ -166,12 +172,22 @@ class SaleItemInputSerializer(serializers.Serializer):
 class PaymentInputSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=Payment.Type.choices)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    # Faqat faol kartalar qabul qilinadi; validated_data da BankCard instance bo'ladi
+    bank_card = serializers.PrimaryKeyRelatedField(
+        queryset=BankCard.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
 
     def validate(self, data):
         amount = data['amount']
 
         if amount <= 0:
             raise ValidationError("To'lov ijoboy bo'lishi kerak")
+
+        # type=card → bank_card majburiy, type=cash → bank_card taqiqlanadi
+        validate_payment_method(data['type'], data.get('bank_card'))
         return data
 
 

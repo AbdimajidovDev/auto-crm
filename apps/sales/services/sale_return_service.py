@@ -8,6 +8,7 @@ from apps.inventory.models import InventorySession, InventoryMovement
 from apps.inventory.services.inventory_hooks_service import handle_sale_return
 from apps.products.models import Product, ProductBatch
 from apps.sales.models import Sale, SaleReturn, SaleReturnItem, Payment
+from apps.sales.services.payment_service import SalePaymentService
 
 
 
@@ -112,8 +113,12 @@ class SaleReturnService:
         # =========================
         # 💰 ACCOUNTING
         # =========================
-        if customer:
+        # Avval qaytarim sotuv qarzini kamaytiradi, qolgan qismi mijozga PUL bilan
+        # qaytariladi. Pul qismi sotuvdagi kabi erkin taqsimlanadi (payments[]):
+        # naqd / karta / aralash. payments yuborilmasa — eski xatti-harakat: hammasi naqd.
+        money_refund = total_refund
 
+        if customer:
             current_debt = DebtService.get_sale_debt(sale)
 
             if current_debt > 0:
@@ -126,23 +131,40 @@ class SaleReturnService:
                         amount=reduce_amount
                     )
 
-                remaining = total_refund - reduce_amount
+                money_refund = total_refund - reduce_amount
 
-                if remaining > 0:
-                    Payment.objects.create(
-                        customer=customer,
-                        sale=sale,
-                        amount=remaining,
-                        type=Payment.Type.CASH
+        refund_payments = data.get("payments")
+
+        if refund_payments:
+            refund_total = sum(
+                (Decimal(str(p["amount"])) for p in refund_payments), Decimal("0")
+            )
+            if refund_total != money_refund:
+                raise ValidationError({
+                    "payments": (
+                        f"Qaytariladigan to'lovlar jami {refund_total} — "
+                        f"pul bilan qaytarilishi kerak bo'lgan summa {money_refund} ga teng bo'lishi shart"
                     )
+                })
 
-            else:
-                Payment.objects.create(
-                    customer=customer,
-                    sale=sale,
-                    amount=total_refund,
-                    type=Payment.Type.CASH
-                )
+            SalePaymentService.record_payments(
+                sale=sale,
+                payments_data=refund_payments,
+                customer=customer,
+                is_refund=True,
+            )
+
+        elif customer and money_refund > 0:
+            # Eski (backward-compatible) xatti-harakat: pul qismi to'liq naqd qaytariladi
+            SalePaymentService.record_payments(
+                sale=sale,
+                payments_data=[{"type": Payment.Type.CASH, "amount": money_refund}],
+                customer=customer,
+                is_refund=True,
+            )
+
+        # To'lovlar o'zgardi — sotuvning to'lov turi markaziy metod bilan qayta hisoblanadi
+        sale.recalculate_payment_type()
 
         # =========================
         # 📊 SALE STATUS UPDATE

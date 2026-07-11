@@ -120,7 +120,7 @@ class SaleListAPIView(generics.ListAPIView):
             .select_related("store", "customer", "seller")
             .prefetch_related(
                 Prefetch("items", queryset=items_qs),
-                Prefetch("payments", queryset=Payment.objects.order_by("created_at")),
+                Prefetch("payments", queryset=Payment.objects.select_related("bank_card").order_by("created_at")),
             )
             .annotate(
                 # ✅ YAXSHI: Qarz yig'indilari reverse FK join bilan emas, `Subquery` orqali hisoblangan.
@@ -231,7 +231,10 @@ class SaleDetailAPIView(APIView):
     def get(self, request, pk):
         qs = Sale.objects.select_related(
             "store", "customer", "seller"
-        ).prefetch_related("items").annotate(
+        ).prefetch_related(
+            Prefetch("items", queryset=SaleItem.objects.select_related("product")),
+            Prefetch("payments", queryset=Payment.objects.select_related("bank_card").order_by("created_at")),
+        ).annotate(
         # ⚠️ MUAMMO [KRITIK]: Detail querysetda `items` va `debt_records` aggregate birga ishlatilgan.
         # Sabab: `prefetch_related("items")` productni olib kelmaydi, `Sum(debt_records...)` esa reverse FK joinlarga
         # boshqa joinlar qo'shilsa kartezian ko'payish xavfini saqlab qoladi.

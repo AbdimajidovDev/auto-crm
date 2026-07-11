@@ -4,6 +4,7 @@ from rest_framework.generics import get_object_or_404
 
 from apps.inventory.services.inventory_hooks_service import handle_sale_item
 from apps.sales.models import Sale, SaleItem, Payment
+from apps.sales.services.payment_service import SalePaymentService
 from apps.products.models import ProductBatch
 from apps.debts.services import DebtService
 from apps.store.models import StoreUser
@@ -138,22 +139,12 @@ class SaleService:
 
         final_total_amount = subtotal - calculated_discount
 
-        # 🔴 PAYMENTS
-        paid_amount = Decimal("0")
-        # ⚠️ MUAMMO [PERFORMANCE]: Paymentlar loop ichida alohida `create()` bilan yozilmoqda.
-        # Sabab: payment obyektlari yig'ilib `bulk_create` qilinmagan.
-        # Natija: ko'p to'lov turi bo'lsa transaction ichida ortiqcha INSERT querylar ishlaydi.
-        # ✅ YECHIM:
-        # payment_objs = [Payment(sale=sale, customer=customer, amount=p["amount"], type=p["type"]) for p in payments_data]
-        # Payment.objects.bulk_create(payment_objs)
-        for p in payments_data:
-            Payment.objects.create(
-                sale=sale,
-                customer=customer,
-                amount=p["amount"],
-                type=p["type"]
-            )
-            paid_amount += Decimal(str(p["amount"]))
+        # 🔴 PAYMENTS — markaziy service orqali (bulk_create + bank_card invarianti)
+        paid_amount = SalePaymentService.record_payments(
+            sale=sale,
+            payments_data=payments_data,
+            customer=customer,
+        )
 
         # 🔴 FINALIZE SALE
         sale.total_amount = final_total_amount
@@ -167,6 +158,10 @@ class SaleService:
             sale.status = Sale.Status.DEBT
         else:
             sale.status = Sale.Status.PARTIAL
+
+        # To'lov turi (cash/card/mixed/debt) — markaziy metod; save=False,
+        # chunki pastdagi sale.save() bilan bitta UPDATE da yoziladi
+        sale.recalculate_payment_type(save=False)
 
         sale.save()
 
