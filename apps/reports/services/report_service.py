@@ -42,8 +42,12 @@ TOP_PRODUCTS_LIMIT = 5
 PAYMENT_METHOD_LABELS = {
     "cash": "Naqd",
     "card": "Karta",
+    "mixed": "Aralash",
     "debt": "Qarz",
 }
+
+# Eski (bank_card=NULL) karta to'lovlari hisobotda shu nom bilan chiqadi
+UNKNOWN_CARD_LABEL = "Noma'lum karta"
 
 
 # ─────────────────────────────────────────────
@@ -339,41 +343,43 @@ class TopProductsService:
 # ─────────────────────────────────────────────
 class PaymentStructureService:
     """
-    To'lov turlari bo'yicha taqsimot: naqd, karta, qarz.
-    Payment modeli orqali — 1 ta SQL.
+    To'lov turlari bo'yicha taqsimot: Naqd / Karta / Aralash / Qarz.
+
+    Sale.payment_type (backend avtomatik hisoblaydigan maydon) bo'yicha guruhlanadi —
+    shu tufayli ARALASH (naqd + karta) sotuvlar alohida qatorda ko'rinadi.
+    Amount sifatida real tushgan pul (paid_amount) olinadi. 1 ta SQL + qarz uchun 1 ta.
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
         qs = (
-            Payment.objects
+            Sale.objects
             .filter(
                 created_at__date__gte=date_from,
                 created_at__date__lte=date_to,
             )
-            .filter(_store_q(store_id, "sale__store_id"))
-            .values("type")
+            .filter(_store_q(store_id))
+            .exclude(payment_type=Sale.PaymentType.DEBT)  # pulsiz sotuvlar Qarz qatorida
+            .values("payment_type")
             .annotate(
                 count=Count("id"),
                 amount=Coalesce(
-                    Sum("amount"),
+                    Sum("paid_amount"),
                     Value(Decimal("0")), output_field=DecimalField(),
                 ),
             )
             .order_by("-amount")
         )
 
-        rows        = list(qs)
-        total_amount = sum(r["amount"] for r in rows) or Decimal("1")
+        rows = list(qs)
 
-        # Qarz (debt) — Payment modeli orqali emas, Sale.status='debt' orqali
-        # Agar Payment modelida 'debt' type yo'q bo'lsa, Sale orqali qo'shamiz
+        # Qarz — to'lanmagan qoldiq (to'liq qarzdagi va qisman to'langan sotuvlar)
         debt_agg = (
             Sale.objects
             .filter(
                 created_at__date__gte=date_from,
                 created_at__date__lte=date_to,
-                status=Sale.Status.DEBT,
+                status__in=[Sale.Status.DEBT, Sale.Status.PARTIAL],
             )
             .filter(_store_q(store_id))
             .aggregate(
@@ -385,27 +391,83 @@ class PaymentStructureService:
             )
         )
 
-        result = []
+        total_amount = (
+            sum(r["amount"] for r in rows) + (debt_agg["amount"] or Decimal("0"))
+        ) or Decimal("1")
 
-        for r in rows:
-            if r["type"] == "debt":
-                continue  # Sale orqali alohida qo'shamiz
-            result.append({
-                "method":  PAYMENT_METHOD_LABELS.get(r["type"], r["type"]),
+        result = [
+            {
+                "method":  PAYMENT_METHOD_LABELS.get(r["payment_type"], r["payment_type"]),
+                "type":    r["payment_type"],
                 "count":   r["count"],
                 "amount":  r["amount"],
                 "percent": f"{round(float(r['amount'] / total_amount * 100), 1)}%",
-            })
+            }
+            for r in rows
+        ]
 
         if debt_agg["amount"]:
             result.append({
-                "method":  "Qarz",
+                "method":  PAYMENT_METHOD_LABELS["debt"],
+                "type":    "debt",
                 "count":   debt_agg["count"],
                 "amount":  debt_agg["amount"],
                 "percent": f"{round(float(debt_agg['amount'] / total_amount * 100), 1)}%",
             })
 
         return result
+
+
+# ─────────────────────────────────────────────
+#  Bank kartalari kesimi
+# ─────────────────────────────────────────────
+class BankCardBreakdownService:
+    """
+    Har bir bank kartasi bo'yicha NET tushum (karta to'lovlari - karta qaytarimlari).
+    Eski to'lovlarda bank_card=NULL bo'lishi mumkin — "Noma'lum karta" bo'lib chiqadi.
+    1 ta SQL.
+    """
+
+    @staticmethod
+    def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        qs = (
+            Payment.objects
+            .filter(
+                type=Payment.Type.CARD,
+                created_at__date__gte=date_from,
+                created_at__date__lte=date_to,
+            )
+            .filter(_store_q(store_id, "sale__store_id"))
+            .values("bank_card_id", "bank_card__name")
+            .annotate(
+                count=Count("id"),
+                amount=Coalesce(
+                    Sum(
+                        Case(
+                            When(is_refund=True, then=-F("amount")),
+                            default=F("amount"),
+                            output_field=DecimalField(),
+                        )
+                    ),
+                    Value(Decimal("0")), output_field=DecimalField(),
+                ),
+            )
+            .order_by("-amount")
+        )
+
+        rows = list(qs)
+        total_amount = sum(r["amount"] for r in rows) or Decimal("1")
+
+        return [
+            {
+                "bankCardId": r["bank_card_id"],
+                "name":       r["bank_card__name"] or UNKNOWN_CARD_LABEL,
+                "count":      r["count"],
+                "amount":     r["amount"],
+                "percent":    f"{round(float(r['amount'] / total_amount * 100), 1)}%",
+            }
+            for r in rows
+        ]
 
 
 # ─────────────────────────────────────────────
@@ -492,6 +554,7 @@ class ReportService:
             "categoryStatistics": CategoryStatisticsService.get(date_from, date_to, store_id),
             "topSellingProducts": TopProductsService.get(date_from, date_to, store_id),
             "paymentStructure":   PaymentStructureService.get(date_from, date_to, store_id),
+            "cardBreakdown":      BankCardBreakdownService.get(date_from, date_to, store_id),
             "debts": {
                 "customerDebts":  DebtService.customer_debts(store_id),
                 "supplierDebts":  DebtService.supplier_debts(store_id),

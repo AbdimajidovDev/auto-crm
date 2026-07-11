@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from apps.sales.models import SaleReturn, SaleReturnItem
+from apps.sales.serializers.sale_serializer import PaymentInputSerializer
 
 
 class SaleReturnItemInputSerializer(serializers.Serializer):
@@ -11,6 +12,10 @@ class SaleReturnItemInputSerializer(serializers.Serializer):
 class SaleReturnCreateSerializer(serializers.Serializer):
     sale = serializers.IntegerField()
     items = SaleReturnItemInputSerializer(many=True)
+
+    # Mijozga pul QANDAY qaytarilishi — sotuvdagi kabi erkin taqsim:
+    # masalan 50% naqd + 50% karta. Yuborilmasa — eski xatti-harakat (hammasi naqd).
+    payments = PaymentInputSerializer(many=True, required=False)
 
     comment = serializers.CharField(required=False, allow_blank=True)
 
