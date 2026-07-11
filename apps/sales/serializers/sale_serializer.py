@@ -228,8 +228,35 @@ class SaleCreateSerializer(serializers.Serializer):
             payment['amount'] for payment in payments
         )
 
+        # 🔴 Chegirma validatsiyasi va hisoblash
+        discount_type = data.get("discount_type")
+        discount_value = data.get("discount_value") or Decimal("0")
+        discount_amount = Decimal("0")
+
+        if discount_type == Sale.DiscountType.PERCENTAGE:
+            if discount_value > 100:
+                raise serializers.ValidationError({
+                    "discount_value": "Chegirma 100% dan oshmasligi kerak"
+                })
+            discount_amount = (total_items_amount * discount_value) / Decimal("100")
+        elif discount_type == Sale.DiscountType.FIXED:
+            discount_amount = discount_value
+
+        if discount_amount > total_items_amount:
+            raise serializers.ValidationError({
+                "discount_value": "Chegirma umumiy summadan oshmasligi kerak"
+            })
+
+        final_total_amount = total_items_amount - discount_amount
+
+        # 🔴 Ortiqcha to'lov validatsiyasi
+        if total_paid > final_total_amount:
+            raise serializers.ValidationError({
+                "payments": "To'lov summasi mahsulotlarning umumiy narxidan oshib ketmasligi kerak"
+            })
+
         # 🔴 Qarz logikasi
-        has_debt = total_paid < total_items_amount
+        has_debt = total_paid < final_total_amount
 
         if has_debt:
             if not customer:
@@ -249,13 +276,6 @@ class SaleCreateSerializer(serializers.Serializer):
         else:
             # Qarz yo'q bo'lsa, due_date kiritilgan bo'lsa ham e'tiborga olinmaydi
             data["debt_due_date"] = None
-
-        # 🔴 Chegirma validatsiyasi
-        if data.get("discount_type") == Sale.DiscountType.PERCENTAGE:
-            if data.get("discount_value", 0) > 100:
-                raise serializers.ValidationError({
-                    "discount_value": "Chegirma 100% dan oshmasligi kerak"
-                })
 
         return data
 
