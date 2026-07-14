@@ -1,5 +1,10 @@
+import logging
 import time
+
+from django.conf import settings
 from django.utils.deprecation import MiddlewareMixin
+
+logger = logging.getLogger("core.request")
 
 
 class RequestLoggerMiddleware(MiddlewareMixin):
@@ -16,25 +21,19 @@ class RequestLoggerMiddleware(MiddlewareMixin):
         request.start_time = time.time()
 
     def process_response(self, request, response):
-        start_time = getattr(request, "start_time", None)
+        # Productionda har bir so'rovni stdout'ga yozish latency qo'shadi —
+        # faqat DEBUG rejimida log yozamiz.
+        if not settings.DEBUG:
+            return response
 
-        if start_time is None:
-            duration = 0
-        else:
-            duration = time.time() - start_time
+        start_time = getattr(request, "start_time", None)
+        duration = 0 if start_time is None else time.time() - start_time
 
         method = request.method.upper()
         icon = self.METHOD_COLORS.get(method, "⚪")
-
         user = request.user if request.user.is_authenticated else "Anonymous"
 
-        # ⚠️ MUAMMO [PERFORMANCE/XAVFSIZLIK]: Middleware har requestda `print` qiladi.
-        # Sabab: stdout sync I/O bo'lib, productionda log rotation/level/filter bilan boshqarilmaydi.
-        # Natija: yuqori trafikda latency oshadi va user/path ma'lumotlari nazoratsiz loglanadi.
-        # ✅ YECHIM:
-        # logger.info("request_finished", extra={"method": method, "path": request.path, "duration": duration, "user_id": getattr(request.user, "id", None)})
-        # MUAMMO: har so'rovda `print` — production log tizimiga o'tkazish yaxshiroq (yoki faqat DEBUG).
-        print(f"{icon}  [{user} {method}] {request.path} - {duration:.2f}s 🚀")
+        logger.info("%s  [%s %s] %s - %.2fs", icon, user, method, request.path, duration)
 
         return response
 
