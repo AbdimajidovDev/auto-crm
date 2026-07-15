@@ -71,11 +71,28 @@ class AdminLoginAPIView(APIView):
             )
 
             # User login qilgan vaqtini saqlab qo'yish ----->
+            from core.middleware.audit import client_ip
+            ip = client_ip(request)
+            agent = (request.META.get("HTTP_USER_AGENT") or "")[:255]
+
             UserHistory.objects.create(
                 user=user,
                 action=UserHistory.ActionType.LOGIN,
-                ip_address=request.META.get("REMOTE_ADDR"),
-                user_agent=request.META.get("HTTP_USER_AGENT"),
+                ip_address=ip,
+                user_agent=agent,
+            )
+            # Amallar jurnali: kim, qachon, qaysi IP va qurilmadan kirgani
+            from apps.users.models import AuditLog
+            AuditLog.objects.create(
+                user=user,
+                user_display=f"{user.full_name or ''} ({user.phone_number})".strip(),
+                module="auth",
+                action=AuditLog.Action.LOGIN,
+                method="POST",
+                path=request.path[:255],
+                status_code=200,
+                ip_address=ip,
+                user_agent=agent,
             )
             # ---------------------------------------------->
 
@@ -97,12 +114,29 @@ class LogOutView(APIView):
         response.delete_cookie("refresh_token")
 
         # # ======= LogOut vaqtini saqlab qo'yish ========
-        UserHistory.objects.create(
-            user=request.user,
-            action=UserHistory.ActionType.LOGOUT,
-            ip_address=request.META.get("REMOTE_ADDR"),
-            user_agent=request.META.get("HTTP_USER_AGENT"),
-        )
+        if request.user.is_authenticated:
+            from core.middleware.audit import client_ip
+            ip = client_ip(request)
+            agent = (request.META.get("HTTP_USER_AGENT") or "")[:255]
+
+            UserHistory.objects.create(
+                user=request.user,
+                action=UserHistory.ActionType.LOGOUT,
+                ip_address=ip,
+                user_agent=agent,
+            )
+            from apps.users.models import AuditLog
+            AuditLog.objects.create(
+                user=request.user,
+                user_display=f"{request.user.full_name or ''} ({request.user.phone_number})".strip(),
+                module="auth",
+                action=AuditLog.Action.LOGOUT,
+                method="POST",
+                path=request.path[:255],
+                status_code=200,
+                ip_address=ip,
+                user_agent=agent,
+            )
         # # ==============================================
 
         return response

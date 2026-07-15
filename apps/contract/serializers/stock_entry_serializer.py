@@ -2,6 +2,7 @@ from rest_framework import serializers
 from apps.store.models import Store
 from apps.contract.models import Supplier, StockEntry, StockEntryItem
 from apps.products.models import Product
+from apps.sales.models import BankCard
 
 
 class StockEntryItemSerializer(serializers.Serializer):
@@ -40,18 +41,27 @@ class StockEntryItemSerializer(serializers.Serializer):
 
 class StockEntryCreateSerializer(serializers.Serializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.filter(is_active=True))
-    store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True, type="b"))
+    # Istalgan faol do'konga kirim mumkin (ombor ham, savdo do'koni ham).
+    # Kim qaysi do'konga kirim qila olishi view'da tekshiriladi
+    # (contract.permissions.ensure_store_access): superuser — hammasiga,
+    # do'kon xodimi — faqat o'z do'kon(lar)iga.
+    store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
     cash_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
     card_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
+    # Karta to'lovida qaysi usul/karta ishlatilgani. Ixtiyoriy (eski klientlar
+    # va Excel import uchun), lekin berilsa scope kirimga mos bo'lishi shart.
+    bank_card = serializers.PrimaryKeyRelatedField(
+        queryset=BankCard.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
 
     items = StockEntryItemSerializer(many=True)
 
     def validate(self, data):
-        store = data['store']
         items = data['items']
 
-        if store.type != "b":
-            raise serializers.ValidationError("Faqat omborga kirim mumkin")
         if not items:
             raise serializers.ValidationError("Mahsulotlar ro'yxati bo'sh")
 
@@ -63,6 +73,17 @@ class StockEntryCreateSerializer(serializers.Serializer):
         if paid_amount > total_entry_amount:
             raise serializers.ValidationError("To'lov umumiy narxdan oshib ketdi!")
 
+        bank_card = data.get("bank_card")
+        if bank_card is not None:
+            if bank_card.scope not in (BankCard.Scope.PURCHASE, BankCard.Scope.BOTH):
+                raise serializers.ValidationError(
+                    {"bank_card": "Bu to'lov usuli kirim bo'limi uchun ruxsat etilmagan"}
+                )
+        if data["card_amount"] > 0 and bank_card is None:
+            raise serializers.ValidationError(
+                {"bank_card": "Karta to'lovi uchun to'lov usulini tanlang"}
+            )
+
         return data
 
 
@@ -70,14 +91,18 @@ class StockEntryItemListSerializer(serializers.ModelSerializer):
     barcode = serializers.SerializerMethodField()
     shtrix_code = serializers.SerializerMethodField()
     sku = serializers.SerializerMethodField()
+    product_name = serializers.SerializerMethodField()
 
     class Meta:
         model = StockEntryItem
         fields = (
-            "id", "product", "quantity",
+            "id", "product", "product_name", "quantity",
             "purchase_price", "selling_price",
              "sku", "barcode", "shtrix_code",
         )
+
+    def get_product_name(self, obj):
+        return obj.product.name if obj.product else None
 
     def get_sku(self, obj):
         return obj.product.sku if obj.product else None
@@ -139,7 +164,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
             "id",
             "supplier", "supplier_name",
             "store", "store_name",
-            "paid_amount",
+            "total_amount", "paid_amount",
             "total_in", "total_paid", "debt",
             "created_by", "full_name",
             "items",

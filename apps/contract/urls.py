@@ -8,18 +8,39 @@ from apps.contract.views import (
     StockEntryListAPIView,
     StockEntryImportAPIView,
     StockEntryImportTemplateAPIView,
+    PurchaseSessionListCreateAPIView,
+    PurchaseSessionDetailAPIView,
+    PurchaseSessionReceiveAPIView,
+    PurchaseSessionConfirmAPIView,
+    SupplierStatsAPIView,
+    SupplierPaymentsBySupplierAPIView,
+    SupplierProductsAPIView,
 )
 from apps.contract.views.supplier_payment_view import SupplierPaymentAPIView, SupplierPaymentListAPIView
+from apps.contract.views.export_views import StockEntryExportAPIView, SupplierExportAPIView
 
 urlpatterns = [
     # Ta'minotchi
     path('supplier/', SupplierListAPIView.as_view()),
+    path('supplier/export/', SupplierExportAPIView.as_view()),
     path('supplier/create/', SupplierCreateAPIView.as_view()),
     path('supplier/<int:pk>/', SupplierDetailAPIView.as_view()),
 
+    # Ta'minotchi detail sahifasi tablari (dashboard / to'lovlar / tovarlar)
+    path('supplier/<int:pk>/stats/', SupplierStatsAPIView.as_view()),
+    path('supplier/<int:pk>/payments/', SupplierPaymentsBySupplierAPIView.as_view()),
+    path('supplier/<int:pk>/products/', SupplierProductsAPIView.as_view()),
+
     # Kirim
     path("entry/list/", StockEntryListAPIView.as_view()),
+    path("entry/export/", StockEntryExportAPIView.as_view()),
     path("entry/create/", StockEntryCreateAPIView.as_view()),
+
+    # Kirim sessiyasi (progressiv wizard: qoralama → qabul → tasdiqlash)
+    path("entry/session/", PurchaseSessionListCreateAPIView.as_view()),
+    path("entry/session/<int:pk>/", PurchaseSessionDetailAPIView.as_view()),
+    path("entry/session/<int:pk>/receive/", PurchaseSessionReceiveAPIView.as_view()),
+    path("entry/session/<int:pk>/confirm/", PurchaseSessionConfirmAPIView.as_view()),
 
     # Kirim — Excel import
     path("entry/import/", StockEntryImportAPIView.as_view()),

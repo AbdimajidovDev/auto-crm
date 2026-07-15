@@ -17,14 +17,9 @@ class ReportsExcelExportAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-
-        # ⚠️ MUAMMO [KRITIK]: ReportService.get signaturasi `get(params)` — bitta argument.
-        # Bu yerda esa `get(request.user, request.GET)` — IKKITA positional argument beriladi.
-        # Natija: runtime'da TypeError (get() takes 1 positional argument but 2 were given),
-        # ya'ni Excel export endpoint umuman ishlamaydi (500).
-        # ✅ YECHIM: report_view.py bilan bir xil chaqiruv:
-        #   data = ReportService.get(request.GET)
-        data = ReportService.get(request.user, request.GET)
+        # report_view.py bilan bir xil chaqiruv — sahifadagi filtrlar
+        # (filter/store_id/from/to) aynan qo'llanadi
+        data = ReportService.get(request.GET)
 
         # ⚠️ MUAMMO [PERF]: Excel generatsiyasi debts.customerDebts / supplierDebts ro'yxatlari
         # ustidan Python loop bilan qator yozadi (excel_export_service.py). Bu ro'yxatlar

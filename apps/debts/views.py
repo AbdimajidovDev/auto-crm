@@ -6,8 +6,14 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
 from apps.common.paginations import StandardPagination
+from apps.sales.models import Payment
 from .models import CustomerDebt
-from .serializers import PayDebtSerializer, PayDebtListSerializer
+from .serializers import (
+    CustomerPayDebtSerializer,
+    CustomerPaymentListSerializer,
+    PayDebtSerializer,
+    PayDebtListSerializer,
+)
 from .services import DebtService
 
 
@@ -75,6 +81,60 @@ class PayDebtAPIView(APIView):
             "payment_id": payment.id,
             "amount": payment.amount
         }, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=['Debts'],
+    summary="Mijoz qarzini FIFO tartibida to'lash — eng eski qarzli buyurtmadan boshlab taqsimlanadi.",
+)
+class CustomerPayDebtAPIView(APIView):
+    """
+    Body: {customer, amount, type: cash|card, bank_card?}
+    To'lov mijozning qarzli sotuvlariga ENG ESKISIDAN boshlab taqsimlanadi.
+    Umumiy qarzdan ortiq summa rad etiladi. Har bir taqsimot alohida
+    Payment yozuvi sifatida saqlanadi (to'lov tarixi).
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = CustomerPayDebtSerializer
+
+    def post(self, request):
+        serializer = CustomerPayDebtSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        result = DebtService.pay_customer_debt(
+            customer_id=data["customer"],
+            amount=data["amount"],
+            payment_type=data["type"],
+            bank_card=data.get("bank_card"),
+        )
+
+        return Response({
+            "message": "Qarz to'lovi qabul qilindi",
+            **result,
+        }, status=status.HTTP_201_CREATED)
+
+
+@extend_schema(
+    tags=['Debts'],
+    summary="Mijozning to'lovlar tarixi (sana bo'yicha kamayish tartibida).",
+)
+class CustomerPaymentsAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = CustomerPaymentListSerializer
+    pagination_class = StandardPagination
+
+    def get(self, request, customer_id):
+        qs = (
+            Payment.objects
+            .filter(customer_id=customer_id)
+            .select_related("bank_card")
+            .order_by("-created_at")
+        )
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(qs, request, view=self)
+        serializer = self.serializer_class(page, many=True, context={'request': request})
+        return paginator.get_paginated_response(serializer.data)
 
 
 @extend_schema(

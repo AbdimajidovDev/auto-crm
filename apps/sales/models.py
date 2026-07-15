@@ -12,15 +12,31 @@ from apps.users.models.customers import Customer
 
 class BankCard(TimestampMixin):
     """
-    Kompaniyaning bank kartasi — faqat ichki hisobot uchun
+    Kompaniyaning bank kartasi / to'lov usuli — faqat ichki hisobot uchun
     (to'lov tizimlari bilan integratsiya YO'Q, shuning uchun
     karta raqami/egasi kabi maydonlar saqlanmaydi).
     Barcha kartalar barcha filiallarda ishlaydi.
+
+    scope — usul qaysi bo'limda ko'rinishini belgilaydi:
+      sale     → faqat sotuv (kassa)
+      purchase → faqat kirim (ta'minotchiga to'lov, masalan "Bank o'tkazmasi")
+      both     → ikkala bo'limda ham
     """
+
+    class Scope(models.TextChoices):
+        SALE = "sale", "Faqat sotuv"
+        PURCHASE = "purchase", "Faqat kirim"
+        BOTH = "both", "Sotuv va kirim"
 
     name = models.CharField(max_length=100, unique=True)
     is_default = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    scope = models.CharField(
+        max_length=10,
+        choices=Scope.choices,
+        default=Scope.BOTH,
+        db_index=True,
+    )
 
     class Meta:
         db_table = "bank_card"

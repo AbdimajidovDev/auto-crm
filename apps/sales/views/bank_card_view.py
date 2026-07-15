@@ -30,6 +30,11 @@ class BankCardListCreateAPIView(generics.ListCreateAPIView):
         is_active = self.request.query_params.get("is_active")
         if is_active is not None:
             qs = qs.filter(is_active=is_active.lower() in ("1", "true"))
+        # Bo'lim bo'yicha filtr: ?scope=sale → sotuvda ko'rinadiganlar (sale + both),
+        # ?scope=purchase → kirimda ko'rinadiganlar (purchase + both)
+        scope = self.request.query_params.get("scope")
+        if scope in (BankCard.Scope.SALE, BankCard.Scope.PURCHASE):
+            qs = qs.filter(scope__in=[scope, BankCard.Scope.BOTH])
         return qs
 
 

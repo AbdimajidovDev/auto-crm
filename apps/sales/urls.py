@@ -3,6 +3,8 @@ from apps.sales.views import (
     SaleCreateAPIView,
     SaleListAPIView,
     SaleDetailAPIView,
+    SaleExportAPIView,
+    SaleStatisticsAPIView,
     CustomerDebtListAPIView,
     SaleReturnCreateAPIView,
     SaleReturnListAPIView,
@@ -13,6 +15,8 @@ from apps.sales.views import (
 
 urlpatterns = [
     path('list/', SaleListAPIView.as_view()),
+    path('statistics/', SaleStatisticsAPIView.as_view()),
+    path('export/', SaleExportAPIView.as_view()),
     path('create/', SaleCreateAPIView.as_view()),
 
     path('bank-cards/', BankCardListCreateAPIView.as_view()),

@@ -5,6 +5,7 @@ from apps.users.views.customer_view import (
     CustomerDetailView,
     CustomerCreateView,
 )
+from apps.users.views.customer_export_view import CustomerExportAPIView
 from apps.users.views.profile_view import ProfileView
 from apps.users.views.auth_view import (
     AdminLoginAPIView,
@@ -24,6 +25,7 @@ from apps.users.views.role_view import (
     RoleDetailAPIView,
     PermissionCatalogAPIView,
 )
+from apps.users.views.audit_view import AuditLogListAPIView
 
 
 urlpatterns = [
@@ -35,6 +37,9 @@ urlpatterns = [
     path('roles/', RoleListCreateAPIView.as_view()),
     path('roles/catalog/', PermissionCatalogAPIView.as_view()),
     path('roles/<int:pk>/', RoleDetailAPIView.as_view()),
+
+    # Amallar jurnali (audit)
+    path('audit-logs/', AuditLogListAPIView.as_view()),
 
     # User part
     path('', UsersListView.as_view()),
@@ -55,6 +60,7 @@ urlpatterns = [
 
     # Customer
     path('customers/list/', CustomerListView.as_view()),
+    path('customers/export/', CustomerExportAPIView.as_view()),
     path('customers/create/', CustomerCreateView.as_view()),
     path('customers/<int:pk>/', CustomerDetailView.as_view()),
 ]

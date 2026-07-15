@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework import status, permissions, generics
 
 from apps.common.paginations import StandardPagination
+from apps.common.excel_export import parse_date_param
 from apps.inventory.models import (
     InventoryMovement,
     InventorySession,
@@ -36,22 +37,27 @@ class InventoryListAPIView(generics.ListAPIView):
     def get_queryset(self):
         user = self.request.user
 
-        if user.is_superuser:
-            return (
-                InventorySession.objects
-                .select_related("store", "started_by")
-                .order_by("-started_at")
-            )
-
-        return (
+        qs = (
             InventorySession.objects
             .select_related("store", "started_by")
-            .filter(
+            .order_by("-started_at")
+        )
+
+        if not user.is_superuser:
+            qs = qs.filter(
                 store__user_links__user=user,
                 store__user_links__is_active=True,
             )
-            .order_by("-started_at")
-        )
+
+        # 🔎 ?date_from=&date_to= (YYYY-MM-DD) — sana oralig'i bo'yicha filtr
+        date_from = parse_date_param(self.request.query_params.get("date_from"))
+        date_to = parse_date_param(self.request.query_params.get("date_to"))
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
+        return qs
 
 
 class InventoryDetailAPIView(APIView):

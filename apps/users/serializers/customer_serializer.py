@@ -246,11 +246,52 @@ class CustomerWriteSerializer(serializers.ModelSerializer):
       CustomerSerializer da read_only maydonlar ko'p (total_debt, store_debts, sales).
       Yozish paytida faqat full_name va phone_number kerak — boshqalari shart emas.
       Bitta serializer ishlatilsa DRF write paytida keraksiz validatsiya qiladi.
+
+    Xato xabarlari o'zbekcha — frontend ularni to'g'ridan-to'g'ri ko'rsatadi.
     """
+
+    full_name = serializers.CharField(
+        max_length=100,
+        error_messages={
+            "required": "Ism-familiya kiritilishi shart.",
+            "blank": "Ism-familiya kiritilishi shart.",
+            "max_length": "Ism-familiya 100 belgidan oshmasligi kerak.",
+        },
+    )
+    phone_number = serializers.CharField(
+        max_length=20,
+        error_messages={
+            "required": "Telefon raqam kiritilishi shart.",
+            "blank": "Telefon raqam kiritilishi shart.",
+            "max_length": "Telefon raqam juda uzun.",
+        },
+    )
 
     class Meta:
         model = Customer
         fields = ("id", "full_name", "phone_number")
+
+    def validate_full_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("Ism-familiya kiritilishi shart.")
+        return value
+
+    def validate_phone_number(self, value):
+        import re
+
+        value = value.strip().replace(" ", "")
+        if not re.fullmatch(r"\+?\d{7,15}", value):
+            raise serializers.ValidationError(
+                "Telefon raqam faqat raqamlardan iborat bo'lishi kerak (masalan: +998901234567)."
+            )
+        # Dublikat tekshiruvi — bir xil raqamli mijoz ikki marta yaratilmasin
+        qs = Customer.objects.filter(phone_number=value)
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("Bu telefon raqamli mijoz allaqachon mavjud.")
+        return value
 
 
 

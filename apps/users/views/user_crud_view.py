@@ -25,10 +25,9 @@ class UsersListView(ListAPIView):
     # ✅ YECHIM: ikkita manbadan birini qoldiring — yoki class-level `queryset`, yoki `get_queryset()`.
     queryset = UserSelector.list_users()
     serializer_class = UserSerializer
-    # ⚠️ MUAMMO [ARXITEKTURA]: Foydalanuvchilar ro'yxati `AllowAny` — autentifikatsiyasiz ochiq.
-    # Sabab: full_name/phone_number/email kabi shaxsiy ma'lumotlar himoyasiz qaytadi.
-    # ✅ YECHIM: `permission_classes = (permissions.IsAuthenticated,)` (yoki IsAdminUser).
-    permission_classes = (permissions.AllowAny,)
+    # Shaxsiy ma'lumotlar (ism/telefon/email) — faqat autentifikatsiyalangan
+    # userlar ko'ra oladi; rol darajasidagi cheklov RBAC middleware'da (users.view).
+    permission_classes = (permissions.IsAuthenticated,)
     # ✅ BAJARILDI — pagination qo'shildi (TransferListAPIView bilan bir xil yechim):
     #   AVVAL: pagination_class = None → ro'yxat paginationsiz, butun jadval bir javobda + har qatorga
     #          store prefetch yuklanardi (user/seller soni o'sgani sari sekinlashardi).

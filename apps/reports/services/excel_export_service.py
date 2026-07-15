@@ -25,6 +25,8 @@ class ExcelExportService:
         # 1. SUMMARY SHEET
         # =========================
         sheet = workbook.add_worksheet("Umumiy")
+        sheet.set_column(0, 0, 22)
+        sheet.set_column(1, 1, 18)
 
         summary = data["summary"]
 
@@ -47,6 +49,8 @@ class ExcelExportService:
         # 2. BRANCH STATS
         # =========================
         sheet2 = workbook.add_worksheet("Filiallar")
+        sheet2.set_column(0, 0, 28)
+        sheet2.set_column(1, 3, 14)
 
         headers = ["Filial", "Daromad", "Buyurtmalar", "Mijozlar"]
 
@@ -60,9 +64,26 @@ class ExcelExportService:
             sheet2.write(row, 3, b["customers"])
 
         # =========================
-        # 3. TOP PRODUCTS
+        # 3. CATEGORY STATS
+        # =========================
+        sheet_cat = workbook.add_worksheet("Kategoriyalar")
+        sheet_cat.set_column(0, 0, 28)
+        sheet_cat.set_column(1, 2, 14)
+
+        for col, h in enumerate(["Kategoriya", "Daromad", "Ulushi %"]):
+            sheet_cat.write(0, col, h, header_format)
+
+        for row, c in enumerate(data.get("categoryStatistics") or [], start=1):
+            sheet_cat.write(row, 0, c.get("categoryName") or "Kategoriyasiz")
+            sheet_cat.write(row, 1, c.get("revenue", 0), money_format)
+            sheet_cat.write(row, 2, c.get("percent", 0))
+
+        # =========================
+        # 4. TOP PRODUCTS
         # =========================
         sheet3 = workbook.add_worksheet("Top mahsulotlar")
+        sheet3.set_column(1, 1, 40)
+        sheet3.set_column(2, 3, 14)
 
         headers = ["#", "Mahsulot", "Sotilgan", "Daromad"]
 
@@ -76,21 +97,59 @@ class ExcelExportService:
             sheet3.write(row, 3, p["totalRevenue"], money_format)
 
         # =========================
-        # 4. CUSTOMER DEBT
+        # 5. PAYMENT STRUCTURE
+        # =========================
+        sheet_pay = workbook.add_worksheet("To'lovlar")
+        sheet_pay.set_column(0, 0, 22)
+        sheet_pay.set_column(1, 3, 14)
+
+        for col, h in enumerate(["To'lov usuli", "Sotuvlar soni", "Summa", "Ulushi"]):
+            sheet_pay.write(0, col, h, header_format)
+
+        for row, p in enumerate(data.get("paymentStructure") or [], start=1):
+            sheet_pay.write(row, 0, p.get("method") or p.get("type") or "-")
+            sheet_pay.write(row, 1, p.get("count", 0))
+            sheet_pay.write(row, 2, p.get("amount", 0), money_format)
+            sheet_pay.write(row, 3, str(p.get("percent", "")))
+
+        # =========================
+        # 6. BANK CARD BREAKDOWN
+        # =========================
+        sheet_card = workbook.add_worksheet("Kartalar kesimi")
+        sheet_card.set_column(0, 0, 22)
+        sheet_card.set_column(1, 3, 14)
+
+        for col, h in enumerate(["Karta", "Sotuvlar soni", "Summa", "Ulushi"]):
+            sheet_card.write(0, col, h, header_format)
+
+        for row, c in enumerate(data.get("cardBreakdown") or [], start=1):
+            sheet_card.write(row, 0, c.get("name") or "Noma'lum karta")
+            sheet_card.write(row, 1, c.get("count", 0))
+            sheet_card.write(row, 2, c.get("amount", 0), money_format)
+            sheet_card.write(row, 3, str(c.get("percent", "")))
+
+        # =========================
+        # 7. CUSTOMER DEBT
         # =========================
         sheet4 = workbook.add_worksheet("Mijoz qarzlari")
+        sheet4.set_column(0, 0, 30)
+        sheet4.set_column(1, 2, 16)
 
         sheet4.write(0, 0, "Mijoz", header_format)
-        sheet4.write(0, 1, "Qarz", header_format)
+        sheet4.write(0, 1, "Telefon", header_format)
+        sheet4.write(0, 2, "Qarz", header_format)
 
         for row, d in enumerate(data["debts"]["customerDebts"], start=1):
             sheet4.write(row, 0, d["customerName"])
-            sheet4.write(row, 1, d["debt"], money_format)
+            sheet4.write(row, 1, d.get("phone") or "-")
+            sheet4.write(row, 2, d["debt"], money_format)
 
         # =========================
-        # 5. SUPPLIER DEBT
+        # 8. SUPPLIER DEBT
         # =========================
         sheet5 = workbook.add_worksheet("Taminotchi qarzlari")
+        sheet5.set_column(0, 0, 30)
+        sheet5.set_column(1, 1, 16)
 
         sheet5.write(0, 0, "Taminotchi", header_format)
         sheet5.write(0, 1, "Qarz", header_format)
