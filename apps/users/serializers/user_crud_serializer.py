@@ -3,7 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from apps.store.models import Store, StoreUser
-from apps.users.models import User
+from apps.users.models import Role, User
 from apps.users.validations import check_valid_phone
 from django.core.exceptions import ValidationError as DjangoValidationError
 
@@ -11,12 +11,21 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 class UserSerializer(serializers.ModelSerializer):
     store_id = serializers.SerializerMethodField()
     store_name = serializers.SerializerMethodField()
+    # Tizim roli (RBAC): yozishda role_id, o'qishda role_id + role_name
+    role_id = serializers.PrimaryKeyRelatedField(
+        source="role",
+        queryset=Role.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+    role_name = serializers.CharField(source="role.name", read_only=True, default=None)
 
     class Meta:
         model = User
         fields = (
             "id", "full_name", "phone_number", "email",
             "is_active", "created_at", "updated_at", 'store_id', 'store_name',
+            "role_id", "role_name",
         )
 
     def validate_phone_number(self, phone):
@@ -46,8 +55,16 @@ class SellerCreateSerializer(serializers.Serializer):
     email = serializers.EmailField(write_only=True)
     password = serializers.CharField(write_only=True)
     confirm_password = serializers.CharField(write_only=True)
-    store_id = serializers.IntegerField(write_only=True)
-    role = serializers.ChoiceField(StoreUser.Role.choices)
+    # store_id ixtiyoriy: do'konga bog'lanmagan (admin turidagi) user ham yaratish mumkin
+    store_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    role = serializers.ChoiceField(StoreUser.Role.choices, required=False, default=StoreUser.Role.SELLER)
+    # Tizim roli (RBAC) — userga biriktiriladi
+    role_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+
+    def validate_role_id(self, value):
+        if value is not None and not Role.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("Bunday rol topilmadi.")
+        return value
 
     def validate_password(self, value):
         try:

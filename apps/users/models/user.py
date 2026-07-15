@@ -17,6 +17,15 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
     email = models.EmailField(unique=True, db_index=True, blank=True, null=True)
 
+    # Tizim roli (RBAC). None — cheklanmagan (superuser yoki eski userlar).
+    role = models.ForeignKey(
+        "users.Role",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="users",
+    )
+
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)  # admin panel
 

@@ -53,6 +53,11 @@ class ProfileSerializer(serializers.ModelSerializer):
     stores = ProfileStoreSerializer(source="prefetched_stores", many=True, read_only=True)
     history = serializers.SerializerMethodField()
     role = serializers.SerializerMethodField()
+    # RBAC: tizim roli va amaldagi permission'lar.
+    # permissions=None — cheklanmagan (superuser yoki rolsiz user).
+    role_id = serializers.IntegerField(read_only=True)
+    role_name = serializers.CharField(source="role.name", read_only=True, default=None)
+    permissions = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -63,6 +68,9 @@ class ProfileSerializer(serializers.ModelSerializer):
             "phone_number",
             "email",
             "role",
+            "role_id",
+            "role_name",
+            "permissions",
             "stores",
             "history",
         )
@@ -83,6 +91,12 @@ class ProfileSerializer(serializers.ModelSerializer):
             if first:
                 return getattr(first, "role_in_store", None)
         return None
+
+    def get_permissions(self, obj):
+        # None — cheklanmagan; ro'yxat — faqat shu kodlarga ruxsat
+        from apps.users.permissions import user_permissions
+        perms = user_permissions(obj)
+        return None if perms is None else sorted(perms)
 
     def get_history(self, obj) -> list:
         # ⚠️ MUAMMO [PERF]: `obj.history.all()` prefetch qilingan BARCHA history obyektlarini Pythonda saralaydi,

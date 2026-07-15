@@ -331,6 +331,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "min_stock",
             "barcode",
             "sku",
+            "status",
             "new_images",
             "delete_image_ids",
         )

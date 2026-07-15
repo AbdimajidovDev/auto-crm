@@ -19,12 +19,22 @@ from apps.users.views.user_crud_view import (
     UsersListView,
     UsersDetailView,
 )
+from apps.users.views.role_view import (
+    RoleListCreateAPIView,
+    RoleDetailAPIView,
+    PermissionCatalogAPIView,
+)
 
 
 urlpatterns = [
 
     # Profile
     path('profile/', ProfileView.as_view()),
+
+    # Role (RBAC)
+    path('roles/', RoleListCreateAPIView.as_view()),
+    path('roles/catalog/', PermissionCatalogAPIView.as_view()),
+    path('roles/<int:pk>/', RoleDetailAPIView.as_view()),
 
     # User part
     path('', UsersListView.as_view()),

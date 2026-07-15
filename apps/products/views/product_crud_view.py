@@ -326,11 +326,17 @@ class ProductDetailAPIView(APIView):
         product = get_object_or_404(Product, pk=pk)
         old_min_stock = product.min_stock
 
-        serializer = ProductUpdateSerializer(
-            product,
-            data=request.data,
-            partial=True
+        # RBAC: arxivlash (statusni inactive qilish) alohida huquq talab qiladi
+        from apps.users.permissions import user_has_perm
+        wants_archive = (
+            str(request.data.get("status", "")) == Product.ProductStatus.INACTIVE
+            and product.status != Product.ProductStatus.INACTIVE
         )
+        if wants_archive and not user_has_perm(request.user, "products.archive"):
+            return Response(
+                {"detail": "Ruxsat yo'q: mahsulotni arxivlash uchun 'products.archive' huquqi kerak."},
+                status=403,
+            )
 
         serializer.is_valid(raise_exception=True)
         serializer.save()

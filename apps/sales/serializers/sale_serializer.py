@@ -34,11 +34,12 @@ class SaleItemSerializer(serializers.ModelSerializer):
     """
     # ✅ YAXSHI: `SerializerMethodField` o'rniga `source="product.name"` ishlatilgan.
     product_name = serializers.CharField(source="product.name", read_only=True)
+    sku = serializers.CharField(source="product.sku", read_only=True, default=None)
 
     class Meta:
         model = SaleItem
         fields = (
-            "id", "product", "product_name",
+            "id", "product", "product_name", "sku",
             "quantity", "unit_price", "total_price",
             "returned_quantity",
         )

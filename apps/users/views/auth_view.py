@@ -34,12 +34,20 @@ class AdminLoginAPIView(APIView):
             user = serializer.validated_data['user']
             tokens = user.get_tokens()
 
+            # RBAC: frontend login'dan keyin darhol menyu/route'larni to'g'ri
+            # chegaralashi uchun rol va permission'lar ham qaytariladi.
+            from apps.users.permissions import user_permissions
+            perms = user_permissions(user)
+
             response = Response({
                 "success": True,
                 "user_id": user.id,
-                # "role": user.role,
                 "full_name": user.full_name,
                 "phone_number": user.phone_number,
+                "is_superuser": user.is_superuser,
+                "role_id": user.role_id,
+                "role_name": user.role.name if user.role_id else None,
+                "permissions": None if perms is None else sorted(perms),
             }, status=status.HTTP_200_OK)
 
             # ACCESS TOKEN COOKIE
@@ -107,7 +115,9 @@ class TokenRefreshAPIView(APIView):
     permission_classes = []
 
     def post(self, request):
-        refresh_token = request.COOKIES.get("refreshToken")
+        # Cookie nomlari login bilan bir xil bo'lishi shart: login `refresh_token` o'rnatadi,
+        # CookieJWTAuthentication esa `access_token`ni o'qiydi.
+        refresh_token = request.COOKIES.get("refresh_token")
 
         if not refresh_token:
             return Response(
@@ -120,12 +130,12 @@ class TokenRefreshAPIView(APIView):
 
             response = Response({"success": True}, status=status.HTTP_200_OK)
             response.set_cookie(
-                key="accessToken",
+                key="access_token",
                 value=access_token,
                 httponly=True,
-                secure=False,       # production da True
-                samesite="Lax",
-                max_age=60 * 15,    # 15 daqiqa
+                secure=True,
+                samesite="None",
+                max_age=60 * 60,  # 1 soat — login bilan bir xil
             )
             return response
 

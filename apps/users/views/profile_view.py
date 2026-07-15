@@ -58,6 +58,7 @@ class ProfileView(RetrieveAPIView):
         #     user_with_history.recent_history = recent   # serializer shu atributdan foydalanadi
         user_with_history = (
             User.objects
+            .select_related("role")
             .prefetch_related(
                 Prefetch(
                     "history",

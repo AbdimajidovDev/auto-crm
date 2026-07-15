@@ -1,4 +1,5 @@
 from django.contrib.auth.models import PermissionsMixin
+from django.db.models import Q
 from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -51,6 +52,22 @@ class TransferListAPIView(APIView):
             .select_related("from_store", "to_store", "approved_by")
             .prefetch_related("items__product")
         )
+
+        # 🔍 QIDIRUV: `?search=` — o'tkazma ID, mahsulot ID/nomi/SKU/shtrixkod va do'kon nomlari bo'yicha.
+        # `items` JOIN'i bir o'tkazmani bir necha qator qilib qaytarishi mumkin, shuning uchun `.distinct()`.
+        search = (request.query_params.get("search") or "").strip()
+        if search:
+            query = (
+                Q(items__product__name__icontains=search)
+                | Q(items__product__sku__icontains=search)
+                | Q(items__product__barcode__icontains=search)
+                | Q(from_store__name__icontains=search)
+                | Q(to_store__name__icontains=search)
+            )
+            if search.isdigit():
+                query |= Q(id=int(search)) | Q(items__product__id=int(search))
+            transfers = transfers.filter(query).distinct()
+
         # DIQQAT: bitta paginator instance ishlatiladi — `get_paginated_response` `paginate_queryset`
         # o'rnatgan `self.page` holatiga tayanadi, shu sabab ikkalasi ayni instance'da chaqiriladi.
         paginator = self.pagination_class()
