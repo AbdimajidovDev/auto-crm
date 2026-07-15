@@ -175,6 +175,7 @@ class PurchaseSessionConfirmAPIView(APIView):
             "cash_amount": str(session.cash_amount),
             "card_amount": str(session.card_amount),
             "bank_card": session.bank_card_id,
+            "note": session.note or "",
             "items": _session_items_payload(session),
         })
         serializer.is_valid(raise_exception=True)
@@ -185,6 +186,7 @@ class PurchaseSessionConfirmAPIView(APIView):
             cash_amount=serializer.validated_data["cash_amount"],
             card_amount=serializer.validated_data["card_amount"],
             bank_card=serializer.validated_data.get("bank_card"),
+            note=serializer.validated_data.get("note", ""),
             items=serializer.validated_data["items"],
             user=request.user,
         )

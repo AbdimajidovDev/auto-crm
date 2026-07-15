@@ -89,7 +89,7 @@ class StockEntryImportAPIView(APIView):
         if result["entry_id"] is None:
             # Hech bir satr import qilinmadi — sabablar skipped da
             return Response(
-                {"detail": "Hech qanday yaroqli satr topilmadi, kirim yaratilmadi.", **result},
+                {"detail": "Hech qanday yaroqli satr topilmadi, xarid yaratilmadi.", **result},
                 status=400,
             )
 
@@ -126,7 +126,7 @@ class StockEntryImportTemplateAPIView(APIView):
         return FileResponse(
             open(TEMPLATE_PATH, "rb"),
             as_attachment=True,
-            filename="kirim_shablon.xlsx",
+            filename="xarid_shablon.xlsx",
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 

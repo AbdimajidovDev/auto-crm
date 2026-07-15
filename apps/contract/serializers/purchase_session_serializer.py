@@ -47,6 +47,7 @@ class PurchaseSessionSerializer(serializers.ModelSerializer):
             "store", "store_name",
             "items", "items_count", "total_amount",
             "cash_amount", "card_amount", "bank_card",
+            "note",
             "status", "current_step",
             "entry",
             "created_at", "updated_at",
@@ -76,7 +77,7 @@ class PurchaseSessionSerializer(serializers.ModelSerializer):
             BankCard.Scope.PURCHASE, BankCard.Scope.BOTH
         ):
             raise serializers.ValidationError(
-                {"bank_card": "Bu to'lov usuli kirim bo'limi uchun ruxsat etilmagan"}
+                {"bank_card": "Bu to'lov usuli xarid bo'limi uchun ruxsat etilmagan"}
             )
         return data
 
