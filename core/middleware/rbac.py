@@ -23,6 +23,7 @@ from apps.users.permissions import user_permissions
 PATH_MODULE_MAP = [
     ("/api/users/customers/", "customers"),
     ("/api/users/roles/", "roles"),
+    ("/api/users/audit-logs/", "audit"),
     ("/api/users/", "users"),
     ("/api/products/categories/", "categories"),
     ("/api/products/", "products"),
@@ -47,7 +48,7 @@ EXEMPT_PREFIXES = (
 )
 
 # GET so'rovi ham permission talab qiladigan modullar (maxfiy ma'lumotlar)
-STRICT_VIEW_MODULES = {"users", "roles", "reports"}
+STRICT_VIEW_MODULES = {"users", "roles", "reports", "audit"}
 
 METHOD_ACTION_MAP = {
     "POST": "create",
@@ -95,6 +96,9 @@ class RBACMiddleware:
         if user is None:
             # Token yo'q/yaroqsiz — DRF o'zi 401 qaytaradi
             return None
+
+        # Keyingi middleware'lar (masalan audit) qayta decode qilmasligi uchun
+        request._rbac_user = user
 
         perms = user_permissions(user)
         if perms is None:

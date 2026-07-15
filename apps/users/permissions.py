@@ -36,6 +36,7 @@ PERMISSION_CATALOG = [
     {"module": "reports",    "label": "Hisobotlar",           "actions": ["view"]},
     {"module": "users",      "label": "Foydalanuvchilar",     "actions": ["view", "create", "edit", "delete"]},
     {"module": "roles",      "label": "Rollar",               "actions": ["view", "create", "edit", "delete"]},
+    {"module": "audit",      "label": "Amallar jurnali",      "actions": ["view"]},
 ]
 
 ALL_PERMISSION_CODES = frozenset(

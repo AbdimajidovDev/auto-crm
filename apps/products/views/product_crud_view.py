@@ -27,10 +27,16 @@ from apps.store.models import Store
 
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, permissions
-from rest_framework.filters import SearchFilter
-from django.db.models import Prefetch
+from django.db.models import Count, Prefetch, Q
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
+
+from apps.products.services.product_query_service import (
+    LOW_STOCK_THRESHOLD,
+    annotate_stock_qty,
+    apply_stock_status,
+    apply_token_search,
+)
 
 
 # @extend_schema(
@@ -115,14 +121,22 @@ from drf_spectacular.types import OpenApiTypes
 
 @extend_schema(
     tags=["Product"],
-    summary="Productlar ro'yxati (search, filter, pagination bilan)",
+    summary="Productlar ro'yxati (search, filter, pagination, stats bilan)",
     parameters=[
         OpenApiParameter("search", OpenApiTypes.STR,
-                         description="Nom yoki tavsif bo'yicha qidirish"),
+                         description="Token qidiruv: so'zlar tartibidan qat'i nazar (nom lotin/kirill, "
+                                     "SKU, barcode, tavsif bo'yicha). Masalan 'cobalt dvornik' = 'dvornik cobalt'"),
         OpenApiParameter("category", OpenApiTypes.INT,
                          description="Kategoriya ID bo'yicha filter"),
         OpenApiParameter("is_active", OpenApiTypes.BOOL,
                          description="Faollik holati bo'yicha filter"),
+        OpenApiParameter("store_id", OpenApiTypes.INT,
+                         description="Do'kon ID — faqat shu do'konda mavjud mahsulotlar, "
+                                     "do'kondagi qoldiq bo'yicha kamayish tartibida. "
+                                     "stock_status va stats ham shu do'kon qoldig'i bo'yicha hisoblanadi"),
+        OpenApiParameter("stock_status", OpenApiTypes.STR,
+                         description="Qoldiq holati: in_stock (>5), low_stock (1..5), out_of_stock (0). "
+                                     "store_id berilsa — shu do'kon qoldig'i, bo'lmasa barcha do'konlar jami"),
         OpenApiParameter("page", OpenApiTypes.INT,
                          description="Sahifa raqami"),
         OpenApiParameter("limit", OpenApiTypes.INT,
@@ -139,12 +153,9 @@ class ProductListAPIView(generics.ListAPIView):
 
     filter_backends = [
         DjangoFilterBackend,
-        SearchFilter,
     ]
 
     filterset_class = ProductFilter
-
-    search_fields = ["id", "name", "sku", "barcode", "description", ]
 
     def get_queryset(self):
 
@@ -170,7 +181,7 @@ class ProductListAPIView(generics.ListAPIView):
             )
         )
 
-        return (
+        queryset = (
             Product.objects
             .filter(
                 status=Product.ProductStatus.ACTIVE
@@ -217,6 +228,44 @@ class ProductListAPIView(generics.ListAPIView):
             #     "name",
             # )
         )
+
+        # Umumiy logika (eksport bilan bir xil): token qidiruv + stock_qty annotatsiyasi
+        queryset = apply_token_search(queryset, self.request.query_params.get("search"))
+
+        store_id = self.request.query_params.get("store_id")
+        if store_id and store_id.isdigit():
+            queryset = annotate_stock_qty(queryset, store_id).order_by("-stock_qty", "name")
+        else:
+            # Qoldig'i ko'p mahsulotlar yuqorida; -id — pagination barqarorligi uchun tiebreaker
+            queryset = annotate_stock_qty(queryset).order_by("-stock_qty", "-id")
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
+        # search/category/store filtrlangan (lekin stock_status QO'LLANMAGAN) queryset —
+        # stats shu asosda hisoblanadi, shunda tab sonlari doim to'liq ko'rinadi
+        base_queryset = self.filter_queryset(self.get_queryset())
+
+        stats = base_queryset.aggregate(
+            all=Count("id"),
+            in_stock=Count("id", filter=Q(stock_qty__gt=LOW_STOCK_THRESHOLD)),
+            low_stock=Count("id", filter=Q(stock_qty__gt=0, stock_qty__lte=LOW_STOCK_THRESHOLD)),
+            out_of_stock=Count("id", filter=Q(stock_qty__lte=0)),
+        )
+
+        queryset = apply_stock_status(
+            base_queryset, request.query_params.get("stock_status")
+        )
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["stats"] = stats
+            return response
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({"results": serializer.data, "stats": stats})
 
     def get_serializer_context(self):
 
@@ -337,6 +386,12 @@ class ProductDetailAPIView(APIView):
                 {"detail": "Ruxsat yo'q: mahsulotni arxivlash uchun 'products.archive' huquqi kerak."},
                 status=403,
             )
+
+        serializer = ProductUpdateSerializer(
+            product,
+            data=request.data,
+            partial=True
+        )
 
         serializer.is_valid(raise_exception=True)
         serializer.save()

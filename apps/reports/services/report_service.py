@@ -30,7 +30,7 @@ from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.contract.models import SupplierTransaction
-from apps.sales.models import Payment, Sale, SaleItem, SaleReturn
+from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
 from apps.store.models import Store
 from ...debts.models import CustomerDebt
 
@@ -456,18 +456,111 @@ class BankCardBreakdownService:
         )
 
         rows = list(qs)
-        total_amount = sum(r["amount"] for r in rows) or Decimal("1")
+        by_card_id = {r["bank_card_id"]: r for r in rows}
 
-        return [
-            {
+        # Barcha faol sotuv kartalari ro'yxatga kiradi — to'lovi bo'lmaganlari 0 bilan
+        # ("humodan shuncha, uzcarddan shuncha" har doim to'liq ko'rinadi)
+        result = []
+        for card in BankCard.objects.filter(
+            is_active=True,
+            scope__in=[BankCard.Scope.SALE, BankCard.Scope.BOTH],
+        ).values("id", "name"):
+            r = by_card_id.pop(card["id"], None)
+            result.append({
+                "bankCardId": card["id"],
+                "name":       card["name"],
+                "count":      r["count"] if r else 0,
+                "amount":     r["amount"] if r else Decimal("0"),
+            })
+
+        # Qolganlari: nofaol kartalar yoki bank_card=NULL bo'lgan eski to'lovlar
+        for r in by_card_id.values():
+            result.append({
                 "bankCardId": r["bank_card_id"],
                 "name":       r["bank_card__name"] or UNKNOWN_CARD_LABEL,
                 "count":      r["count"],
                 "amount":     r["amount"],
-                "percent":    f"{round(float(r['amount'] / total_amount * 100), 1)}%",
+            })
+
+        result.sort(key=lambda r: r["amount"], reverse=True)
+        total_amount = sum(r["amount"] for r in result) or Decimal("1")
+        for r in result:
+            r["percent"] = f"{round(float(r['amount'] / total_amount * 100), 1)}%"
+
+        return result
+
+
+# ─────────────────────────────────────────────
+#  Chiqimlar (davr ichida chiqib ketgan pul)
+# ─────────────────────────────────────────────
+class ExpensesService:
+    """
+    Davr ichidagi chiqimlar:
+      - Mijozlarga qaytarimlar (naqd va karta alohida, Payment.is_refund=True)
+      - Ta'minotchilarga to'lovlar (SupplierTransaction type='pay')
+    2 ta SQL.
+    """
+
+    @staticmethod
+    def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        refunds = (
+            Payment.objects
+            .filter(
+                is_refund=True,
+                created_at__date__gte=date_from,
+                created_at__date__lte=date_to,
+            )
+            .filter(_store_q(store_id, "sale__store_id"))
+            .values("type")
+            .annotate(
+                count=Count("id"),
+                amount=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
+            )
+        )
+
+        supplier_pay = (
+            SupplierTransaction.objects
+            .filter(
+                type=SupplierTransaction.TransactionType.PAYMENT,
+                created_at__date__gte=date_from,
+                created_at__date__lte=date_to,
+            )
+            .filter(_store_q(store_id, "entry__store_id"))
+            .aggregate(
+                count=Count("id"),
+                amount=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
+            )
+        )
+
+        refund_labels = {
+            "cash": "Mijozga qaytarim (naqd)",
+            "card": "Mijozga qaytarim (karta)",
+        }
+        rows = [
+            {
+                "method": refund_labels.get(r["type"], r["type"]),
+                "type":   f"refund_{r['type']}",
+                "count":  r["count"],
+                "amount": r["amount"],
             }
-            for r in rows
+            for r in refunds
+            if r["amount"]
         ]
+
+        if supplier_pay["amount"]:
+            rows.append({
+                "method": "Ta'minotchilarga to'lov",
+                "type":   "supplier_payment",
+                "count":  supplier_pay["count"],
+                "amount": supplier_pay["amount"],
+            })
+
+        rows.sort(key=lambda r: r["amount"], reverse=True)
+        total = sum(r["amount"] for r in rows) or Decimal("1")
+        for r in rows:
+            r["percent"] = f"{round(float(r['amount'] / total * 100), 1)}%"
+
+        return rows
 
 
 # ─────────────────────────────────────────────
@@ -555,6 +648,7 @@ class ReportService:
             "topSellingProducts": TopProductsService.get(date_from, date_to, store_id),
             "paymentStructure":   PaymentStructureService.get(date_from, date_to, store_id),
             "cardBreakdown":      BankCardBreakdownService.get(date_from, date_to, store_id),
+            "expenses":           ExpensesService.get(date_from, date_to, store_id),
             "debts": {
                 "customerDebts":  DebtService.customer_debts(store_id),
                 "supplierDebts":  DebtService.supplier_debts(store_id),

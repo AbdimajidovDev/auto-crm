@@ -82,7 +82,7 @@ def _supplier_queryset(search: str | None = None, is_active: str | None = None):
     qs = (
         Supplier.objects.only(
             "id", "name", "description", "address",
-            "phone_number", "inn", "is_active",
+            "phone_number", "inn", "is_active", "created_at",
         )
         .annotate(
             total_purchase_amount=Coalesce(
@@ -160,11 +160,22 @@ class SupplierListAPIView(APIView):
     serializer_class = SupplierListSerializer
     pagination_class = SupplierPagination
 
+    # Saralash faqat ruxsat etilgan (annotatsiyalangan) maydonlar bo'yicha
+    ALLOWED_ORDERINGS = {"name", "-total_purchase_amount", "-total_debt", "-created_at"}
+
     def get(self, request):
         search = request.query_params.get("search", "").strip() or None
         is_active = request.query_params.get("is_active", None)
 
         qs = _supplier_queryset(search=search, is_active=is_active)
+
+        # 🔎 ?has_debt=true — faqat qarzdorlar; ?ordering= — saralash (ro'yxat va eksport bir xil)
+        if request.query_params.get("has_debt") in ("true", "1"):
+            qs = qs.filter(total_debt__gt=0)
+
+        ordering = request.query_params.get("ordering")
+        if ordering in self.ALLOWED_ORDERINGS:
+            qs = qs.order_by(ordering)
 
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(qs, request, view=self)
@@ -220,7 +231,8 @@ class SupplierDetailAPIView(APIView):
     def put(self, request, pk):
         supplier = get_object_or_404(Supplier, pk=pk)
 
-        serializer = self.serializer_class(data=request.data, partial=True)
+        # instance beriladi — validate_inn tahrirlanayotgan ta'minotchining o'z INN'ini istisno qiladi
+        serializer = self.serializer_class(supplier, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
         try:

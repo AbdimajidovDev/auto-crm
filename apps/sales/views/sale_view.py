@@ -17,7 +17,7 @@ from apps.sales.services import CustomerDebtService
 from apps.sales.filters import SaleFilter
 
 from django.db.models import (
-    Case, DecimalField, F, OuterRef,
+    Case, Count, DecimalField, F, OuterRef,
     Prefetch, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce
@@ -70,6 +70,23 @@ def _debt_decrease_subquery() -> Subquery:
         ),
         Value(0, output_field=DecimalField()),
     )
+
+
+def _scope_to_user_stores(qs, user):
+    """
+    Do'kon darajasidagi cheklov: superuser hamma sotuvlarni ko'radi,
+    oddiy user faqat O'Z DO'KON(LAR)IDAGI sotuvlarni ko'radi
+    (avval seller=user edi — do'kondagi boshqa sotuvchilarning sotuvlari
+    ko'rinmasdi; endi do'kon bo'yicha).
+    """
+    if user.is_superuser:
+        return qs
+    from apps.store.models import StoreUser
+
+    store_ids = StoreUser.objects.filter(
+        user=user, is_active=True
+    ).values_list("store_id", flat=True)
+    return qs.filter(store_id__in=list(store_ids))
 
 
 # ─────────────────────────────────────────────
@@ -131,11 +148,8 @@ class SaleListAPIView(generics.ListAPIView):
         )
 
         # 🔐 PERMISSION: superuser barcha sotuvlarni ko'radi,
-        # oddiy foydalanuvchi faqat o'zinikini.
-        if not user.is_superuser:
-            qs = qs.filter(seller=user)
-
-        return qs
+        # oddiy foydalanuvchi faqat o'z do'kon(lar)idagi sotuvlarni.
+        return _scope_to_user_stores(qs, user)
 
 
 
@@ -192,6 +206,75 @@ class SaleListAPIView(generics.ListAPIView):
 #         )
 #
 #         return qs.order_by("-created_at")
+
+
+@extend_schema(
+    tags=["Sales"],
+    summary="Sotuv statistikasi (filtrlangan davr bo'yicha jami)",
+    parameters=[
+        OpenApiParameter("store", OpenApiTypes.INT, description="Do'kon ID (faqat superuser uchun ma'noli)"),
+        OpenApiParameter("date_from", OpenApiTypes.DATE, description="Sana oralig'i boshi (YYYY-MM-DD)"),
+        OpenApiParameter("date_to", OpenApiTypes.DATE, description="Sana oralig'i oxiri (YYYY-MM-DD)"),
+    ],
+)
+class SaleStatisticsAPIView(APIView):
+    """
+    Sotuvlar ro'yxati sahifasidagi statistika kartalari uchun.
+
+    Ro'yxatdan farqi: paginatsiyasiz, BUTUN filtrlangan davr bo'yicha
+    yig'indilar qaytadi (avval frontend faqat joriy sahifadagi 10 ta
+    yozuvdan hisoblab noto'g'ri ko'rsatardi).
+
+    Do'kon cheklovi ro'yxat bilan bir xil: superuser hammasini,
+    oddiy user faqat o'z do'kon(lar)ini ko'radi.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = _scope_to_user_stores(Sale.objects.all(), request.user)
+
+        params = request.query_params
+        store = params.get("store")
+        if store:
+            qs = qs.filter(store_id=store)
+        date_from = params.get("date_from")
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
+        totals = qs.aggregate(
+            total_sales=Count("id"),
+            total_amount=Coalesce(Sum("total_amount"), Value(0, output_field=DecimalField())),
+            total_paid=Coalesce(Sum("paid_amount"), Value(0, output_field=DecimalField())),
+        )
+
+        # Qarz — ledger bo'yicha (kirim 'i' minus to'lov 'd'), xuddi ro'yxatdagi kabi
+        debt = CustomerDebt.objects.filter(sale__in=qs.values("id")).aggregate(
+            total=Coalesce(
+                Sum(
+                    Case(
+                        When(type="i", then=F("amount")),
+                        When(type="d", then=-F("amount")),
+                        default=Value(0),
+                        output_field=DecimalField(),
+                    )
+                ),
+                Value(0, output_field=DecimalField()),
+            )
+        )
+
+        return Response(
+            {
+                "total_sales": totals["total_sales"],
+                "total_amount": str(totals["total_amount"]),
+                "total_paid": str(totals["total_paid"]),
+                "total_debt": str(debt["total"]),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 @extend_schema(

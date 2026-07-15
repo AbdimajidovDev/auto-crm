@@ -50,6 +50,8 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    # Audit RBAC'dan OLDIN: shunda RBAC 403 qaytargan urinishlar ham jurnalga tushadi
+    "core.middleware.audit.AuditLogMiddleware",
     "core.middleware.rbac.RBACMiddleware",
     "core.middleware.store_context.StoreContextMiddleware",
     'django.contrib.messages.middleware.MessageMiddleware',

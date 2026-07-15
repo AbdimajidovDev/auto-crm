@@ -21,16 +21,19 @@ from apps.products.views.product_batch_view import (
     ProductBatchDetailView,
 )
 from apps.products.views.product_excel_view import ProductImportAPIView, ProductImportTemplateAPIView
+from apps.products.views.export_views import ProductExportAPIView, CategoryExportAPIView
 
 urlpatterns = [
 
     # Category
     path("categories/", CategoryListAPIView.as_view()),
+    path("categories/export/", CategoryExportAPIView.as_view()),
     path("categories/create/", CategoryCreateAPIView.as_view()),
     path("categories/<int:pk>/", CategoryDetailAPIView.as_view()),
 
     # Product
     path("", ProductListAPIView.as_view()),
+    path("export/", ProductExportAPIView.as_view()),
     path("create/", ProductCreateAPIView.as_view()),
     path("<int:pk>/", ProductDetailAPIView.as_view()),
 

@@ -52,6 +52,8 @@ class SupplierPaymentAPIView(APIView):
             entry=serializer.validated_data["entry"],
             amount=serializer.validated_data["amount"],
             note=serializer.validated_data.get("note"),
+            payment_method=serializer.validated_data.get("payment_type") or "cash",
+            bank_card=serializer.validated_data.get("bank_card"),
             user=request.user
         )
 

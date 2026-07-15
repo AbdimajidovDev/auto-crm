@@ -15,7 +15,7 @@ from apps.contract.serializers import (
     StockEntryListSerializer,
 )
 from apps.contract.services import StockEntryService
-from apps.common.permissions import IsSuperUser
+from apps.contract.permissions import CanCreateStockEntry, allowed_store_ids, ensure_store_access
 
 from django.db.models import (
     Case, DecimalField, F, OuterRef,
@@ -145,7 +145,7 @@ class StockEntryListAPIView(generics.ListAPIView):
             )
         )
 
-        return (
+        queryset = (
             StockEntry.objects
             .select_related("supplier", "store", "created_by")
             .prefetch_related(
@@ -157,18 +157,28 @@ class StockEntryListAPIView(generics.ListAPIView):
             )
         )
 
+        # Do'kon xodimi faqat o'z do'kon(lar)ining kirimlarini ko'radi
+        allowed = allowed_store_ids(self.request.user)
+        if allowed is not None:
+            queryset = queryset.filter(store_id__in=allowed)
+
+        return queryset
+
 
 @extend_schema(
     tags=["Stock Entry"],
-    summary="Omborga kirim qilish.",
+    summary="Do'konga kirim qilish (superuser — istalgan do'konga, xodim — o'z do'koniga).",
 )
 class StockEntryCreateAPIView(APIView):
-    permission_classes = [IsSuperUser]
+    permission_classes = [CanCreateStockEntry]
     serializer_class = StockEntryCreateSerializer
 
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
+
+        # Do'kon xodimi faqat o'z do'koniga kirim qiladi (superuser — hammasiga)
+        ensure_store_access(request.user, serializer.validated_data["store"].id)
 
         entry = StockEntryService.create_entry(
             supplier=serializer.validated_data["supplier"],

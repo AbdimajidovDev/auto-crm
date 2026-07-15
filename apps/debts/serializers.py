@@ -55,6 +55,40 @@ class PayDebtSerializer(serializers.Serializer):
         return data
 
 
+class CustomerPayDebtSerializer(serializers.Serializer):
+    """Mijozning umumiy qarzini FIFO tartibida to'lash (eng eski buyurtmadan boshlab)."""
+    customer = serializers.IntegerField()
+    amount = serializers.DecimalField(max_digits=20, decimal_places=2)
+    type = serializers.ChoiceField(choices=Payment.Type.choices)
+    bank_card = serializers.PrimaryKeyRelatedField(
+        queryset=BankCard.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("To'lov miqdori noldan katta bo'lishi kerak")
+        return value
+
+    def validate(self, data):
+        validate_payment_method(data['type'], data.get('bank_card'))
+        return data
+
+
+class CustomerPaymentListSerializer(serializers.ModelSerializer):
+    """Mijozning to'lovlar tarixi (qarz to'lovlari ham, sotuv to'lovlari ham)."""
+    bank_card_name = serializers.CharField(source="bank_card.name", read_only=True, default="")
+
+    class Meta:
+        model = Payment
+        fields = (
+            "id", "sale", "amount", "type", "bank_card", "bank_card_name",
+            "is_refund", "created_at",
+        )
+
+
 # ═══════════════════════════════
 # 📊 FAYL XULOSASI
 # Kritik muammolar soni: 1

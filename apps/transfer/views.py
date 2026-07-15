@@ -7,6 +7,7 @@ from rest_framework import status, permissions
 from django.core.exceptions import ValidationError
 
 from apps.common.paginations import StandardPagination
+from apps.common.excel_export import parse_date_param
 from apps.transfer.models import StockTransfer, Notification
 from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer, NotificationSerializer
 from apps.transfer.services import TransferService
@@ -67,6 +68,18 @@ class TransferListAPIView(APIView):
             if search.isdigit():
                 query |= Q(id=int(search)) | Q(items__product__id=int(search))
             transfers = transfers.filter(query).distinct()
+
+        # 🔎 ?status= (p/a/r) va ?date_from=&date_to= (YYYY-MM-DD) — ro'yxat filtrlari
+        status_param = request.query_params.get("status")
+        if status_param in dict(StockTransfer.Status.choices):
+            transfers = transfers.filter(status=status_param)
+
+        date_from = parse_date_param(request.query_params.get("date_from"))
+        date_to = parse_date_param(request.query_params.get("date_to"))
+        if date_from:
+            transfers = transfers.filter(created_at__date__gte=date_from)
+        if date_to:
+            transfers = transfers.filter(created_at__date__lte=date_to)
 
         # DIQQAT: bitta paginator instance ishlatiladi — `get_paginated_response` `paginate_queryset`
         # o'rnatgan `self.page` holatiga tayanadi, shu sabab ikkalasi ayni instance'da chaqiriladi.
