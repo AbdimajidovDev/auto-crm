@@ -13,7 +13,7 @@ from apps.contract.views.supplier_crud_view import _supplier_queryset
             "(?date_from=&date_to=&store=&supplier= — ro'yxat filtrlari bilan bir xil)",
 )
 class StockEntryExportAPIView(BaseExcelExportAPIView):
-    filename = "kirimlar"
+    filename = "xaridlar"
     # Sana filtri StockEntryFilter (date_from/date_to) orqali qo'llanadi
     date_field = None
 
@@ -50,9 +50,10 @@ class StockEntryExportAPIView(BaseExcelExportAPIView):
             ("Yaratdi", 24),
             ("Mahsulot xillari", 14),
             ("Jami dona", 12),
+            ("Izoh", 34),
         ]
         item_columns = [
-            ("Kirim ID", 10),
+            ("Xarid ID", 10),
             ("Sana", 17),
             ("Mahsulot", 40),
             ("SKU", 14),
@@ -79,6 +80,7 @@ class StockEntryExportAPIView(BaseExcelExportAPIView):
                     entry.created_by.full_name if entry.created_by else "",
                     len(items),
                     sum(item.quantity for item in items),
+                    entry.note or "",
                 ]
 
         def item_rows():
@@ -95,7 +97,7 @@ class StockEntryExportAPIView(BaseExcelExportAPIView):
                     ]
 
         return [
-            ("Kirimlar", entry_columns, entry_rows()),
+            ("Xaridlar", entry_columns, entry_rows()),
             ("Mahsulotlar", item_columns, item_rows()),
         ]
 

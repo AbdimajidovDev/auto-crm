@@ -40,6 +40,7 @@ HEADER_MAP = {
     "purchase_price":     "purchase_price",
     "sotib olingan narx": "purchase_price",
     "kirim narxi":        "purchase_price",
+    "xarid narxi":        "purchase_price",
     "tannarx":            "purchase_price",
     "selling_price":      "selling_price",
     "sotish narxi":       "selling_price",

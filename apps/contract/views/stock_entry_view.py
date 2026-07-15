@@ -185,6 +185,8 @@ class StockEntryCreateAPIView(APIView):
             store=serializer.validated_data["store"],
             cash_amount=serializer.validated_data["cash_amount"],
             card_amount=serializer.validated_data["card_amount"],
+            bank_card=serializer.validated_data.get("bank_card"),
+            note=serializer.validated_data.get("note", ""),
             items=serializer.validated_data["items"],
             user=request.user
         )

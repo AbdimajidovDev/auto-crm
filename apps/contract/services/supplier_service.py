@@ -63,7 +63,7 @@ class SupplierPaymentService:
 
         remaining = SupplierPaymentService.get_remaining_debt(locked_entry)
         if remaining <= 0:
-            raise ValidationError({"amount": "Bu kirim bo'yicha qarz yo'q"})
+            raise ValidationError({"amount": "Bu xarid bo'yicha qarz yo'q"})
         if amount > remaining:
             raise ValidationError({
                 "amount": f"To'lov qoldiq qarzdan oshib ketdi. Qoldiq qarz: {remaining:.2f}"

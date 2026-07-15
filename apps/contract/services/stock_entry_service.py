@@ -8,7 +8,7 @@ from apps.contract.models import StockEntry, StockEntryItem, SupplierTransaction
 class StockEntryService:
     @staticmethod
     @transaction.atomic
-    def create_entry(*, supplier, store, items, cash_amount, card_amount, user, bank_card=None):
+    def create_entry(*, supplier, store, items, cash_amount, card_amount, user, bank_card=None, note=""):
         total_entry_amount = sum(
             item["purchase_price"] * item["quantity"] for item in items
         )
@@ -22,6 +22,7 @@ class StockEntryService:
             cash_amount=cash_amount,
             card_amount=card_amount,
             bank_card=bank_card if card_amount and card_amount > 0 else None,
+            note=(note or "").strip(),
             created_by=user
         )
 

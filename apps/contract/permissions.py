@@ -43,4 +43,4 @@ def ensure_store_access(user, store_id):
     """Do'kon foydalanuvchiga biriktirilmagan bo'lsa 403 qaytaradi."""
     allowed = allowed_store_ids(user)
     if allowed is not None and int(store_id) not in allowed:
-        raise PermissionDenied("Siz faqat o'z do'koningizga kirim qila olasiz")
+        raise PermissionDenied("Siz faqat o'z do'koningizga xarid (kirim) qila olasiz")

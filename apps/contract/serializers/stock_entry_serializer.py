@@ -56,6 +56,8 @@ class StockEntryCreateSerializer(serializers.Serializer):
         allow_null=True,
         default=None,
     )
+    # Ixtiyoriy izoh/tavsif
+    note = serializers.CharField(required=False, allow_blank=True, max_length=1000, default="")
 
     items = StockEntryItemSerializer(many=True)
 
@@ -77,7 +79,7 @@ class StockEntryCreateSerializer(serializers.Serializer):
         if bank_card is not None:
             if bank_card.scope not in (BankCard.Scope.PURCHASE, BankCard.Scope.BOTH):
                 raise serializers.ValidationError(
-                    {"bank_card": "Bu to'lov usuli kirim bo'limi uchun ruxsat etilmagan"}
+                    {"bank_card": "Bu to'lov usuli xarid bo'limi uchun ruxsat etilmagan"}
                 )
         if data["card_amount"] > 0 and bank_card is None:
             raise serializers.ValidationError(
@@ -167,6 +169,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
             "total_amount", "paid_amount",
             "total_in", "total_paid", "debt",
             "created_by", "full_name",
+            "note",
             "items",
             "created_at",
         )

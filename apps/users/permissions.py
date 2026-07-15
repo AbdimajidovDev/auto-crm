@@ -26,7 +26,7 @@ PERMISSION_CATALOG = [
     {"module": "categories", "label": "Kategoriyalar",        "actions": ["view", "create", "edit", "delete"]},
     {"module": "sales",      "label": "Sotuvlar",             "actions": ["view", "create", "edit", "delete"]},
     {"module": "inventory",  "label": "Inventarizatsiya",     "actions": ["view", "create", "edit"]},
-    {"module": "stockentry", "label": "Kirim (postavka)",     "actions": ["view", "create", "edit", "delete"]},
+    {"module": "stockentry", "label": "Xarid (kirim)",        "actions": ["view", "create", "edit", "delete"]},
     {"module": "transfers",  "label": "Transferlar",          "actions": ["view", "create", "edit", "delete"]},
     {"module": "writeoff",   "label": "Spisaniye",            "actions": ["view", "create", "edit", "delete"]},
     {"module": "customers",  "label": "Mijozlar",             "actions": ["view", "create", "edit", "delete"]},

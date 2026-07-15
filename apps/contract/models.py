@@ -83,6 +83,9 @@ class StockEntry(TimestampMixin):
         related_name="stock_entries",
     )
 
+    # Ixtiyoriy izoh/tavsif (kirim yaratishda kiritiladi)
+    note = models.TextField(blank=True, default="")
+
     created_by = models.ForeignKey(
         "users.User",
         on_delete=models.SET_NULL,
@@ -188,6 +191,8 @@ class PurchaseSession(TimestampMixin):
         blank=True,
         related_name="purchase_sessions",
     )
+    # Ixtiyoriy izoh — confirm bosqichida StockEntry.note ga ko'chadi
+    note = models.TextField(blank=True, default="")
 
     status = models.CharField(
         max_length=12,
