@@ -170,8 +170,16 @@ class LegacyImporter:
             # (avtomatik generatsiya va shtrix-rasm yasash chetlab o'tiladi).
             for i in range(0, len(to_create), BATCH_SIZE):
                 chunk = Product.objects.bulk_create(to_create[i:i + BATCH_SIZE])
+                # Артикул bo'sh kelgan mahsulotlarga sku generatsiya qilamiz —
+                # aks holda API'da sku=null bo'lib qoladi (save() chetlab o'tilgan).
+                need_sku = []
                 for p in chunk:
+                    if not p.sku:
+                        p.sku = self.products.unique_generated_sku(p)
+                        need_sku.append(p)
                     self.products.register(p)
+                if need_sku:
+                    Product.objects.bulk_update(need_sku, ["sku"])
 
         self._log(
             f"  yaratiladi: {len(to_create)} mahsulot | "

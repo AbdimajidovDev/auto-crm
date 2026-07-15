@@ -199,6 +199,11 @@ class ProductResolver:
         # bulk_create (save() EMAS): eski sku/barcode aynan saqlanadi, shtrix-rasm
         # yaratilmaydi — katalog mahsulotlari bilan bir xil (izchil), tezroq.
         product = Product.objects.bulk_create([product])[0]
+        # sku bo'sh kelgan bo'lsa ham generatsiya qilamiz — bulk_create save()
+        # dagi avtogeneratsiyani chetlab o'tadi, API'da esa sku doim kutiladi.
+        if not product.sku:
+            product.sku = self.unique_generated_sku(product)
+            Product.objects.filter(pk=product.pk).update(sku=product.sku)
         self._cache(product)
         self.created_on_demand += 1
         return product.id
@@ -252,6 +257,17 @@ class ProductResolver:
     def register(self, product):
         """`bulk_create`'dan keyin yangi mahsulotni cache'ga qo'shadi."""
         self._cache(product)
+
+    def unique_generated_sku(self, product) -> str:
+        """Product.generate_sku() qiymatini cache'dagi mavjud sku'lar bilan
+        to'qnashmaydigan qilib qaytaradi (id sku ichida bo'lgani uchun
+        to'qnashuv faqat qo'lda kiritilgan sku bilan bo'lishi mumkin)."""
+        base = product.generate_sku()
+        sku, n = base, 1
+        while self.sku_exists(sku):
+            sku = f"{base}-{n}"
+            n += 1
+        return sku
 
 
 def get_system_user():
