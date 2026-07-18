@@ -116,27 +116,31 @@ class SaleSerializer(serializers.Serializer):
 
 
 # ------------------------------------------------------------------ #
-#  Customer — asosiy serializer                                        #
+#  Customer — serializerlar                                            #
 # ------------------------------------------------------------------ #
+class CustomerBriefSerializer(serializers.ModelSerializer):
+    """
+    POS (sotuv) dropdowni uchun MINIMAL serializer.
+
+    Hech qanday agregat/relation yo'q — ?brief=1 rejimida ishlatiladi,
+    javob har doim yengil va tez bo'ladi.
+    """
+
+    class Meta:
+        model = Customer
+        fields = ("id", "full_name", "phone_number")
+
+
 class CustomerListSerializer(serializers.ModelSerializer):
     """
-    N+1 muammolari qanday hal qilindi:
+    Ro'yxat (jadval) serializeri — faqat jadvalda ko'rinadigan maydonlar.
 
-    total_purchase_amount:
-      Annotate orqali Sale.total_amount yig'indisi — bitta correlated Subquery.
+    total_purchase_amount / total_debt:
+      Annotate orqali correlated Subquery — N+1 yo'q.
 
-    total_debt:
-      Annotate orqali CustomerDebt (type="i" kirim - "p" to'lov) — ikkita Subquery,
-      ExpressionWrapper bilan ayirma hisoblanadi.
-      (Supplier logikasi bilan bir xil pattern.)
-
-    store_debts:
-      prefetch_related("debts__sale__store") — Python darajasida guruhlash,
-      qo'shimcha SQL yo'q.
-
-    sales → items → product:
-      Prefetch("sales") + Prefetch("sales__items") + select_related("product")
-      — N ta mijoz uchun faqat 3 ta qo'shimcha SQL.
+    DIQQAT: sales va store_debts bu yerda YO'Q — ular sahifadagi jadvalda
+    ishlatilmaydi va har mijoz uchun butun sotuv tarixini yuklash ro'yxatni
+    sekinlashtirardi. To'liq ma'lumot detail endpointida (CustomerSerializer).
     """
 
     # annotate orqali kelgan qiymatlar — SerializerMethodField shart emas
@@ -147,9 +151,6 @@ class CustomerListSerializer(serializers.ModelSerializer):
         max_digits=20, decimal_places=2, read_only=True
     )
 
-    store_debts = serializers.SerializerMethodField()
-    sales = SaleSerializer(many=True, read_only=True)
-
     class Meta:
         model = Customer
         fields = (
@@ -158,28 +159,7 @@ class CustomerListSerializer(serializers.ModelSerializer):
             "phone_number",
             "total_purchase_amount",
             "total_debt",
-            "store_debts",
-            "sales",
         )
-
-    def get_store_debts(self, obj) -> list[dict]:
-        """
-        prefetch_related("debts__sale__store") orqali debts xotirada mavjud.
-        Qo'shimcha SQL yo'q — Python darajasida guruhlash.
-        """
-        store_map: dict[str, float] = {}
-        for debt in obj.debts.all():  # prefetch — SQL yo'q
-            sale = getattr(debt, "sale", None)
-            store = getattr(sale, "store", None) if sale else None
-            if not store:
-                continue
-            delta = float(debt.amount) if debt.type == "i" else -float(debt.amount)
-            store_map[store.name] = store_map.get(store.name, 0) + delta
-
-        return [
-            {"store": store_name, "debt": round(debt_val, 2)}
-            for store_name, debt_val in sorted(store_map.items())
-        ]
 
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -206,12 +186,17 @@ class CustomerSerializer(serializers.ModelSerializer):
     total_debt = serializers.DecimalField(
         max_digits=12, decimal_places=2, read_only=True
     )
+    # Detail queryset (_customer_queryset) annotate qiladi — ro'yxatdan olib
+    # tashlangani uchun detail dialog shu maydonni bu yerdan oladi.
+    total_purchase_amount = serializers.DecimalField(
+        max_digits=20, decimal_places=2, read_only=True
+    )
     store_debts = serializers.SerializerMethodField()
     sales = SaleSerializer(many=True, read_only=True)
 
     class Meta:
         model = Customer
-        fields = ("id", "full_name", "phone_number", "total_debt", "store_debts", "sales")
+        fields = ("id", "full_name", "phone_number", "total_debt", "total_purchase_amount", "store_debts", "sales")
 
     def get_store_debts(self, obj):
         """

@@ -172,12 +172,23 @@ class ProductListAPIView(generics.ListAPIView):
                 "id",
                 "product_id",
                 "quantity",
+                # Serializer (get_batches) ishlatadigan narx/holat maydonlari —
+                # only() dan tushib qolsa har bir batch uchun alohida deferred
+                # SQL chiqadi (N+1). 100 mahsulotda ~1600 so'rovga yetgan edi.
+                "purchase_price",
+                "selling_price",
+                "wholesale_price",
+                "is_active",
                 "store_id",
                 "store__id",
                 "store__name",
                 "location_id",
                 "location__id",
+                # location tarjima qilinadigan maydon (modeltranslation) —
+                # barcha til variantlari kerak, aks holda deferred so'rov chiqadi
                 "location__location",
+                "location__location_uz",
+                "location__location_uz_cyrl",
             )
         )
 
@@ -206,27 +217,13 @@ class ProductListAPIView(generics.ListAPIView):
                 ),
 
                 Prefetch("batches", queryset=active_batches,),)
-            .only(
-                "id",
-                "name",
-                "description",
-                "min_stock",
-
-                "sku",
-                "barcode",
-
-                "category_id",
-                "category__name_uz",
-
-                "brand_id",
-                "brand__name",
-
-                "unit_measurement_id",
-                "unit_measurement__measurement",
-            )
-            # .order_by(
-            #     "name",
-            # )
+            # DIQQAT: bu yerda .only() ataylab YO'Q. Product/Category/Brand/
+            # UnitMeasurement maydonlari modeltranslation bilan tarjima qilinadi
+            # (name_uz, name_uz_cyrl, ...) va serializer status/created_at/
+            # shtrix_code kabi maydonlarni ham o'qiydi. Tor only() ro'yxati har
+            # bir yetishmagan maydon uchun mahsulot boshiga alohida deferred SQL
+            # chiqarardi — 100 mahsulotda 1674 ta so'rov, ~1.5s. To'liq qatorni
+            # bitta so'rovda olish bundan ancha arzon (~6 SQL, <0.3s).
         )
 
         # Umumiy logika (eksport bilan bir xil): token qidiruv + stock_qty annotatsiyasi

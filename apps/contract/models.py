@@ -262,3 +262,7 @@ class SupplierTransaction(TimestampMixin):
 
     class Meta:
         db_table = "supplier_transaction"
+        indexes = [
+            # Reports (chiqimlar) va supplier statistikasi type+created_at bo'yicha filtrlaydi
+            models.Index(fields=["type", "created_at"]),
+        ]

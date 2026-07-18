@@ -14,6 +14,7 @@ from apps.sales.models import Sale, SaleItem
 from apps.users.models.customers import Customer
 from apps.users.serializers.customer_serializer import (
     _debt_subquery,
+    CustomerBriefSerializer,
     CustomerWriteSerializer,
     CustomerListSerializer, CustomerSerializer,
 )
@@ -74,9 +75,13 @@ from apps.sales.models import Sale, SaleItem
 # ------------------------------------------------------------------ #
 #  Queryset helper                                                     #
 # ------------------------------------------------------------------ #
-def _customer_queryset():
+def _customer_aggregate_queryset():
     """
-    Barcha Customer so'rovlari uchun yagona, optimallashtirilgan queryset.
+    Ro'yxat (jadval) uchun AGREGAT queryset — og'ir prefetchlarsiz.
+
+    Sales/debts prefetchlari bu yerda YO'Q: ular faqat detail view
+    (`_customer_queryset`) uchun kerak. Ro'yxat shu tufayli katta bazada ham
+    ~1 SQL + 3 subquery bilan javob beradi.
 
     Annotatsiyalar
     ──────────────
@@ -143,36 +148,6 @@ def _customer_queryset():
     #     .values("debt")
     # )
 
-    # --- items uchun Prefetch: product select_related bilan ---
-    items_prefetch = Prefetch(
-        "items",
-        queryset=SaleItem.objects.select_related("product").only(
-            "id", "sale_id", "product_id", "product__name",
-            "quantity", "total_price",
-        ),
-    )
-
-    # --- sales uchun Prefetch: store select_related + items prefetch ---
-    sales_prefetch = Prefetch(
-        "sales",
-        queryset=Sale.objects.select_related("store")
-        .only(
-            "id", "customer_id", "store_id", "store__name",
-            "total_amount", "paid_amount", "status", "created_at",
-        )
-        .prefetch_related(items_prefetch)
-        .order_by("-created_at"),
-    )
-
-    # --- debts uchun Prefetch: store_debts hisobi uchun ---
-    debts_prefetch = Prefetch(
-        "debts",
-        queryset=CustomerDebt.objects.select_related("sale__store").only(
-            "id", "customer_id", "amount", "type",
-            "sale_id", "sale__store_id", "sale__store__name",
-        ),
-    )
-
     return (
         Customer.objects.only("id", "full_name", "phone_number")
         .annotate(
@@ -202,8 +177,42 @@ def _customer_queryset():
             #     zero,
             # ),
         )
-        .prefetch_related(sales_prefetch, debts_prefetch)
     )
+
+
+def _customer_queryset():
+    """
+    Detail view uchun TO'LIQ queryset: agregatlar + sales/items/debts prefetch.
+    Bitta mijoz uchun ishlatiladi — prefetchlar arzon.
+    """
+    items_prefetch = Prefetch(
+        "items",
+        queryset=SaleItem.objects.select_related("product").only(
+            "id", "sale_id", "product_id", "product__name",
+            "quantity", "total_price",
+        ),
+    )
+
+    sales_prefetch = Prefetch(
+        "sales",
+        queryset=Sale.objects.select_related("store")
+        .only(
+            "id", "customer_id", "store_id", "store__name",
+            "total_amount", "paid_amount", "status", "created_at",
+        )
+        .prefetch_related(items_prefetch)
+        .order_by("-created_at"),
+    )
+
+    debts_prefetch = Prefetch(
+        "debts",
+        queryset=CustomerDebt.objects.select_related("sale__store").only(
+            "id", "customer_id", "amount", "type",
+            "sale_id", "sale__store_id", "sale__store__name",
+        ),
+    )
+
+    return _customer_aggregate_queryset().prefetch_related(sales_prefetch, debts_prefetch)
 
 
 # ------------------------------------------------------------------ #
@@ -227,7 +236,12 @@ def _customer_queryset():
                 ),
             ),
             OpenApiParameter("page",  OpenApiTypes.INT, description="Sahifa raqami."),
-            OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi yozuvlar soni."),
+            OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi yozuvlar soni (maksimum 100)."),
+            OpenApiParameter(
+                "brief", OpenApiTypes.BOOL,
+                description="1 bo'lsa minimal rejim: faqat id, full_name, phone_number "
+                            "(POS dropdown uchun — agregatlar hisoblanmaydi).",
+            ),
         ],
     )
 )
@@ -244,8 +258,22 @@ class CustomerListView(generics.ListAPIView):
     ]
     ordering = ["full_name"]
 
+    def _is_brief(self) -> bool:
+        """?brief=1 — POS (sotuv) dropdowni uchun minimal rejim."""
+        return str(self.request.query_params.get("brief", "")).lower() in ("1", "true", "yes")
+
+    def get_serializer_class(self):
+        return CustomerBriefSerializer if self._is_brief() else CustomerListSerializer
+
     def get_queryset(self):
-        return _customer_queryset()
+        if self._is_brief():
+            # Eng yengil yo'l: JOIN ham, subquery ham yo'q — dropdown uchun yetarli.
+            # Agregat ustunlar yo'qligi sababli ordering ham cheklanadi.
+            self.ordering_fields = ["full_name"]
+            return Customer.objects.only("id", "full_name", "phone_number")
+        # Jadval rejimi: agregatlar bor, lekin sales/debts prefetchlari YO'Q —
+        # to'liq tarix faqat detail (/customers/<id>/) endpointida qaytadi.
+        return _customer_aggregate_queryset()
 
 
 

@@ -21,6 +21,7 @@ from django.db.models import (
 from django.db.models.functions import (
     Coalesce,
     TruncDay,
+    TruncHour,
     TruncMonth,
     TruncWeek,
 )
@@ -59,15 +60,23 @@ class DateRange:
 
 class DateRangeResolver:
     """
-    period: 'weekly' | 'monthly' | 'yearly'
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly'
     Joriy va oldingi davr oralig'ini qaytaradi (growth hisoblash uchun).
+    Custom (dan–gacha) oraliq uchun resolve_custom ishlatiladi.
     """
 
     @staticmethod
     def resolve(period: str) -> DateRange:
         now = timezone.now()
 
-        if period == "weekly":
+        if period == "daily":
+            # Bugun 00:00 dan hozirgacha; taqqoslash — kecha to'liq kun
+            today        = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            current_from = today
+            current_to   = now
+            prev_from    = today - timedelta(days=1)
+            prev_to      = today
+        elif period == "weekly":
             # Joriy haftaning Dushanbasi (weekday=0) — soat 00:00:00
             today        = now.replace(hour=0, minute=0, second=0, microsecond=0)
             current_from = today - timedelta(days=today.weekday())   # Dushanba
@@ -93,6 +102,33 @@ class DateRangeResolver:
             current_to=current_to,
             prev_from=prev_from,
             prev_to=prev_to,
+        )
+
+    @staticmethod
+    def resolve_custom(from_str: str, to_str: str) -> "DateRange | None":
+        """
+        'dan–gacha' oraliq (YYYY-MM-DD). Format noto'g'ri bo'lsa None.
+        Growth taqqoslash uchun oldingi davr — xuddi shu uzunlikdagi avvalgi oraliq.
+        """
+        from datetime import datetime
+
+        try:
+            f = datetime.strptime(from_str, "%Y-%m-%d")
+            t = datetime.strptime(to_str, "%Y-%m-%d")
+        except (ValueError, TypeError):
+            return None
+        if t < f:
+            f, t = t, f
+
+        tz = timezone.get_current_timezone()
+        current_from = timezone.make_aware(f.replace(hour=0, minute=0, second=0), tz)
+        current_to   = timezone.make_aware(t.replace(hour=23, minute=59, second=59), tz)
+        span         = current_to - current_from
+        return DateRange(
+            current_from=current_from,
+            current_to=current_to,
+            prev_from=current_from - span,
+            prev_to=current_from,
         )
 
 
@@ -320,9 +356,11 @@ class RecentSalesService:
 # ─────────────────────────────────────────────
 class ChartService:
     """
-    weekly  → 7 kun (Dushanba–Yakshanba), TruncDay
-    monthly → 4 hafta (1-hafta .. 4-hafta),  TruncWeek
+    daily   → 24 soat (00:00–23:00),          TruncHour
+    weekly  → 7 kun (Dushanba–Yakshanba),     TruncDay
+    monthly → 4 hafta (1-hafta .. 4-hafta),   TruncWeek
     yearly  → 12 oy (Yanvar–Dekabr),          TruncMonth
+    custom  → oraliq uzunligiga qarab kunlik yoki oylik guruhlash
 
     Barcha labellar to'ldiriladi — ma'lumot bo'lmagan kun/hafta/oy 0 bo'ladi.
     Bitta SQL query.
@@ -340,12 +378,82 @@ class ChartService:
         )
         qs = _apply_store_filter(qs, store_id)
 
-        if period == "weekly":
+        if period == "daily":
+            return ChartService._daily(qs, dr)
+        elif period == "weekly":
             return ChartService._weekly(qs, dr)
         elif period == "monthly":
             return ChartService._monthly(qs, dr)
+        elif period == "custom":
+            return ChartService._custom(qs, dr)
         else:
             return ChartService._yearly(qs, dr)
+
+    # ── daily (soatlik) ──
+    @staticmethod
+    def _daily(qs, dr: DateRange) -> dict:
+        rows = (
+            qs.annotate(period=TruncHour("created_at"))
+            .values("period")
+            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .order_by("period")
+        )
+        data_map = {timezone.localtime(row["period"]).hour: row["total"] for row in rows}
+
+        now_hour = timezone.localtime(dr.current_to).hour
+        labels, values = [], []
+        for hour in range(24):
+            labels.append(f"{hour:02d}:00")
+            # Kelajak soatlar uchun None — frontend bo'sh ko'rsatadi
+            values.append(data_map.get(hour, Decimal("0")) if hour <= now_hour else None)
+
+        return {"labels": labels, "data": values}
+
+    # ── custom (dan–gacha) ──
+    @staticmethod
+    def _custom(qs, dr: DateRange) -> dict:
+        start = timezone.localtime(dr.current_from).date()
+        end   = timezone.localtime(dr.current_to).date()
+        span_days = (end - start).days + 1
+
+        # 2 oygacha — kunlik nuqtalar; undan uzun — oylik guruhlash
+        if span_days <= 62:
+            rows = (
+                qs.annotate(period=TruncDay("created_at"))
+                .values("period")
+                .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+                .order_by("period")
+            )
+            data_map = {timezone.localtime(row["period"]).date(): row["total"] for row in rows}
+            labels, values = [], []
+            for i in range(span_days):
+                day = start + timedelta(days=i)
+                labels.append(day.strftime("%d.%m"))
+                values.append(data_map.get(day, Decimal("0")))
+            return {"labels": labels, "data": values}
+
+        rows = (
+            qs.annotate(period=TruncMonth("created_at"))
+            .values("period")
+            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .order_by("period")
+        )
+        data_map = {
+            (timezone.localtime(row["period"]).year, timezone.localtime(row["period"]).month): row["total"]
+            for row in rows
+        }
+        multi_year = start.year != end.year
+        labels, values = [], []
+        year, month = start.year, start.month
+        while (year, month) <= (end.year, end.month):
+            name = UZ_MONTHS[month - 1]
+            labels.append(f"{name} {year}" if multi_year else name)
+            values.append(data_map.get((year, month), Decimal("0")))
+            month += 1
+            if month > 12:
+                month = 1
+                year += 1
+        return {"labels": labels, "data": values}
 
     # ── weekly ──
     @staticmethod

@@ -195,6 +195,23 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         default=list
     )
 
+    # Nomi — majburiy, kamida 3 belgi. Xabarlar o'zbekcha: frontend ularni
+    # toast va input ostida to'g'ridan-to'g'ri ko'rsatadi.
+    name_uz = serializers.CharField(
+        max_length=100,
+        min_length=3,
+        error_messages={
+            "required": "Mahsulot nomi kiritilishi shart.",
+            "blank": "Mahsulot nomi kiritilishi shart.",
+            "null": "Mahsulot nomi kiritilishi shart.",
+            "min_length": "Mahsulot nomi kamida 3 belgidan iborat bo'lishi kerak.",
+            "max_length": "Mahsulot nomi 100 belgidan oshmasligi kerak.",
+        },
+    )
+    description_uz = serializers.CharField(
+        required=False, allow_blank=True, allow_null=True,
+    )
+
     # barcode va sku — ixtiyoriy. Kelsa berilgan qiymat ishlatiladi,
     # kelmasa model save() ichida avtomatik generatsiya qilinadi.
     barcode = serializers.CharField(
@@ -203,6 +220,14 @@ class ProductCreateSerializer(serializers.ModelSerializer):
     sku = serializers.CharField(
         required=False, allow_blank=True, allow_null=True, max_length=64
     )
+
+    def validate_description_uz(self, value):
+        # Tavsif ixtiyoriy, lekin kiritilsa kamida 3 belgi bo'lishi kerak
+        if value and len(value.strip()) < 3:
+            raise serializers.ValidationError(
+                "Tavsif kamida 3 belgidan iborat bo'lishi kerak."
+            )
+        return value
 
     class Meta:
         model = Product
@@ -277,11 +302,11 @@ class ProductCreateSerializer(serializers.ModelSerializer):
         MAX_PRODUCT_IMAGES = 7
         MAX_PRODUCT_IMAGE_SIZE = 5 * 1024 * 1024
         if len(images) > MAX_PRODUCT_IMAGES:
-            raise serializers.ValidationError("Max 7 images allowed")
+            raise serializers.ValidationError("Ko'pi bilan 7 ta rasm yuklash mumkin.")
 
         for img in images:
             if img.size > MAX_PRODUCT_IMAGE_SIZE:
-                raise serializers.ValidationError("Image size must be < 5MB")
+                raise serializers.ValidationError("Har bir rasm hajmi 5MB dan kichik bo'lishi kerak.")
 
         return images
 
@@ -338,13 +363,25 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 
     def validate_new_images(self, images):
         if len(images) > 7:
-            raise serializers.ValidationError("Max 7 images allowed")
+            raise serializers.ValidationError("Ko'pi bilan 7 ta rasm yuklash mumkin.")
 
         for img in images:
             if img.size > 5 * 1024 * 1024:
-                raise serializers.ValidationError("Image size must be < 5MB")
+                raise serializers.ValidationError("Har bir rasm hajmi 5MB dan kichik bo'lishi kerak.")
 
         return images
+
+    def validate_name(self, value):
+        # Nomi yangilanayotgan bo'lsa — bo'sh bo'lmasin va kamida 3 belgi bo'lsin
+        if value is not None:
+            trimmed = value.strip()
+            if not trimmed:
+                raise serializers.ValidationError("Mahsulot nomi kiritilishi shart.")
+            if len(trimmed) < 3:
+                raise serializers.ValidationError(
+                    "Mahsulot nomi kamida 3 belgidan iborat bo'lishi kerak."
+                )
+        return value
 
     def validate_barcode(self, value):
         # Bo'sh kelsa — o'zgartirmaymiz
