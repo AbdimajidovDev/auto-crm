@@ -26,6 +26,13 @@ from drf_spectacular.types import OpenApiTypes
 # VIEW
 # ─────────────────────────────────────────────
 
+class CategoryPagination(StandardPagination):
+    """Kategoriyalar uchun pagination: default 100, maksimum 100 (?limit=1000 ham 100 ga qisqaradi)."""
+
+    page_size = 100
+    max_page_size = 100
+
+
 @extend_schema(
     tags=["Category"],
     summary="Kategoriyalar ro'yxati (search, ordering, pagination bilan)",
@@ -44,30 +51,31 @@ from drf_spectacular.types import OpenApiTypes
         ),
         OpenApiParameter(
             "limit", OpenApiTypes.INT,
-            description="Sahifadagi yozuvlar soni (max 100)",
+            description="Sahifadagi yozuvlar soni (default 100, max 100)",
         ),
     ],
 )
 class CategoryListAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CategoryListSerializer
-    pagination_class = StandardPagination
+    pagination_class = CategoryPagination
 
     filter_backends = [SearchFilter, OrderingFilter]
-    search_fields = ["name", "description"]
+    # Qidiruv tarjima ustunlarini ham qamrab oladi (lotin/kirill nomlar)
+    search_fields = ["name", "name_uz", "name_uz_cyrl", "description"]
     ordering_fields = ["name", "created_at"]
     ordering = ["name"]  # default tartiblash
 
     def get_queryset(self):
-        # ✅ YAXSHI: ListAPIView + pagination/search/ordering ishlatilgan.
-        # ⚠️ MUAMMO [PERFORMANCE]: `.all()` reference table uchun odatda xavfsiz, ammo `only()` ishlatilmagan.
-        # Sabab: list serializerga kerakli maydonlar aniq bo'lsa ham modelning barcha ustunlari olinadi.
-        # Natija: image/description kabi og'ir maydonlar bo'lsa ortiqcha I/O chiqadi.
-        # ✅ YECHIM:
-        # return Category.objects.only("id", "slug", "name", "description", "image", "created_at").order_by("name")
-        # .all() o'rniga aniq queryset — kelajakda filter qo'shish osonroq.
-        # Masalan: is_active filtri kerak bo'lsa shu yerga .filter(is_active=True) qo'shiladi.
-        return Category.objects.all()
+        # only(): serializer ishlatadigan ustunlargina o'qiladi.
+        # Diqqat: modeltranslation `name`/`description` ni faol tildagi ustundan
+        # o'qiydi, shuning uchun tarjima ustunlari ham ro'yxatda bo'lishi shart —
+        # aks holda har bir qator uchun deferred-load (qo'shimcha SQL) chiqadi.
+        return Category.objects.only(
+            "id", "slug", "image", "created_at",
+            "name", "name_uz", "name_uz_cyrl",
+            "description", "description_uz", "description_uz_cyrl",
+        )
 
 
 # @extend_schema(

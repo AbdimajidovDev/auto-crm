@@ -8,7 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 
-VALID_PERIODS = ("weekly", "monthly", "yearly")
+VALID_PERIODS = ("daily", "weekly", "monthly", "yearly")
 
 
 @extend_schema(
@@ -18,7 +18,17 @@ VALID_PERIODS = ("weekly", "monthly", "yearly")
         OpenApiParameter(
             "period",
             OpenApiTypes.STR,
-            description="Davr: weekly | monthly | yearly  (default: monthly)",
+            description="Davr: daily | weekly | monthly | yearly  (default: daily)",
+        ),
+        OpenApiParameter(
+            "from",
+            OpenApiTypes.STR,
+            description="Boshlanish sanasi (YYYY-MM-DD). 'to' bilan birga berilsa period o'rniga shu oraliq ishlatiladi.",
+        ),
+        OpenApiParameter(
+            "to",
+            OpenApiTypes.STR,
+            description="Tugash sanasi (YYYY-MM-DD).",
         ),
         OpenApiParameter(
             "store_id",
@@ -31,16 +41,27 @@ class DashboardAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        period   = request.query_params.get("period",   "weekly")
+        period   = request.query_params.get("period",   "daily")
         store_id = request.query_params.get("store_id", "all")
+        from_str = request.query_params.get("from")
+        to_str   = request.query_params.get("to")
 
-        if period not in VALID_PERIODS:
-            return Response(
-                {"detail": f"period qiymati noto'g'ri. To'g'ri qiymatlar: {', '.join(VALID_PERIODS)}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        dr = DateRangeResolver.resolve(period)
+        if from_str and to_str:
+            # 'dan–gacha' rejimi: period e'tiborga olinmaydi
+            dr = DateRangeResolver.resolve_custom(from_str, to_str)
+            if dr is None:
+                return Response(
+                    {"detail": "Sana formati noto'g'ri. Kutilgan format: YYYY-MM-DD."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            period = "custom"
+        else:
+            if period not in VALID_PERIODS:
+                return Response(
+                    {"detail": f"period qiymati noto'g'ri. To'g'ri qiymatlar: {', '.join(VALID_PERIODS)}"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            dr = DateRangeResolver.resolve(period)
 
         # Har bir service mustaqil — parallel qilish mumkin (kelajak uchun async)
         # ⚠️ MUAMMO [ARXITEKTURA]: Bitta GET requestda 5 ta service ketma-ket chaqiriladi va

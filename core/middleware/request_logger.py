@@ -17,17 +17,28 @@ class RequestLoggerMiddleware(MiddlewareMixin):
         "DELETE": "🔴",
     }
 
+    # SLA: har bir API so'rovi 1 sekunddan tez javob berishi kerak.
+    # Oshib ketganlari productionda ham WARNING bo'lib yoziladi — sekin
+    # endpointlarni kuzatish va optimallashtirish uchun.
+    SLOW_REQUEST_THRESHOLD = 1.0
+
     def process_request(self, request):
         request.start_time = time.time()
 
     def process_response(self, request, response):
+        start_time = getattr(request, "start_time", None)
+        duration = 0 if start_time is None else time.time() - start_time
+
+        if duration >= self.SLOW_REQUEST_THRESHOLD:
+            logger.warning(
+                "🐌 SLOW %.2fs [%s] %s (status=%s)",
+                duration, request.method.upper(), request.get_full_path(), response.status_code,
+            )
+
         # Productionda har bir so'rovni stdout'ga yozish latency qo'shadi —
         # faqat DEBUG rejimida log yozamiz.
         if not settings.DEBUG:
             return response
-
-        start_time = getattr(request, "start_time", None)
-        duration = 0 if start_time is None else time.time() - start_time
 
         method = request.method.upper()
         icon = self.METHOD_COLORS.get(method, "⚪")

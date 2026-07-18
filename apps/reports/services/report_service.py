@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.core.cache import cache
@@ -91,6 +91,9 @@ class ReportFilterService:
                 raise ValidationError({"from/to": "ISO format bo'lishi kerak: YYYY-MM-DD."})
 
         today = timezone.localdate()
+        if filter_type == "daily":
+            # Bugungi kun (00:00 dan hozirgacha — _dt_bounds to'liq kunni qamraydi)
+            return today, today
         if filter_type == "weekly":
             # Joriy haftaning Dushanbasi
             return today - timedelta(days=today.weekday()), today
@@ -103,6 +106,24 @@ class ReportFilterService:
 def _store_q(store_id: int | None, field: str = "store_id") -> Q:
     """Store filter Q — None bo'lsa bo'sh Q (barcha qatorlar)."""
     return Q(**{field: store_id}) if store_id else Q()
+
+
+def _dt_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
+    """
+    Sana oralig'ini [start, end) yarim-ochiq datetime chegaralarga aylantiradi.
+
+    `created_at__date__gte/lte` SQL'da ustunni DATE(...)ga o'rab, indeksni
+    ishlatib bo'lmaydigan (non-sargable) qilib qo'yardi. Xom datetime chegaralar
+    bilan filtr indeksdan to'liq foydalanadi — natija aynan bir xil:
+    date_to kunining oxirigacha (23:59:59.999999) qamrab olinadi.
+    """
+    start = datetime.combine(date_from, time.min)
+    end = datetime.combine(date_to + timedelta(days=1), time.min)
+    if timezone.is_naive(start):
+        tz = timezone.get_current_timezone()
+        start = timezone.make_aware(start, tz)
+        end = timezone.make_aware(end, tz)
+    return start, end
 
 
 # ─────────────────────────────────────────────
@@ -127,28 +148,12 @@ def _base_sales_qs(date_from: date, date_to: date, store_id: int | None):
     Qaytarilgan sotuvlarni chiqarib tashlagan, annotate qilingan asosiy Sales QS.
     SummaryService, BranchService va boshqalar uchun umumiy base.
     """
-    # ⚠️ MUAMMO [KRITIK/PERF]: `created_at__date__gte/lte` — `__date` transform ustunni SQL'da
-    # `DATE(created_at)` / `CAST(created_at AS date)` ga o'raydi. Bu so'rovni NON-SARGABLE qiladi:
-    # `created_at` ustunidagi indeks (hozir yo'q ham) bu holda ISHLAMAYDI, chunki index xom ustunga,
-    # so'rov esa funksiya natijasiga qo'yilgan. Natija: bu base QS SummaryService, BranchService,
-    # TopProducts va boshqa barcha report bloklarida ishlatilgani sabab, HAR report so'rovida ~65k
-    # Sale qatori TO'LIQ skanerlanadi (bir dashboard = bir necha shunday skan).
-    # ✅ YECHIM:
-    #   1) `__date` o'rniga xom datetime chegara bilan filtrlash (sargable, indeks ishlaydi):
-    #        from datetime import datetime, time
-    #        start = datetime.combine(date_from, time.min)          # 00:00:00
-    #        end   = datetime.combine(date_to,   time.max)          # 23:59:59.999999
-    #        .filter(created_at__gte=start, created_at__lte=end)
-    #      (yoki yarim-ochiq: created_at__lt = date_to + 1 kun)
-    #   2) Sale modeliga `created_at` (va `store`,`created_at`) kompozit indeksini qo'shish
-    #      — sales/models.py dagi izohga qarang.
-    #   3) Vaqt mintaqasi muhim bo'lsa, xom chegaralarni `timezone.make_aware` bilan hosil qilish.
+    # Sargable filtr: xom datetime chegaralar bilan `created_at` indeksi to'liq ishlaydi
+    # (avvalgi `__date__gte/lte` DATE(created_at) o'ramasi indeksni o'chirib qo'yardi).
+    start, end = _dt_bounds(date_from, date_to)
     return (
         Sale.objects
-        .filter(
-            created_at__date__gte=date_from,
-            created_at__date__lte=date_to,
-        )
+        .filter(created_at__gte=start, created_at__lt=end)
         .filter(_store_q(store_id))
         .exclude(status=Sale.Status.RETURNED)
         .annotate(
@@ -187,11 +192,12 @@ class SummaryService:
 
         # Foyda: (unit_price - purchase_price) * quantity
         # purchase_price NULL bo'lsa Coalesce(0) bilan xavfsiz hisoblash
+        start, end = _dt_bounds(date_from, date_to)
         items_qs = (
             SaleItem.objects
             .filter(
-                sale__created_at__date__gte=date_from,
-                sale__created_at__date__lte=date_to,
+                sale__created_at__gte=start,
+                sale__created_at__lt=end,
                 sale__status__in=[Sale.Status.PAID, Sale.Status.PARTIAL],
             )
             .filter(_store_q(store_id, "sale__store_id"))
@@ -264,11 +270,12 @@ class CategoryStatisticsService:
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        start, end = _dt_bounds(date_from, date_to)
         qs = (
             SaleItem.objects
             .filter(
-                sale__created_at__date__gte=date_from,
-                sale__created_at__date__lte=date_to,
+                sale__created_at__gte=start,
+                sale__created_at__lt=end,
                 sale__status__in=[Sale.Status.PAID, Sale.Status.PARTIAL],
             )
             .filter(_store_q(store_id, "sale__store_id"))
@@ -306,11 +313,12 @@ class TopProductsService:
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        start, end = _dt_bounds(date_from, date_to)
         rows = (
             SaleItem.objects
             .filter(
-                sale__created_at__date__gte=date_from,
-                sale__created_at__date__lte=date_to,
+                sale__created_at__gte=start,
+                sale__created_at__lt=end,
             )
             .filter(_store_q(store_id, "sale__store_id"))
             .values("product_id", "product__name", "product__category__name")
@@ -352,12 +360,10 @@ class PaymentStructureService:
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        start, end = _dt_bounds(date_from, date_to)
         qs = (
             Sale.objects
-            .filter(
-                created_at__date__gte=date_from,
-                created_at__date__lte=date_to,
-            )
+            .filter(created_at__gte=start, created_at__lt=end)
             .filter(_store_q(store_id))
             .exclude(payment_type=Sale.PaymentType.DEBT)  # pulsiz sotuvlar Qarz qatorida
             .values("payment_type")
@@ -377,8 +383,8 @@ class PaymentStructureService:
         debt_agg = (
             Sale.objects
             .filter(
-                created_at__date__gte=date_from,
-                created_at__date__lte=date_to,
+                created_at__gte=start,
+                created_at__lt=end,
                 status__in=[Sale.Status.DEBT, Sale.Status.PARTIAL],
             )
             .filter(_store_q(store_id))
@@ -430,12 +436,13 @@ class BankCardBreakdownService:
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        start, end = _dt_bounds(date_from, date_to)
         qs = (
             Payment.objects
             .filter(
                 type=Payment.Type.CARD,
-                created_at__date__gte=date_from,
-                created_at__date__lte=date_to,
+                created_at__gte=start,
+                created_at__lt=end,
             )
             .filter(_store_q(store_id, "sale__store_id"))
             .values("bank_card_id", "bank_card__name")
@@ -503,12 +510,13 @@ class ExpensesService:
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
+        start, end = _dt_bounds(date_from, date_to)
         refunds = (
             Payment.objects
             .filter(
                 is_refund=True,
-                created_at__date__gte=date_from,
-                created_at__date__lte=date_to,
+                created_at__gte=start,
+                created_at__lt=end,
             )
             .filter(_store_q(store_id, "sale__store_id"))
             .values("type")
@@ -522,8 +530,8 @@ class ExpensesService:
             SupplierTransaction.objects
             .filter(
                 type=SupplierTransaction.TransactionType.PAYMENT,
-                created_at__date__gte=date_from,
-                created_at__date__lte=date_to,
+                created_at__gte=start,
+                created_at__lt=end,
             )
             .filter(_store_q(store_id, "entry__store_id"))
             .aggregate(
