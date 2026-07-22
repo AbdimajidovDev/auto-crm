@@ -31,6 +31,19 @@ class SaleReturnListAPIView(generics.ListAPIView):
             .order_by("-created_at")
         )
 
+        # Davr/do'kon filtri — sotuv statistikasi (SaleStatisticsAPIView) bilan
+        # bir xil parametrlar: ikkala sahifa raqamlari solishtirma bo'ladi
+        params = self.request.query_params
+        store = params.get("store")
+        if store:
+            qs = qs.filter(store_id=store)
+        date_from = params.get("date_from")
+        if date_from:
+            qs = qs.filter(created_at__date__gte=date_from)
+        date_to = params.get("date_to")
+        if date_to:
+            qs = qs.filter(created_at__date__lte=date_to)
+
         if user.is_superuser:
             return qs
 

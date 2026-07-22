@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.db import transaction
@@ -40,25 +41,49 @@ class DebtService:
         return increases - decreases
 
     @staticmethod
+    def _normalize_payment_chunks(*, payments=None, amount=None, payment_type=None, bank_card=None):
+        """
+        Split (payments ro'yxati) yoki eski bitta usulli argumentlarni yagona
+        shaklga keltiradi: [{"type", "amount", "bank_card"}, ...].
+        """
+        if payments:
+            chunks = [
+                {
+                    "type": p["type"],
+                    "amount": Decimal(str(p["amount"])),
+                    "bank_card": p.get("bank_card"),
+                }
+                for p in payments
+                if Decimal(str(p["amount"])) > 0
+            ]
+        elif amount is not None and payment_type is not None:
+            chunks = [{"type": payment_type, "amount": Decimal(str(amount)), "bank_card": bank_card}]
+        else:
+            chunks = []
+
+        if not chunks:
+            raise ValidationError("To'lov qatorlari bo'sh")
+        return chunks
+
+    @staticmethod
     @transaction.atomic
-    def pay_debt(*, sale_id, amount, payment_type, bank_card=None):
+    def pay_debt(*, sale_id, amount=None, payment_type=None, bank_card=None, payments=None):
+        """
+        Bitta sotuvning qarzini to'lash. Split rejimda payments ro'yxati
+        beriladi (har usul alohida Payment qatori bo'lib yoziladi), eski
+        rejimda amount + payment_type + bank_card.
+        """
+        chunks = DebtService._normalize_payment_chunks(
+            payments=payments, amount=amount, payment_type=payment_type, bank_card=bank_card
+        )
+        total = sum((c["amount"] for c in chunks), Decimal("0"))
 
         # 🔴 LOCK SALE (critical!)
-        # ⚠️ MUAMMO [PERFORMANCE]: `select_related("customer")` ishlatilmagan.
-        # Sabab: keyingi kodda `sale.customer` payment va debt yozishda ishlatiladi.
-        # Natija: customer uchun qo'shimcha SELECT query chiqadi.
-        # ✅ YECHIM:
-        # sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
-        # sale = Sale.objects.select_for_update().select_related("customer").get(id=sale_id)
-        # N+1 emas, lekin `select_related("customer")` qo'shilsa keyingi `sale.customer` murojaatlari
-        # qo'shimcha so'rovsiz ishlaydi (hozirgi kodda customer tegishli joylar uchun).
+        # Diqqat: select_related("customer") qo'shib bo'lmaydi — customer nullable FK,
+        # Postgres "FOR UPDATE cannot be applied to the nullable side of an outer join" beradi
         sale = Sale.objects.select_for_update().get(id=sale_id)
-        # customer = sale.customer
 
-        # if not customer:
-        #     raise ValidationError("Sale mijozga bog'lanmagan")
-
-        if amount <= 0:
+        if total <= 0:
             raise ValidationError("Miqdor ijobiy bo'lishi kerak")
 
         current_debt = DebtService.get_sale_debt(sale)
@@ -66,66 +91,87 @@ class DebtService:
         if current_debt <= 0:
             raise ValidationError("Bu sotuvda qarz yo'q")
 
-        if amount > current_debt:
+        if total > current_debt:
             raise ValidationError("Miqdor qarzdan oshib ketdi")
 
         return DebtService._apply_sale_payment(
             sale=sale,
             sale_debt=current_debt,
-            amount=amount,
-            payment_type=payment_type,
-            bank_card=bank_card,
-        )
+            chunks=chunks,
+        )[0]
 
     @staticmethod
-    def _apply_sale_payment(*, sale, sale_debt, amount, payment_type, bank_card=None):
+    def _apply_sale_payment(*, sale, sale_debt, chunks):
         """
         Bitta sotuvga qarz to'lovini qo'llaydi (sale allaqachon qulflangan bo'lishi kerak):
-          1. Payment yozuvi (tarix: qachon, qancha, qanday usulda to'langani)
-          2. CustomerDebt DECREASE (qarz balansi kamayadi)
+          1. Har bir split qator uchun Payment yozuvi (tarix: qachon, qancha,
+             qaysi usul/karta bilan to'langani)
+          2. CustomerDebt DECREASE (qarz balansi jami summaga kamayadi)
           3. sale.paid_amount / status yangilanadi — ro'yxat va mijoz modalidagi
              (total - paid) formulasi to'lovdan keyin ham to'g'ri ko'rsatishi uchun
           4. payment_type qayta hisoblanadi (masalan, debt → cash/mixed)
+
+        chunks: [{"type": "cash"|"card", "amount": Decimal, "bank_card": BankCard|None}, ...]
+        Qaytaradi: yaratilgan Payment yozuvlari ro'yxati.
         """
-        payment = Payment.objects.create(
-            customer=sale.customer,
-            amount=amount,
-            type=payment_type,
-            bank_card=bank_card,
-            sale=sale,
-        )
+        total = sum((c["amount"] for c in chunks), Decimal("0"))
+
+        # Bitta to'lov harakati — barcha split qatorlar bitta guruhda
+        # (UI tarixda bitta blok qilib, qismlarini ichida ko'rsatadi)
+        payment_group = uuid.uuid4()
+        created_payments = [
+            Payment.objects.create(
+                customer=sale.customer,
+                amount=c["amount"],
+                type=c["type"],
+                bank_card=c.get("bank_card"),
+                sale=sale,
+                payment_group=payment_group,
+            )
+            for c in chunks
+        ]
 
         CustomerDebt.objects.create(
             customer=sale.customer,
             sale=sale,
-            amount=amount,
+            amount=total,
             type=CustomerDebt.Type.DECREASE,
         )
 
-        sale.paid_amount = (sale.paid_amount or Decimal("0")) + amount
-        sale.status = Sale.Status.PAID if amount >= sale_debt else Sale.Status.PARTIAL
+        sale.paid_amount = (sale.paid_amount or Decimal("0")) + total
+        sale.status = Sale.Status.PAID if total >= sale_debt else Sale.Status.PARTIAL
         sale.save(update_fields=["paid_amount", "status"])
 
         # Qarz to'lovi sotuvning to'lov tarkibini o'zgartiradi (masalan, debt → card/mixed)
         sale.recalculate_payment_type()
 
-        return payment
+        return created_payments
 
     @staticmethod
     @transaction.atomic
-    def pay_customer_debt(*, customer_id, amount, payment_type, bank_card=None):
+    def pay_customer_debt(*, customer_id, amount=None, payment_type=None, bank_card=None, payments=None):
         """
         Mijozning UMUMIY qarzini FIFO tartibida yopadi: to'lov ENG ESKI qarzli
         sotuvdan boshlab taqsimlanadi.
+
+        Split rejimda payments ro'yxati "hovuzlar" sifatida ishlatiladi:
+        har bir sotuv taqsimotiga hovuzlardan navbat bilan (naqd, keyin
+        kartalar) pul olinadi — shunda umumiy naqd/karta yig'indilari foydalanuvchi
+        kiritganiga aynan teng bo'ladi, har bir sotuvda esa aniq qaysi usuldan
+        qancha to'langani Payment qatorlarida qoladi.
 
         Misol: mijozda 2 ta 50 so'mlik qarzli buyurtma bor (jami 100). 90 so'm
         to'lasa — birinchi (eski) buyurtma to'liq yopiladi (50), ikkinchisiga
         40 yoziladi, 10 so'm qarz qoladi.
 
-        Har bir taqsimot alohida Payment yozuvi bilan saqlanadi (qachon va
-        qancha to'langani tarixda qoladi). Umumiy qarzdan ortiq to'lov rad etiladi.
+        Umumiy qarzdan ortiq to'lov rad etiladi.
         """
-        if amount <= 0:
+        chunks = DebtService._normalize_payment_chunks(
+            payments=payments, amount=amount, payment_type=payment_type, bank_card=bank_card
+        )
+        total_payment = sum((c["amount"] for c in chunks), Decimal("0"))
+
+        if total_payment <= 0:
             raise ValidationError("Miqdor ijobiy bo'lishi kerak")
 
         # Mijozning barcha sotuvlari qulflanadi — parallel ikki to'lov
@@ -147,27 +193,48 @@ class DebtService:
 
         if total_debt <= 0:
             raise ValidationError("Mijozda qarz yo'q")
-        if amount > total_debt:
+        if total_payment > total_debt:
             raise ValidationError(
                 f"To'lov summasi umumiy qarzdan oshib ketdi. Qoldiq qarz: {total_debt:.2f}"
             )
 
-        remaining = amount
+        # Hovuzlar — chunklar nusxasi, taqsimot davomida kamayib boradi
+        pools = [dict(c) for c in chunks]
+        pool_idx = 0
+
+        remaining = total_payment
         allocations = []
         for sale, sale_debt in debt_sales:
             if remaining <= 0:
                 break
             alloc = min(sale_debt, remaining)
-            payment = DebtService._apply_sale_payment(
+
+            # Shu sotuv uchun hovuzlardan chunklar yig'iladi
+            sale_chunks = []
+            need = alloc
+            while need > 0 and pool_idx < len(pools):
+                pool = pools[pool_idx]
+                take = min(pool["amount"], need)
+                if take > 0:
+                    sale_chunks.append({
+                        "type": pool["type"],
+                        "amount": take,
+                        "bank_card": pool.get("bank_card"),
+                    })
+                    pool["amount"] -= take
+                    need -= take
+                if pool["amount"] <= 0:
+                    pool_idx += 1
+
+            created = DebtService._apply_sale_payment(
                 sale=sale,
                 sale_debt=sale_debt,
-                amount=alloc,
-                payment_type=payment_type,
-                bank_card=bank_card,
+                chunks=sale_chunks,
             )
             allocations.append({
                 "sale": sale.id,
-                "payment_id": payment.id,
+                "payment_id": created[0].id,
+                "payment_ids": [p.id for p in created],
                 "amount": f"{alloc:.2f}",
                 "closed": alloc >= sale_debt,
                 "sale_debt_left": f"{(sale_debt - alloc):.2f}",
@@ -175,8 +242,8 @@ class DebtService:
             remaining -= alloc
 
         return {
-            "paid": f"{amount:.2f}",
-            "remaining_debt": f"{(total_debt - amount):.2f}",
+            "paid": f"{total_payment:.2f}",
+            "remaining_debt": f"{(total_debt - total_payment):.2f}",
             "allocations": allocations,
         }
 

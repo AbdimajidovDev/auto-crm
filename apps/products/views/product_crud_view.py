@@ -360,8 +360,12 @@ class ProductDetailAPIView(APIView):
         #     Product.objects.select_related("category", "unit_measurement").prefetch_related("images", "batches"),
         #     pk=pk,
         # )
-        product = get_object_or_404(Product, pk=pk)
-        serializer = self.serializer_class(product)
+        product = get_object_or_404(
+            Product.objects.prefetch_related("images"), pk=pk
+        )
+        # request kontekstisiz ImageField nisbiy URL qaytaradi — frontend
+        # rasmlarni to'liq URL sifatida kutadi
+        serializer = self.serializer_class(product, context={"request": request})
         return Response(serializer.data, status=200)
 
     @extend_schema(

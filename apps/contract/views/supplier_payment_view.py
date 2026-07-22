@@ -46,22 +46,34 @@ class SupplierPaymentAPIView(APIView):
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        payment = SupplierPaymentService.make_payment(
-            supplier=serializer.validated_data["supplier"],
-            entry=serializer.validated_data["entry"],
-            amount=serializer.validated_data["amount"],
-            note=serializer.validated_data.get("note"),
-            payment_method=serializer.validated_data.get("payment_type") or "cash",
-            bank_card=serializer.validated_data.get("bank_card"),
-            user=request.user
+        split_payments = data.get("payments")
+        if split_payments:
+            # Yangi rejim: bir so'rovda bir nechta usul (naqd + kartalar)
+            payments = split_payments
+        else:
+            # Eski rejim: bitta usul
+            payments = [{
+                "type": data.get("payment_type") or "cash",
+                "amount": data["amount"],
+                "bank_card": data.get("bank_card"),
+            }]
+
+        transactions = SupplierPaymentService.make_payments(
+            supplier=data["supplier"],
+            entry=data["entry"],
+            payments=payments,
+            note=data.get("note"),
+            user=request.user,
         )
 
         return Response({
             "status": "success",
             "message": "To'lov muvaffaqiyatli qabul qilindi",
-            "transaction_id": payment.id,
-            "amount": payment.amount
+            "transaction_id": transactions[0].id,
+            "transaction_ids": [t.id for t in transactions],
+            "amount": sum(t.amount for t in transactions),
         }, status=status.HTTP_201_CREATED)
 
 

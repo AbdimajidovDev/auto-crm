@@ -54,7 +54,8 @@ class SaleReturnListSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleReturn
         fields = (
-            'id', 'sale', 'store',  'store_name', 'customer', 'seller', 'seller_name', 'total_refund', 'comment', 'items'
+            'id', 'sale', 'store',  'store_name', 'customer', 'seller', 'seller_name',
+            'total_refund', 'comment', 'items', 'created_at'
         )
 
     def get_store_name(self, obj):

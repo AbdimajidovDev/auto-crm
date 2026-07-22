@@ -150,6 +150,7 @@ class StockEntryListAPIView(generics.ListAPIView):
             .select_related("supplier", "store", "created_by")
             .prefetch_related(
                 Prefetch("items", queryset=items_qs),
+                "payments__bank_card",  # split to'lovlar N+1 siz
             )
             .annotate(
                 total_in=_total_in_subquery(),
@@ -183,6 +184,7 @@ class StockEntryCreateAPIView(APIView):
         entry = StockEntryService.create_entry(
             supplier=serializer.validated_data["supplier"],
             store=serializer.validated_data["store"],
+            payments=serializer.validated_data.get("payments"),
             cash_amount=serializer.validated_data["cash_amount"],
             card_amount=serializer.validated_data["card_amount"],
             bank_card=serializer.validated_data.get("bank_card"),

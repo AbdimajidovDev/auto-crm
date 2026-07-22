@@ -29,8 +29,9 @@ FRONTEND_URL = "http://127.0.0.1:8000/api/v1/users/auth"
 #
 # BASE_URL = "http://127.0.0.1:8000"
 
-# CHANNEL_LAYERS = {
-#     "default": {
-#         "BACKEND": "channels.layers.InMemoryChannelLayer",  # dev
-#     }
-# }
+# Lokal muhitda Redis talab qilinmasin — WS bildirishnomalar InMemory qatlamda ishlaydi
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer",  # dev
+    }
+}

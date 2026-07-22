@@ -21,7 +21,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Payment
-        fields = ("id", "amount", "type", "bank_card", "bank_card_name", "is_refund", "created_at")
+        fields = ("id", "amount", "type", "bank_card", "bank_card_name", "is_refund", "payment_group", "created_at")
 
 
 class SaleItemSerializer(serializers.ModelSerializer):
@@ -233,10 +233,8 @@ class SaleCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({
                 "items": "Items bo'sh bo'lmasligi kerak"
             })
-        if not payments:
-            raise serializers.ValidationError({
-                "payments": "Payments bo'sh bo'lmasligi kerak"
-            })
+        # payments bo'sh bo'lishi mumkin — to'liq qarzga sotuv (paid=0).
+        # Bunda quyidagi has_debt tarmog'i mijoz va qaytarish sanasini majburiy qiladi.
 
         total_items_amount = sum(
             item['quantity'] * item['price'] for item in items

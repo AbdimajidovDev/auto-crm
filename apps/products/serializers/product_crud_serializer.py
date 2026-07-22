@@ -1,3 +1,4 @@
+from django.db import transaction
 from rest_framework import serializers
 
 from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
@@ -326,16 +327,22 @@ class ProductGetSerializer(serializers.ModelSerializer):
 
 class ProductUpdateSerializer(serializers.ModelSerializer):
 
+    # Mavjud rasmlar — detail GET javobida frontend tahrirlash formasi
+    # ularni ko'rsatishi va o'chirish uchun IDsini bilishi kerak
+    images = ProductImageSerializer(many=True, read_only=True)
+
     # yangi rasmlar
     new_images = serializers.ListField(
         child=serializers.ImageField(),
-        required=False
+        required=False,
+        write_only=True
     )
 
     # o‘chiriladigan rasmlar IDsi
     delete_image_ids = serializers.ListField(
         child=serializers.IntegerField(),
-        required=False
+        required=False,
+        write_only=True
     )
 
     # barcode va sku — ixtiyoriy. Kelsa yangilanadi, kelmasa (yoki bo'sh) o'zgarmaydi.
@@ -349,6 +356,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = (
+            "id",
             "category",
             "unit_measurement",
             "name",
@@ -357,6 +365,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "barcode",
             "sku",
             "status",
+            "images",
             "new_images",
             "delete_image_ids",
         )
@@ -417,16 +426,8 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 
         return value
 
+    @transaction.atomic
     def update(self, instance, validated_data):
-        # ⚠️ MUAMMO [KRITIK]: Product update ichida bir nechta write operatsiya transaction bilan o'ralmagan.
-        # Sabab: product save, image file delete, image rows delete va bulk_create alohida bajariladi.
-        # Natija: xatolik bo'lsa product o'zgarib, rasm holati yarimta qolishi mumkin.
-        # ✅ YECHIM:
-        # @transaction.atomic
-        # def update(...):
-        #     instance.save()
-        #     images_to_delete.delete()
-        #     ProductImage.objects.bulk_create(...)
         new_images = validated_data.pop("new_images", [])
         delete_ids = validated_data.pop("delete_image_ids", [])
         barcode_value = validated_data.pop("barcode", None)
@@ -452,16 +453,22 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         instance.save()
 
         # DELETE IMAGES
-        images_to_delete = ProductImage.objects.filter(
-            id__in=delete_ids,
-            product=instance
+        images_to_delete = list(
+            ProductImage.objects.filter(id__in=delete_ids, product=instance)
         )
 
-        for img in images_to_delete:
-            if img.image:
-                img.image.delete(save=False)
+        ProductImage.objects.filter(
+            id__in=[img.id for img in images_to_delete]
+        ).delete()
 
-        images_to_delete.delete()
+        # Fayllar DB tranzaksiyasi muvaffaqiyatli yakunlangandan keyingina
+        # o'chiriladi — rollback bo'lsa fayl yo'qolib qolmasligi kerak
+        def _delete_files(images=images_to_delete):
+            for img in images:
+                if img.image:
+                    img.image.delete(save=False)
+
+        transaction.on_commit(_delete_files)
 
         # 🔥 ADD NEW IMAGES
         ProductImage.objects.bulk_create([

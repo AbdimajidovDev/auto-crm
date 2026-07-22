@@ -6,6 +6,7 @@ faqat shu service orqali yaratadi — bank_card/type invariantlari va
 payment_type qayta hisoblash qoidasi hech qayerda takrorlanmaydi.
 """
 
+import uuid
 from decimal import Decimal
 
 from rest_framework import serializers
@@ -43,6 +44,8 @@ class SalePaymentService:
         Diqqat: payment_type ni qayta hisoblash chaqiruvchi tomonda —
         sale.recalculate_payment_type() (har bir oqim o'z transaction nuqtasida chaqiradi).
         """
+        # Bitta chaqiruv = bitta to'lov harakati — barcha qatorlar bitta guruhda
+        payment_group = uuid.uuid4()
         payments = [
             Payment(
                 sale=sale,
@@ -51,6 +54,7 @@ class SalePaymentService:
                 type=p["type"],
                 bank_card=p.get("bank_card"),
                 is_refund=is_refund,
+                payment_group=payment_group,
             )
             for p in payments_data
         ]

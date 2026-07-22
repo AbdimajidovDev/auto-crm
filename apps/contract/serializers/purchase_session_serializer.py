@@ -22,6 +22,17 @@ class PurchaseSessionItemSerializer(serializers.Serializer):
     wholesale_price = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=0, default=0)
 
 
+class PurchaseSessionPaymentSerializer(serializers.Serializer):
+    """
+    Qoralamadagi bitta split to'lov qatori. Draft bosqichida yumshoq tekshiruv
+    (amount 0 bo'lishi mumkin) — to'liq biznes validatsiya confirm bosqichida
+    StockEntryPaymentInputSerializer orqali bajariladi.
+    """
+    type = serializers.ChoiceField(choices=(("cash", "cash"), ("card", "card")))
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
+    bank_card = serializers.IntegerField(required=False, allow_null=True, default=None)
+
+
 class PurchaseSessionSerializer(serializers.ModelSerializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.filter(is_active=True))
     # Istalgan faol do'kon — kim qaysi do'konga kirim qila olishi view'da
@@ -33,6 +44,7 @@ class PurchaseSessionSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     items = PurchaseSessionItemSerializer(many=True, required=False)
+    payments = PurchaseSessionPaymentSerializer(many=True, required=False)
 
     supplier_name = serializers.CharField(source="supplier.name", read_only=True, default="")
     store_name = serializers.CharField(source="store.name", read_only=True, default="")
@@ -46,7 +58,7 @@ class PurchaseSessionSerializer(serializers.ModelSerializer):
             "supplier", "supplier_name",
             "store", "store_name",
             "items", "items_count", "total_amount",
-            "cash_amount", "card_amount", "bank_card",
+            "cash_amount", "card_amount", "bank_card", "payments",
             "note",
             "status", "current_step",
             "entry",
@@ -95,5 +107,14 @@ class PurchaseSessionSerializer(serializers.ModelSerializer):
                     "wholesale_price": str(item.get("wholesale_price") or 0),
                 }
                 for item in validated["items"]
+            ]
+        if "payments" in validated:
+            validated["payments"] = [
+                {
+                    "type": p.get("type"),
+                    "amount": str(p.get("amount") or 0),
+                    "bank_card": p.get("bank_card"),
+                }
+                for p in validated["payments"]
             ]
         return validated
