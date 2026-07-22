@@ -1,4 +1,8 @@
+from datetime import timedelta
+
+from django.conf import settings
 from django.db import models
+from django.utils import timezone
 
 
 class AuditLog(models.Model):
@@ -8,7 +12,9 @@ class AuditLog(models.Model):
     qurilmadan qilinganini saqlaydi.
 
     Yozuvlar core/middleware/audit.py (avtomatik) va login/logout view'lari
-    orqali tushadi.
+    orqali tushadi. Har bir yozuv o'z sanasidan AUDIT_LOG_RETENTION_DAYS
+    (standart 60) kun o'tgach avto o'chiriladi — prune_expired() ni
+    middleware kuniga bir marta chaqiradi.
     """
 
     class Action(models.TextChoices):
@@ -47,6 +53,17 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.user_display or 'Anonim'} — {self.module}.{self.action} ({self.created_at:%Y-%m-%d %H:%M})"
+
+    @classmethod
+    def retention_cutoff(cls):
+        days = getattr(settings, "AUDIT_LOG_RETENTION_DAYS", 60)
+        return timezone.now() - timedelta(days=days)
+
+    @classmethod
+    def prune_expired(cls) -> int:
+        """Muddati (60 kun) o'tgan yozuvlarni o'chiradi, sonini qaytaradi."""
+        deleted, _ = cls.objects.filter(created_at__lt=cls.retention_cutoff()).delete()
+        return deleted
 
     class Meta:
         db_table = "audit_log"

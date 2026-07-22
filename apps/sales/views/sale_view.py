@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import status, generics
 
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db import transaction
 from django.utils import timezone
@@ -303,6 +304,11 @@ class SaleStatisticsAPIView(APIView):
             if row["amount"]
         ]
 
+        # To'langan — NET (qaytarimlar ayirilgan), breakdown bilan bir manbadan.
+        # Sum(sale.paid_amount) ishlatilmaydi: qaytarim paid_amount ni
+        # kamaytirmaydi, shuning uchun u breakdown yig'indisiga mos kelmasdi.
+        total_paid_net = sum((row["amount"] for row in paid_rows), Decimal("0"))
+
         # Qaytarilgan summa — davr ichida rasmiylashtirilgan qaytarimlar (SaleReturn).
         # Sotuv sanasiga emas, QAYTARIM sanasiga qarab hisoblanadi: o'tgan oygi sotuv
         # bugun qaytarilsa, bugungi statistikada ko'rinadi. Do'kon cheklovi/filtri bir xil.
@@ -333,8 +339,12 @@ class SaleStatisticsAPIView(APIView):
         return Response(
             {
                 "total_sales": totals["total_sales"],
+                # Yalpi savdo (qaytarimlardan OLDIN) — moslik uchun saqlanadi
                 "total_amount": str(totals["total_amount"]),
-                "total_paid": str(totals["total_paid"]),
+                # Sof savdo: davr sotuvlari - davr ichidagi qaytarimlar
+                "total_net": str(totals["total_amount"] - returned["total"]),
+                # NET to'langan (qaytarib berilgan pul ayirilgan) — breakdown bilan mos
+                "total_paid": str(total_paid_net),
                 "total_debt": str(debt["total"]),
                 "total_returned": str(returned["total"]),
                 "total_returned_all": str(returned_all["total"]),

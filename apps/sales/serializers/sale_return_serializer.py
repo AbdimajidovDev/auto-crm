@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
-from apps.sales.models import SaleReturn, SaleReturnItem
-from apps.sales.serializers.sale_serializer import PaymentInputSerializer
+from apps.sales.models import Payment, SaleReturn, SaleReturnItem
+from apps.sales.serializers.sale_serializer import PaymentInputSerializer, PaymentSerializer
 
 
 class SaleReturnItemInputSerializer(serializers.Serializer):
@@ -50,12 +50,15 @@ class SaleReturnListSerializer(serializers.ModelSerializer):
     seller_name = serializers.SerializerMethodField()
 
     items = SaleReturnItemSerializer(many=True)
+    # Shu qaytarimda mijozga qaytarilgan pul qatorlari (naqd / har bir karta
+    # alohida) — payment_group orqali aniq shu qaytarimga bog'langan
+    refund_payments = serializers.SerializerMethodField()
 
     class Meta:
         model = SaleReturn
         fields = (
             'id', 'sale', 'store',  'store_name', 'customer', 'seller', 'seller_name',
-            'total_refund', 'comment', 'items', 'created_at'
+            'total_refund', 'comment', 'items', 'refund_payments', 'created_at'
         )
 
     def get_store_name(self, obj):
@@ -63,6 +66,17 @@ class SaleReturnListSerializer(serializers.ModelSerializer):
 
     def get_seller_name(self, obj):
         return obj.seller.full_name if obj.seller else ''
+
+    def get_refund_payments(self, obj):
+        if not obj.payment_group:
+            return []
+        qs = (
+            Payment.objects
+            .filter(payment_group=obj.payment_group, is_refund=True)
+            .select_related("bank_card")
+            .order_by("id")
+        )
+        return PaymentSerializer(qs, many=True).data
 
 
 # ═══════════════════════════════
