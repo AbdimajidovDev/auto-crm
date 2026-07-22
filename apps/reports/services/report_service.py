@@ -683,10 +683,13 @@ class DebtService:
         ]
 
     @staticmethod
-    def supplier_debts(store_id: int | None) -> list[dict]:
+    def supplier_debts() -> list[dict]:
+        # Ta'minotchi qarzi — biznesning UMUMIY majburiyati, shuning uchun do'kon
+        # filtri qo'llanmaydi. Aks holda kirim boshqa do'konga qilingan bo'lsa,
+        # do'kon tanlanganda qarz 0 bo'lib "yo'qolib" qolardi (real bug edi).
+        # Bu ta'minotchilar sahifasidagi global qarz hisobi bilan ham mos.
         qs = (
             SupplierTransaction.objects
-            .filter(_store_q(store_id, "entry__store_id"))
             .values("supplier__name")
             .annotate(
                 inc=Coalesce(Sum("amount", filter=Q(type="in")),  Value(Decimal("0")), output_field=DecimalField()),
@@ -740,11 +743,13 @@ class ReportService:
             "expenses":           ExpensesService.get(date_from, date_to, store_id),
             "debts": {
                 "customerDebts":  DebtService.customer_debts(store_id),
-                "supplierDebts":  DebtService.supplier_debts(store_id),
+                "supplierDebts":  DebtService.supplier_debts(),
             },
         }
 
-        cache.set(cache_key, data, timeout=60)
+        # 30s — yangi sotuv/to'lov ko'rsatkichlarda tez aks etadi, so'rovlar esa
+        # indekslar bilan yengil bo'lgani uchun bu TTL yetarli himoya beradi
+        cache.set(cache_key, data, timeout=30)
         return data
 
 

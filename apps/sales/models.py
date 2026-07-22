@@ -237,6 +237,11 @@ class Payment(TimestampMixin):
     # NULL — eski (guruhsiz) yozuvlar, har biri alohida to'lov hisoblanadi.
     payment_group = models.UUIDField(null=True, blank=True, db_index=True)
 
+    # True — QARZ to'lovi (DebtService orqali, sotuvdan keyin to'langan);
+    # False — sotuv yaratilish paytidagi to'lov. Statistikada "oxirgi qarz
+    # to'lovlari" ro'yxati shu belgi bo'yicha ajratiladi.
+    is_debt_payment = models.BooleanField(default=False, db_index=True)
+
     class Meta:
         indexes = [
             # Hisobotlar: sana oralig'i + type bo'yicha guruhlash

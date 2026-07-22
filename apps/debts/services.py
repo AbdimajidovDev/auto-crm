@@ -127,6 +127,7 @@ class DebtService:
                 bank_card=c.get("bank_card"),
                 sale=sale,
                 payment_group=payment_group,
+                is_debt_payment=True,
             )
             for c in chunks
         ]

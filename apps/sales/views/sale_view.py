@@ -309,6 +309,44 @@ class SaleStatisticsAPIView(APIView):
         # kamaytirmaydi, shuning uchun u breakdown yig'indisiga mos kelmasdi.
         total_paid_net = sum((row["amount"] for row in paid_rows), Decimal("0"))
 
+        # Oxirgi qarz to'lovlari — "Jami qarzdorlik" kartasi ostida ko'rsatiladi.
+        # Sana filtriga bog'liq EMAS (eng oxirgilari), do'kon cheklovi saqlanadi.
+        # Bitta to'lov harakati (payment_group) bitta yozuv: jami summa + qismlari
+        # (naqd / har bir karta: Humo, Uzcard, ...).
+        debt_scope = _scope_to_user_stores(Sale.objects.all(), request.user)
+        if store:
+            debt_scope = debt_scope.filter(store_id=store)
+        recent_rows = list(
+            Payment.objects
+            .filter(is_debt_payment=True, is_refund=False, sale__in=debt_scope.values("id"))
+            .select_related("bank_card")
+            .order_by("-created_at", "-id")[:15]
+        )
+        recent_groups: dict[str, list] = {}
+        recent_order: list[str] = []
+        for p in recent_rows:
+            key = str(p.payment_group) if p.payment_group else f"solo-{p.id}"
+            if key not in recent_groups:
+                recent_groups[key] = []
+                recent_order.append(key)
+            recent_groups[key].append(p)
+        recent_debt_payments = [
+            {
+                "sale": group_rows[0].sale_id,
+                "created_at": group_rows[0].created_at.isoformat(),
+                "amount": str(sum((r.amount for r in group_rows), Decimal("0"))),
+                "parts": [
+                    {
+                        "type": r.type,
+                        "name": r.bank_card.name if r.bank_card else None,
+                        "amount": str(r.amount),
+                    }
+                    for r in group_rows
+                ],
+            }
+            for group_rows in (recent_groups[k] for k in recent_order[:3])
+        ]
+
         # Qaytarilgan summa — davr ichida rasmiylashtirilgan qaytarimlar (SaleReturn).
         # Sotuv sanasiga emas, QAYTARIM sanasiga qarab hisoblanadi: o'tgan oygi sotuv
         # bugun qaytarilsa, bugungi statistikada ko'rinadi. Do'kon cheklovi/filtri bir xil.
@@ -349,6 +387,7 @@ class SaleStatisticsAPIView(APIView):
                 "total_returned": str(returned["total"]),
                 "total_returned_all": str(returned_all["total"]),
                 "paid_breakdown": paid_breakdown,
+                "recent_debt_payments": recent_debt_payments,
             },
             status=status.HTTP_200_OK,
         )

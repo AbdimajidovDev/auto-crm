@@ -117,22 +117,25 @@ def _customer_aggregate_queryset():
         .values("total")
     )
 
-    # --- qarz hosil qiluvchi tranzaksiyalar (CustomerDebt type="i") ---
+    # --- qarz hosil qiluvchi tranzaksiyalar (CustomerDebt type="i" — INCREASE) ---
     debt_in_subquery = (
         CustomerDebt.objects.filter(
             customer=OuterRef("pk"),
-            type="i",                                   # INVENTORY_IN / kirim
+            type=CustomerDebt.Type.INCREASE,
         )
         .values("customer")
         .annotate(total=Sum("amount"))
         .values("total")
     )
 
-    # --- to'lov tranzaksiyalari (CustomerDebt type="p") ---
+    # --- to'lov tranzaksiyalari (CustomerDebt type="d" — DECREASE) ---
+    # DIQQAT: avval bu yerda type="p" yozilgan edi — bunday tur mavjud emas
+    # (CustomerDebt.Type: "i"=Increase, "d"=Decrease). Natijada to'lovlar 0 bo'lib,
+    # ro'yxatdagi total_debt to'lovlarni ayirmasdan oshiq ko'rsatilardi.
     debt_paid_subquery = (
         CustomerDebt.objects.filter(
             customer=OuterRef("pk"),
-            type="p",                                   # PAYMENT / to'lov
+            type=CustomerDebt.Type.DECREASE,
         )
         .values("customer")
         .annotate(total=Sum("amount"))
