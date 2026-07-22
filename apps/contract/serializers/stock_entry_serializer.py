@@ -1,6 +1,8 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from apps.store.models import Store
-from apps.contract.models import Supplier, StockEntry, StockEntryItem
+from apps.contract.models import Supplier, StockEntry, StockEntryItem, StockEntryPayment
 from apps.products.models import Product
 from apps.sales.models import BankCard
 
@@ -39,6 +41,47 @@ class StockEntryItemSerializer(serializers.Serializer):
         return data
 
 
+def validate_purchase_bank_card_scope(bank_card):
+    """Kirim (xarid) bo'limida faqat scope=purchase/both kartalar ishlatiladi."""
+    if bank_card is not None and bank_card.scope not in (
+        BankCard.Scope.PURCHASE, BankCard.Scope.BOTH
+    ):
+        raise serializers.ValidationError(
+            {"bank_card": "Bu to'lov usuli xarid bo'limi uchun ruxsat etilmagan"}
+        )
+
+
+class StockEntryPaymentInputSerializer(serializers.Serializer):
+    """
+    Bitta split to'lov qatori — sotuvdagi PaymentInputSerializer bilan bir xil
+    shakl: {type: cash|card, amount, bank_card?}. Karta bo'lsa bank_card majburiy.
+    """
+    type = serializers.ChoiceField(choices=(("cash", "cash"), ("card", "card")))
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2)
+    bank_card = serializers.PrimaryKeyRelatedField(
+        queryset=BankCard.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    def validate(self, data):
+        if data["amount"] <= 0:
+            raise serializers.ValidationError("To'lov miqdori noldan katta bo'lishi kerak")
+        bank_card = data.get("bank_card")
+        if data["type"] == "card":
+            if bank_card is None:
+                raise serializers.ValidationError(
+                    {"bank_card": "Karta to'lovi uchun to'lov usulini (kartani) tanlang"}
+                )
+            validate_purchase_bank_card_scope(bank_card)
+        elif bank_card is not None:
+            raise serializers.ValidationError(
+                {"bank_card": "Naqd to'lovda bank_card yuborilmasligi kerak"}
+            )
+        return data
+
+
 class StockEntryCreateSerializer(serializers.Serializer):
     supplier = serializers.PrimaryKeyRelatedField(queryset=Supplier.objects.filter(is_active=True))
     # Istalgan faol do'konga kirim mumkin (ombor ham, savdo do'koni ham).
@@ -46,6 +89,10 @@ class StockEntryCreateSerializer(serializers.Serializer):
     # (contract.permissions.ensure_store_access): superuser — hammasiga,
     # do'kon xodimi — faqat o'z do'kon(lar)iga.
     store = serializers.PrimaryKeyRelatedField(queryset=Store.objects.filter(is_active=True))
+    # Split to'lovlar (yangi klientlar): har usul alohida qator.
+    # Berilsa cash_amount/card_amount/bank_card e'tiborga olinmaydi — ular
+    # payments dan hisoblanadi.
+    payments = StockEntryPaymentInputSerializer(many=True, required=False)
     cash_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
     card_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, default=0)
     # Karta to'lovida qaysi usul/karta ishlatilgani. Ixtiyoriy (eski klientlar
@@ -70,21 +117,40 @@ class StockEntryCreateSerializer(serializers.Serializer):
         total_entry_amount = sum(
             item["purchase_price"] * item["quantity"] for item in items
         )
+
+        payments = data.get("payments")
+        if payments:
+            # Split rejim: summalar payments dan olinadi, yassi maydonlar sinxronlanadi
+            data["cash_amount"] = sum(
+                (p["amount"] for p in payments if p["type"] == "cash"), Decimal("0")
+            )
+            data["card_amount"] = sum(
+                (p["amount"] for p in payments if p["type"] == "card"), Decimal("0")
+            )
+            data["bank_card"] = None
+            # Bitta karta ikki marta tanlanmasin (taqsimot chalkashmasligi uchun)
+            card_ids = [p["bank_card"].id for p in payments if p["type"] == "card"]
+            if len(card_ids) != len(set(card_ids)):
+                raise serializers.ValidationError(
+                    {"payments": "Bitta karta bir necha marta tanlangan"}
+                )
+            if sum(1 for p in payments if p["type"] == "cash") > 1:
+                raise serializers.ValidationError(
+                    {"payments": "Naqd to'lov faqat bitta qator bo'lishi mumkin"}
+                )
+
         paid_amount = data["cash_amount"] + data["card_amount"]
 
         if paid_amount > total_entry_amount:
             raise serializers.ValidationError("To'lov umumiy narxdan oshib ketdi!")
 
-        bank_card = data.get("bank_card")
-        if bank_card is not None:
-            if bank_card.scope not in (BankCard.Scope.PURCHASE, BankCard.Scope.BOTH):
+        if not payments:
+            bank_card = data.get("bank_card")
+            validate_purchase_bank_card_scope(bank_card)
+            if data["card_amount"] > 0 and bank_card is None:
                 raise serializers.ValidationError(
-                    {"bank_card": "Bu to'lov usuli xarid bo'limi uchun ruxsat etilmagan"}
+                    {"bank_card": "Karta to'lovi uchun to'lov usulini tanlang"}
                 )
-        if data["card_amount"] > 0 and bank_card is None:
-            raise serializers.ValidationError(
-                {"bank_card": "Karta to'lovi uchun to'lov usulini tanlang"}
-            )
 
         return data
 
@@ -122,6 +188,15 @@ class StockEntryItemListSerializer(serializers.ModelSerializer):
         )
 
 
+class StockEntryPaymentListSerializer(serializers.ModelSerializer):
+    """Kirimning split to'lov qatorlari (o'qish uchun) — sotuvdagi PaymentSerializer andozasi."""
+    bank_card_name = serializers.CharField(source="bank_card.name", read_only=True, default=None)
+
+    class Meta:
+        model = StockEntryPayment
+        fields = ("id", "amount", "type", "bank_card", "bank_card_name", "created_at")
+
+
 class StockEntryListSerializer(serializers.ModelSerializer):
     """
     SerializerMethodField → source= ga o'tkazildi:
@@ -142,6 +217,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
       asosida hisoblanadi — kartezian muammo yo'q.
     """
     items = StockEntryItemListSerializer(many=True, read_only=True)
+    payments = StockEntryPaymentListSerializer(many=True, read_only=True)
 
     # source= — select_related orqali SQL yo'q, xotiradan o'qiladi
     supplier_name = serializers.CharField(source="supplier.name", read_only=True, default="")
@@ -171,6 +247,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
             "created_by", "full_name",
             "note",
             "items",
+            "payments",
             "created_at",
         )
 

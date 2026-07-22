@@ -1,17 +1,56 @@
+from decimal import Decimal
+
 from django.db import transaction
 from django.db.models import F
 from apps.inventory.services.inventory_hooks_service import handle_stock_entry
 from apps.products.models import ProductBatch
-from apps.contract.models import StockEntry, StockEntryItem, SupplierTransaction
+from apps.contract.models import StockEntry, StockEntryItem, StockEntryPayment, SupplierTransaction
+
+
+def _normalize_payments(payments, cash_amount, card_amount, bank_card):
+    """
+    Har doim split to'lovlar ro'yxatini qaytaradi:
+      [{"type": "cash"|"card", "amount": Decimal, "bank_card": BankCard|None}, ...]
+    payments berilmagan bo'lsa (Excel import, eski klientlar) yassi
+    cash_amount/card_amount/bank_card maydonlaridan sintez qilinadi.
+    """
+    if payments:
+        return [
+            {
+                "type": p["type"],
+                "amount": Decimal(str(p["amount"])),
+                "bank_card": p.get("bank_card"),
+            }
+            for p in payments
+            if Decimal(str(p["amount"])) > 0
+        ]
+
+    synthesized = []
+    if cash_amount and cash_amount > 0:
+        synthesized.append({"type": StockEntryPayment.Type.CASH, "amount": cash_amount, "bank_card": None})
+    if card_amount and card_amount > 0:
+        synthesized.append({"type": StockEntryPayment.Type.CARD, "amount": card_amount, "bank_card": bank_card})
+    return synthesized
 
 
 class StockEntryService:
     @staticmethod
     @transaction.atomic
-    def create_entry(*, supplier, store, items, cash_amount, card_amount, user, bank_card=None, note=""):
+    def create_entry(*, supplier, store, items, user, payments=None,
+                     cash_amount=0, card_amount=0, bank_card=None, note=""):
         total_entry_amount = sum(
             item["purchase_price"] * item["quantity"] for item in items
         )
+
+        payment_rows = _normalize_payments(payments, cash_amount, card_amount, bank_card)
+        zero = Decimal("0")
+        total_cash = sum((p["amount"] for p in payment_rows if p["type"] == StockEntryPayment.Type.CASH), zero)
+        total_card = sum((p["amount"] for p in payment_rows if p["type"] == StockEntryPayment.Type.CARD), zero)
+        card_rows = [p for p in payment_rows if p["type"] == StockEntryPayment.Type.CARD]
+
+        # Eski bank_card FK maydoni faqat bitta karta bo'lganda ma'noli
+        # (bir nechta karta bo'lsa haqiqiy taqsimot entry.payments qatorlarida)
+        legacy_bank_card = card_rows[0]["bank_card"] if len(card_rows) == 1 else None
 
         # Entry yaratish — paid_amount, payment_type, debt_amount
         # StockEntry.save() ichida avtomatik hisoblanadi
@@ -19,12 +58,27 @@ class StockEntryService:
             supplier=supplier,
             store=store,
             total_amount=total_entry_amount,
-            cash_amount=cash_amount,
-            card_amount=card_amount,
-            bank_card=bank_card if card_amount and card_amount > 0 else None,
+            cash_amount=total_cash,
+            card_amount=total_card,
+            bank_card=legacy_bank_card,
             note=(note or "").strip(),
             created_by=user
         )
+
+        # Split to'lov qatorlari (sotuvdagi Payment bilan bir xil naqsh)
+        payment_objs = [
+            StockEntryPayment(
+                entry=entry,
+                amount=p["amount"],
+                type=p["type"],
+                bank_card=p.get("bank_card"),
+            )
+            for p in payment_rows
+        ]
+        # bulk_create save() ni chaqirmaydi — invariantni qo'lda tekshiramiz
+        for payment in payment_objs:
+            payment.clean()
+        StockEntryPayment.objects.bulk_create(payment_objs)
 
         product_ids = [item["product"].id for item in items]
 

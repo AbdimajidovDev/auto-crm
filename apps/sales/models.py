@@ -63,6 +63,14 @@ class BankCard(TimestampMixin):
         return self.name
 
 
+class SaleManager(models.Manager):
+    # Soft-delete filtri: arxivdagi (deleted_at belgilangan) sotuvlar BARCHA standart
+    # so'rovlardan (ro'yxat, statistika, hisobotlar, eksport) avtomatik chiqariladi.
+    # Arxiv bilan ishlash uchun Sale.all_objects ishlatiladi.
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
 class Sale(models.Model):
 
     class Status(models.TextChoices):
@@ -120,6 +128,16 @@ class Sale(models.Model):
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
+
+    # Soft delete (arxiv): superadmin o'chirganda darhol yo'qolmaydi — deleted_at
+    # belgilanadi va sotuv ro'yxat/hisobotlardan yashiriladi. 30 kundan keyin
+    # purge (_purge_expired_deleted_sales / purge_deleted_sales buyrug'i) butunlay o'chiradi.
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    # Birinchi manager default: barcha Sale.objects so'rovlari arxivni chiqarib tashlaydi.
+    # Reverse FK'lar (customer.sales, ...) Django _base_manager (filtrsiz) ishlatadi.
+    objects = SaleManager()
+    all_objects = models.Manager()
 
     class Meta:
         # Reports/ro'yxatlar deyarli har doim created_at bo'yicha filtrlaydi/saralaydi.
@@ -212,6 +230,12 @@ class Payment(TimestampMixin):
     # True — mijozga QAYTARILGAN pul (sale return). Hisobotlarda kirimdan ayiriladi,
     # payment_type NET (kirim - qaytarim) asosida hisoblanadi.
     is_refund = models.BooleanField(default=False)
+
+    # Bitta to'lov harakati (masalan, qisman qarz to'lovi naqd + Humo + Uzcard bilan)
+    # bir nechta Payment qatoriga bo'linadi — ular bitta payment_group bilan bog'lanadi.
+    # UI tarixda guruhni bitta to'lov bloki qilib, qismlarini ichida ko'rsatadi.
+    # NULL — eski (guruhsiz) yozuvlar, har biri alohida to'lov hisoblanadi.
+    payment_group = models.UUIDField(null=True, blank=True, db_index=True)
 
     class Meta:
         indexes = [

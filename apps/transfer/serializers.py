@@ -7,7 +7,52 @@ from apps.transfer.models import (
     StockTransfer,
     StockTransferItem,
     Notification,
+    TransferSession,
 )
+
+
+class TransferSessionSerializer(serializers.ModelSerializer):
+    """O'tkazma qoralamasi — avto-saqlash uchun yengil serializer."""
+
+    from_store = serializers.PrimaryKeyRelatedField(
+        queryset=Store.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+    to_store = serializers.PrimaryKeyRelatedField(
+        queryset=Store.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    # Ro'yxat sahifasida qoralama kartasi uchun do'kon nomlari
+    from_store_name = serializers.CharField(source="from_store.name", read_only=True, default=None)
+    to_store_name = serializers.CharField(source="to_store.name", read_only=True, default=None)
+
+    class Meta:
+        model = TransferSession
+        fields = (
+            "id", "from_store", "from_store_name", "to_store", "to_store_name",
+            "items", "status", "created_at", "updated_at",
+        )
+        read_only_fields = ("id", "status", "created_at", "updated_at")
+
+    def validate_items(self, items):
+        # Qoralama — yengil tekshiruv: list ichida {product, quantity} bo'lishi kifoya.
+        # Qat'iy validatsiya (ombor qoldig'i) haqiqiy o'tkazma yaratishda bajariladi.
+        if not isinstance(items, list):
+            raise serializers.ValidationError("items ro'yxat bo'lishi kerak")
+        cleaned = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            cleaned.append({
+                "product": item.get("product"),
+                "quantity": item.get("quantity") or 0,
+            })
+        return cleaned
 
 
 class TransferItemSerializer(serializers.ModelSerializer):

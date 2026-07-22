@@ -1,16 +1,100 @@
 from django.contrib.auth.models import PermissionsMixin
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status, permissions
+from rest_framework import generics, status, permissions
 from django.core.exceptions import ValidationError
 
 from apps.common.paginations import StandardPagination
 from apps.common.excel_export import parse_date_param
-from apps.transfer.models import StockTransfer, Notification
-from apps.transfer.serializers import TransferCreateSerializer, TransferListSerializer, NotificationSerializer
+from apps.transfer.models import StockTransfer, Notification, TransferSession
+from apps.transfer.serializers import (
+    TransferCreateSerializer,
+    TransferListSerializer,
+    NotificationSerializer,
+    TransferSessionSerializer,
+)
 from apps.transfer.services import TransferService
+
+
+# ─────────────────────────────────────────────
+# O'TKAZMA SESSIYASI (qoralama, avto-saqlash)
+# ─────────────────────────────────────────────
+
+@extend_schema(
+    tags=["Transfer"],
+    summary="Faol o'tkazma qoralamalari ro'yxati / yangi qoralama boshlash",
+)
+class TransferSessionListCreateAPIView(generics.ListCreateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = TransferSessionSerializer
+
+    def get_queryset(self):
+        # Har kim faqat o'z qoralamalarini ko'radi va davom ettiradi
+        return TransferSession.objects.filter(
+            created_by=self.request.user,
+            status=TransferSession.Status.IN_PROGRESS,
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+
+@extend_schema(
+    tags=["Transfer"],
+    summary="Qoralamani olish / avto-saqlash (PATCH) / bekor qilish (DELETE)",
+)
+class TransferSessionDetailAPIView(generics.RetrieveUpdateDestroyAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = TransferSessionSerializer
+
+    def get_queryset(self):
+        return TransferSession.objects.filter(created_by=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        session = self.get_object()
+        if session.status != TransferSession.Status.IN_PROGRESS:
+            return Response(
+                {"detail": "Yakunlangan yoki bekor qilingan qoralamani o'zgartirib bo'lmaydi"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return super().update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        # Hard delete emas — qoralama bekor qilinadi (tarix saqlanadi)
+        session = self.get_object()
+        if session.status == TransferSession.Status.COMPLETED:
+            return Response(
+                {"detail": "Yakunlangan qoralamani bekor qilib bo'lmaydi"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        session.status = TransferSession.Status.CANCELLED
+        session.save(update_fields=["status", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema(
+    tags=["Transfer"],
+    summary="Qoralamani yakunlash — o'tkazma yaratilgandan keyin chaqiriladi",
+)
+class TransferSessionCompleteAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        session = get_object_or_404(
+            TransferSession,
+            pk=pk,
+            created_by=request.user,
+            status=TransferSession.Status.IN_PROGRESS,
+        )
+        transfer_id = request.data.get("transfer")
+        if transfer_id:
+            session.transfer = StockTransfer.objects.filter(pk=transfer_id).first()
+        session.status = TransferSession.Status.COMPLETED
+        session.save(update_fields=["status", "transfer", "updated_at"])
+        return Response(TransferSessionSerializer(session).data, status=status.HTTP_200_OK)
 
 
 @extend_schema(

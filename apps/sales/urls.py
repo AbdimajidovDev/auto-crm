@@ -5,6 +5,9 @@ from apps.sales.views import (
     SaleDetailAPIView,
     SaleExportAPIView,
     SaleStatisticsAPIView,
+    SaleBulkDeleteAPIView,
+    SaleArchiveListAPIView,
+    SaleRestoreAPIView,
     CustomerDebtListAPIView,
     SaleReturnCreateAPIView,
     SaleReturnListAPIView,
@@ -18,6 +21,11 @@ urlpatterns = [
     path('statistics/', SaleStatisticsAPIView.as_view()),
     path('export/', SaleExportAPIView.as_view()),
     path('create/', SaleCreateAPIView.as_view()),
+
+    # Faqat superadmin: o'chirish (arxivga), arxiv ro'yxati, tiklash
+    path('bulk-delete/', SaleBulkDeleteAPIView.as_view()),
+    path('archive/', SaleArchiveListAPIView.as_view()),
+    path('archive/restore/', SaleRestoreAPIView.as_view()),
 
     path('bank-cards/', BankCardListCreateAPIView.as_view()),
     path('bank-cards/<int:pk>/', BankCardDetailAPIView.as_view()),

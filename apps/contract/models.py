@@ -123,6 +123,57 @@ class StockEntry(TimestampMixin):
         return f"#{self.pk}. {self.supplier} - {self.store}"
 
 
+class StockEntryPayment(TimestampMixin):
+    """
+    Kirim (xarid) uchun to'lov qatori — sotuvdagi sales.Payment bilan bir xil
+    naqsh: har bir to'lov usuli (naqd / har bir karta) alohida qator.
+    StockEntry.cash_amount / card_amount — shu qatorlardan hisoblangan yig'indilar.
+    """
+
+    class Type(models.TextChoices):
+        CASH = "cash", "Naqd"
+        CARD = "card", "Karta"
+
+    entry = models.ForeignKey(
+        StockEntry,
+        on_delete=models.CASCADE,
+        related_name="payments",
+    )
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+    type = models.CharField(max_length=5, choices=Type.choices)
+    # PROTECT — to'lovlari bor kartani o'chirib bo'lmaydi (soft delete: is_active=False)
+    bank_card = models.ForeignKey(
+        "sales.BankCard",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="stock_entry_payments",
+    )
+
+    class Meta:
+        db_table = "stock_entry_payment"
+        indexes = [
+            # Hisobotlar (chiqimlar/kartalar kesimi) type+created_at bo'yicha filtrlaydi
+            models.Index(fields=["type", "created_at"]),
+        ]
+
+    def clean(self):
+        # sales.Payment bilan bir xil invariant: karta → bank_card majburiy, naqd → bo'sh
+        from django.core.exceptions import ValidationError
+
+        if self.type == self.Type.CARD and self.bank_card_id is None:
+            raise ValidationError({"bank_card": "Karta to'lovi uchun bank_card majburiy"})
+        if self.type == self.Type.CASH and self.bank_card_id is not None:
+            raise ValidationError({"bank_card": "Naqd to'lovda bank_card bo'lmasligi kerak"})
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Entry #{self.entry_id}: {self.type} {self.amount}"
+
+
 class StockEntryItem(models.Model):
     entry = models.ForeignKey(
         StockEntry,
@@ -191,6 +242,9 @@ class PurchaseSession(TimestampMixin):
         blank=True,
         related_name="purchase_sessions",
     )
+    # Split to'lov qoralamasi: [{type: cash|card, amount: "...", bank_card: id|null}, ...]
+    # Bo'sh bo'lsa eski yassi cash_amount/card_amount/bank_card ishlatiladi (eski draftlar).
+    payments = models.JSONField(default=list, blank=True)
     # Ixtiyoriy izoh — confirm bosqichida StockEntry.note ga ko'chadi
     note = models.TextField(blank=True, default="")
 
@@ -258,6 +312,9 @@ class SupplierTransaction(TimestampMixin):
         blank=True,
         related_name="supplier_transactions",
     )
+    # Bitta to'lov harakati (split: naqd + kartalar) bir nechta pay qatoriga
+    # bo'linadi — ular bitta payment_group bilan bog'lanadi (UI bitta blok qiladi)
+    payment_group = models.UUIDField(null=True, blank=True, db_index=True)
     note = models.TextField(blank=True)
 
     class Meta:

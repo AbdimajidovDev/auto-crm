@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.db import transaction
@@ -56,7 +57,20 @@ class SupplierPaymentService:
 
     @staticmethod
     @transaction.atomic
-    def make_payment(*, supplier, entry, amount, note, user, payment_method="cash", bank_card=None):
+    def make_payments(*, supplier, entry, payments, note, user):
+        """
+        Bitta so'rovda bir nechta usul bilan qarz to'lash (split) — har usul
+        alohida SupplierTransaction (pay) qatori bo'lib yoziladi.
+
+        payments: [{"type": "cash"|"card", "amount": Decimal, "bank_card": BankCard|None}, ...]
+        Qoldiq qarz tekshiruvi bitta qulf ostida jami summa bo'yicha bajariladi.
+        """
+        payments = [p for p in payments if p["amount"] > 0]
+        if not payments:
+            raise ValidationError({"payments": "To'lov qatorlari bo'sh"})
+
+        total = sum((Decimal(str(p["amount"])) for p in payments), Decimal("0"))
+
         # Entry qatori qulflanadi — bir vaqtda ikkita to'lov qoldiqdan
         # oshib ketmasligi uchun (tekshiruv va yozish bitta tranzaksiyada)
         locked_entry = StockEntry.objects.select_for_update().get(pk=entry.pk)
@@ -64,23 +78,38 @@ class SupplierPaymentService:
         remaining = SupplierPaymentService.get_remaining_debt(locked_entry)
         if remaining <= 0:
             raise ValidationError({"amount": "Bu xarid bo'yicha qarz yo'q"})
-        if amount > remaining:
+        if total > remaining:
             raise ValidationError({
                 "amount": f"To'lov qoldiq qarzdan oshib ketdi. Qoldiq qarz: {remaining:.2f}"
             })
 
-        # To'lov usuli izoh uchun: "naqd" yoki karta nomi (Uzcard/Humo/...)
-        method_label = bank_card.name if bank_card else "naqd"
+        # Bitta chaqiruv = bitta to'lov harakati — barcha qatorlar bitta guruhda
+        payment_group = uuid.uuid4()
+        transactions = []
+        for p in payments:
+            bank_card = p.get("bank_card")
+            # To'lov usuli izoh uchun: "naqd" yoki karta nomi (Uzcard/Humo/...)
+            method_label = bank_card.name if bank_card else "naqd"
+            transactions.append(SupplierTransaction.objects.create(
+                supplier=supplier,
+                entry=locked_entry,
+                amount=p["amount"],
+                type=SupplierTransaction.TransactionType.PAYMENT,
+                payment_method=p["type"],
+                bank_card=bank_card,
+                payment_group=payment_group,
+                note=note or f"Taminotchiga to'lov ({method_label}). Mas'ul: {user.full_name}"
+            ))
 
-        # To'lov tranzaksiyasini yaratish
-        payment_transaction = SupplierTransaction.objects.create(
+        return transactions
+
+    @staticmethod
+    def make_payment(*, supplier, entry, amount, note, user, payment_method="cash", bank_card=None):
+        """Eski (bitta usulli) interfeys — ichkarida split servisga o'tkazadi."""
+        return SupplierPaymentService.make_payments(
             supplier=supplier,
-            entry=locked_entry,
-            amount=amount,
-            type=SupplierTransaction.TransactionType.PAYMENT,
-            payment_method=payment_method,
-            bank_card=bank_card,
-            note=note or f"Taminotchiga to'lov ({method_label}). Mas'ul: {user.full_name}"
-        )
-
-        return payment_transaction
+            entry=entry,
+            payments=[{"type": payment_method, "amount": amount, "bank_card": bank_card}],
+            note=note,
+            user=user,
+        )[0]

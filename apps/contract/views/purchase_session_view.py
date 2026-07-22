@@ -20,6 +20,24 @@ ACTIVE_STATUSES = (
 )
 
 
+def _session_payments_payload(session: PurchaseSession) -> list[dict]:
+    """Sessiya JSON split to'lovlarini StockEntryCreateSerializer formatiga o'tkazadi."""
+    payload = []
+    for p in (session.payments or []):
+        try:
+            amount = Decimal(str(p.get("amount") or 0))
+        except (InvalidOperation, TypeError, ValueError):
+            amount = Decimal("0")
+        if amount <= 0:
+            continue
+        payload.append({
+            "type": p.get("type"),
+            "amount": str(amount),
+            "bank_card": p.get("bank_card"),
+        })
+    return payload
+
+
 def _session_items_payload(session: PurchaseSession) -> list[dict]:
     """Sessiya JSON itemlarini StockEntryCreateSerializer formatiga o'tkazadi."""
     payload = []
@@ -169,7 +187,7 @@ class PurchaseSessionConfirmAPIView(APIView):
         # Yakuniy himoya: ombor o'zgarishidan oldin do'kon ruxsati qayta tekshiriladi
         ensure_store_access(request.user, session.store_id)
 
-        serializer = StockEntryCreateSerializer(data={
+        serializer_data = {
             "supplier": session.supplier_id,
             "store": session.store_id,
             "cash_amount": str(session.cash_amount),
@@ -177,12 +195,19 @@ class PurchaseSessionConfirmAPIView(APIView):
             "bank_card": session.bank_card_id,
             "note": session.note or "",
             "items": _session_items_payload(session),
-        })
+        }
+        # Split to'lovlar bo'lsa ular ustuvor — yassi maydonlar serializer
+        # ichida payments dan qayta hisoblanadi (eski draftlar yassi rejimda qoladi)
+        session_payments = _session_payments_payload(session)
+        if session_payments:
+            serializer_data["payments"] = session_payments
+        serializer = StockEntryCreateSerializer(data=serializer_data)
         serializer.is_valid(raise_exception=True)
 
         entry = StockEntryService.create_entry(
             supplier=serializer.validated_data["supplier"],
             store=serializer.validated_data["store"],
+            payments=serializer.validated_data.get("payments"),
             cash_amount=serializer.validated_data["cash_amount"],
             card_amount=serializer.validated_data["card_amount"],
             bank_card=serializer.validated_data.get("bank_card"),

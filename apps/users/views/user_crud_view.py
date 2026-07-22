@@ -43,13 +43,15 @@ class UsersListView(ListAPIView):
         # ⚠️ MUAMMO [PERF]: `.only(...)` yo'q — User modelining barcha ustunlari (parol hashi ham) SELECT qilinadi.
         # ✅ YECHIM: serializer faqat 8 ta maydondan foydalanadi, shu bois:
         #   .only("id", "full_name", "phone_number", "email", "is_active", "created_at", "updated_at")
+        # order_by shart: tartibsiz queryset + pagination barqaror emas va
+        # yangi user oxirgi sahifaga tushib, ro'yxatda "ko'rinmay" qolardi
         queryset = User.objects.select_related("role").prefetch_related(
             Prefetch(
                 "store_links",
                 queryset=StoreUser.objects.filter(is_active=True).select_related("store"),
                 to_attr="active_store_links"
             )
-        ).filter(is_superuser=False)
+        ).filter(is_superuser=False).order_by("-id")
         return queryset
 
 
@@ -83,6 +85,10 @@ class UsersDetailView(APIView):
         serializer = self.serializer_class(user, data=request.data)
         if serializer.is_valid():
             serializer.save()
+            # UserSerializer'da store_id read-only (SerializerMethodField) —
+            # do'kon bog'lamasi alohida sync qilinadi, kalit kelgandagina.
+            if "store_id" in request.data:
+                UserService.set_user_store(user=user, store_id=request.data.get("store_id"))
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 

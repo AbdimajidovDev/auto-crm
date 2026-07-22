@@ -72,14 +72,15 @@ class PayDebtAPIView(APIView):
         payment = DebtService.pay_debt(
             sale_id=data["sale"],
             amount=data["amount"],
-            payment_type=data["type"],
+            payment_type=data.get("type"),
             bank_card=data.get("bank_card"),
+            payments=data.get("payments"),
         )
 
         return Response({
             "message": "Debt paid successfully",
             "payment_id": payment.id,
-            "amount": payment.amount
+            "amount": data["amount"],
         }, status=status.HTTP_201_CREATED)
 
 
@@ -105,8 +106,9 @@ class CustomerPayDebtAPIView(APIView):
         result = DebtService.pay_customer_debt(
             customer_id=data["customer"],
             amount=data["amount"],
-            payment_type=data["type"],
+            payment_type=data.get("type"),
             bank_card=data.get("bank_card"),
+            payments=data.get("payments"),
         )
 
         return Response({

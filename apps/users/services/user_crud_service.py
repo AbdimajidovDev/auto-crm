@@ -1,6 +1,8 @@
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 
+from apps.common.i18n import tr
+from apps.store.models import StoreUser
 from apps.store.repositories import StoreUserRepository
 from apps.store.selectors import StoreSelector
 from apps.users.models import Role
@@ -21,18 +23,18 @@ class UserService:
         # 🔴 AUTH CHECK (bitta joyda bo‘lishi kerak)
         # superuser yoki "users.create" permission'iga ega rol
         if not user_has_perm(request_user, "users.create"):
-            raise ValidationError("User yaratish uchun ruxsat yo'q")
+            raise ValidationError(tr("no_permission_user_create"))
 
         # 🔴 DUPLICATE USER
         if UserSelector.get_user_by_phone(data["phone_number"]):
-            raise ValidationError("User already exists")
+            raise ValidationError(tr("phone_exists"))
 
         # 🔴 STORE CHECK (store ixtiyoriy — admin turidagi user do'konsiz bo'lishi mumkin)
         store = None
         if store_id:
             store = StoreSelector.get_store(store_id)
             if not store:
-                raise ValidationError("Store topilmadi")
+                raise ValidationError(tr("store_not_found"))
 
         # Tizim roli (RBAC)
         role_obj = None
@@ -57,6 +59,35 @@ class UserService:
             )
 
         return user
+
+    @staticmethod
+    @transaction.atomic
+    def set_user_store(*, user, store_id):
+        # Tahrirlashda userning aktiv do'kon bog'lamasini sinxronlaydi.
+        # store_id bo'sh/null bo'lsa — barcha aktiv bog'lamalar uziladi (admin turidagi user).
+        if not store_id:
+            StoreUser.objects.filter(user=user, is_active=True).update(is_active=False)
+            return
+
+        store = StoreSelector.get_store(store_id)
+        if not store:
+            raise ValidationError(tr("store_not_found"))
+
+        # Statik do'kon roli (m/s) tizim rolidan kelib chiqadi — create bilan bir xil qoida
+        store_role = "m" if user.role and "inventory.view" in (user.role.permissions or []) else "s"
+
+        # Boshqa do'konlardagi aktiv bog'lamalarni uzamiz
+        StoreUser.objects.filter(user=user, is_active=True).exclude(store=store).update(is_active=False)
+
+        # unique_together(user, store) — mavjud bog'lama bo'lsa qayta aktivlashtiramiz
+        link = StoreUser.objects.filter(user=user, store=store).first()
+        if link:
+            if not link.is_active or link.role != store_role:
+                link.is_active = True
+                link.role = store_role
+                link.save()
+        else:
+            StoreUserRepository.create_store_user(user=user, store=store, role=store_role)
 
 
     @staticmethod

@@ -6,9 +6,15 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 
+from datetime import timedelta
+
+from django.db import transaction
+from django.utils import timezone
+
+from apps.common.i18n import tr
 from apps.common.paginations import StandardPagination
 from apps.debts.models import CustomerDebt
-from apps.sales.models import Sale, SaleItem, Payment
+from apps.sales.models import Sale, SaleItem, Payment, SaleReturn, SaleReturnItem
 from apps.sales.serializers import SaleCreateSerializer, SaleListSerializer, CustomerDebtListSerializer
 from apps.sales.services import SaleService
 from django.db.models import Q
@@ -266,12 +272,73 @@ class SaleStatisticsAPIView(APIView):
             )
         )
 
+        # To'langan summaning taqsimoti: naqd + har bir bank kartasi bo'yicha
+        # (filtrlangan sotuvlarning to'lovlari, qaytarimlar NET ayiriladi).
+        # Eski to'lovlarda bank_card=NULL bo'lishi mumkin — frontend "Noma'lum karta" deb ko'rsatadi.
+        paid_rows = (
+            Payment.objects
+            .filter(sale__in=qs.values("id"))
+            .values("type", "bank_card__name")
+            .annotate(
+                amount=Coalesce(
+                    Sum(
+                        Case(
+                            When(is_refund=True, then=-F("amount")),
+                            default=F("amount"),
+                            output_field=DecimalField(),
+                        )
+                    ),
+                    Value(0, output_field=DecimalField()),
+                )
+            )
+            .order_by("-amount")
+        )
+        paid_breakdown = [
+            {
+                "type": row["type"],
+                "name": row["bank_card__name"],
+                "amount": str(row["amount"]),
+            }
+            for row in paid_rows
+            if row["amount"]
+        ]
+
+        # Qaytarilgan summa — davr ichida rasmiylashtirilgan qaytarimlar (SaleReturn).
+        # Sotuv sanasiga emas, QAYTARIM sanasiga qarab hisoblanadi: o'tgan oygi sotuv
+        # bugun qaytarilsa, bugungi statistikada ko'rinadi. Do'kon cheklovi/filtri bir xil.
+        returns_qs = _scope_to_user_stores(SaleReturn.objects.all(), request.user)
+        if store:
+            returns_qs = returns_qs.filter(store_id=store)
+        if date_from:
+            returns_qs = returns_qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            returns_qs = returns_qs.filter(created_at__date__lte=date_to)
+        returned = returns_qs.aggregate(
+            total=Coalesce(Sum("total_refund"), Value(0, output_field=DecimalField()))
+        )
+
+        # Davrga bog'liq BO'LMAGAN jami qaytarim (do'kon cheklovi saqlanadi) —
+        # frontend kartada "Hammasi" sifatida ko'rsatiladi: tanlangan davrda
+        # qaytarim bo'lmasa ham umumiy summa ko'rinib turadi
+        if date_from or date_to:
+            returned_all_qs = _scope_to_user_stores(SaleReturn.objects.all(), request.user)
+            if store:
+                returned_all_qs = returned_all_qs.filter(store_id=store)
+            returned_all = returned_all_qs.aggregate(
+                total=Coalesce(Sum("total_refund"), Value(0, output_field=DecimalField()))
+            )
+        else:
+            returned_all = returned
+
         return Response(
             {
                 "total_sales": totals["total_sales"],
                 "total_amount": str(totals["total_amount"]),
                 "total_paid": str(totals["total_paid"]),
                 "total_debt": str(debt["total"]),
+                "total_returned": str(returned["total"]),
+                "total_returned_all": str(returned_all["total"]),
+                "paid_breakdown": paid_breakdown,
             },
             status=status.HTTP_200_OK,
         )
@@ -383,6 +450,128 @@ class CustomerDebtListAPIView(generics.ListAPIView):
         )
 
         return self.get_paginated_response(formatted_data)
+
+
+# ─────────────────────────────────────────────
+# SOTUVLARNI O'CHIRISH (ARXIV, faqat superadmin)
+# ─────────────────────────────────────────────
+
+# Arxivda saqlash muddati — shu muddatdan keyin purge butunlay o'chiradi
+SALE_ARCHIVE_RETENTION_DAYS = 30
+
+
+def purge_expired_deleted_sales() -> int:
+    """
+    30 kundan oshgan arxivdagi sotuvlarni BUTUNLAY o'chiradi.
+    Arxiv/o'chirish so'rovlarida chaqiriladi (lazy purge) + cron uchun
+    `manage.py purge_deleted_sales` buyrug'i ham shu funksiyani ishlatadi.
+    """
+    cutoff = timezone.now() - timedelta(days=SALE_ARCHIVE_RETENTION_DAYS)
+    expired_ids = list(
+        Sale.all_objects.filter(deleted_at__lt=cutoff).values_list("id", flat=True)
+    )
+    if not expired_ids:
+        return 0
+    with transaction.atomic():
+        # PROTECT zanjiri (SaleReturnItem → SaleItem): avval qaytarim yozuvlari o'chiriladi
+        SaleReturnItem.objects.filter(sale_return__sale_id__in=expired_ids).delete()
+        SaleReturn.objects.filter(sale_id__in=expired_ids).delete()
+        # Qarz ledgeri SET_NULL — yetim yozuv qolmasligi uchun sotuv bilan birga o'chadi
+        CustomerDebt.objects.filter(sale_id__in=expired_ids).delete()
+        # items/payments — CASCADE
+        Sale.all_objects.filter(id__in=expired_ids).delete()
+    return len(expired_ids)
+
+
+@extend_schema(
+    tags=["Sales"],
+    summary="Sotuvlarni o'chirish (arxivga) — faqat superadmin",
+)
+class SaleBulkDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": tr("only_superuser_sales_delete")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return Response(
+                {"detail": tr("no_sales_selected")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        purge_expired_deleted_sales()
+        archived = Sale.objects.filter(id__in=ids).update(deleted_at=timezone.now())
+        return Response({"archived": archived}, status=status.HTTP_200_OK)
+
+
+@extend_schema(
+    tags=["Sales"],
+    summary="O'chirilgan sotuvlar arxivi — faqat superadmin",
+)
+class SaleArchiveListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": tr("only_superuser_sales_delete")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        purge_expired_deleted_sales()
+        qs = (
+            Sale.all_objects
+            .filter(deleted_at__isnull=False)
+            .select_related("store", "customer")
+            .order_by("-deleted_at")
+        )
+        now = timezone.now()
+        results = []
+        for sale in qs:
+            elapsed_days = (now - sale.deleted_at).days
+            results.append({
+                "id": sale.id,
+                "store_name": sale.store.name if sale.store_id else None,
+                "customer_name": sale.customer.full_name if sale.customer_id else None,
+                "total_amount": str(sale.total_amount),
+                "paid_amount": str(sale.paid_amount),
+                "created_at": sale.created_at,
+                "deleted_at": sale.deleted_at,
+                "days_left": max(0, SALE_ARCHIVE_RETENTION_DAYS - elapsed_days),
+            })
+        return Response(
+            {"results": results, "retention_days": SALE_ARCHIVE_RETENTION_DAYS},
+            status=status.HTTP_200_OK,
+        )
+
+
+@extend_schema(
+    tags=["Sales"],
+    summary="Arxivdagi sotuvlarni tiklash — faqat superadmin",
+)
+class SaleRestoreAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": tr("only_superuser_sales_delete")},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        ids = request.data.get("ids")
+        if not isinstance(ids, list) or not ids:
+            return Response(
+                {"detail": tr("no_sales_selected")},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        restored = (
+            Sale.all_objects
+            .filter(id__in=ids, deleted_at__isnull=False)
+            .update(deleted_at=None)
+        )
+        return Response({"restored": restored}, status=status.HTTP_200_OK)
 
 
 # ═══════════════════════════════

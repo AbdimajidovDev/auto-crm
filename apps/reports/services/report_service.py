@@ -29,7 +29,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.contract.models import SupplierTransaction
+from apps.contract.models import StockEntryPayment, SupplierTransaction
 from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
 from apps.store.models import Store
 from ...debts.models import CustomerDebt
@@ -502,11 +502,52 @@ class BankCardBreakdownService:
 # ─────────────────────────────────────────────
 class ExpensesService:
     """
-    Davr ichidagi chiqimlar:
+    Davr ichidagi chiqimlar — to'lov usuli/karta kesimida to'liq:
       - Mijozlarga qaytarimlar (naqd va karta alohida, Payment.is_refund=True)
-      - Ta'minotchilarga to'lovlar (SupplierTransaction type='pay')
-    2 ta SQL.
+      - Ta'minotchilarga qarz to'lovlari (SupplierTransaction type='pay') —
+        naqd / har bir karta (Humo, Uzcard, ...) alohida qatorda
+      - Xarid (kirim) paytidagi to'lovlar (StockEntryPayment) — naqd / har bir
+        karta alohida qatorda
+    3 ta SQL.
     """
+
+    @staticmethod
+    def _method_rows(qs_rows, *, base_label: str, base_type: str) -> list[dict]:
+        """
+        payment_method/type + bank_card bo'yicha guruhlangan qatorlarni hisobot
+        formatiga o'tkazadi: naqd bitta qator, har bir karta alohida qator.
+        Kutiladigan kalitlar: method ('cash'|'card'|''), bank_card_id,
+        bank_card_name, count, amount.
+        """
+        rows = []
+        for r in qs_rows:
+            if not r["amount"]:
+                continue
+            method = r["method"]
+            if method == "card":
+                card_name = r["bank_card_name"] or UNKNOWN_CARD_LABEL
+                rows.append({
+                    "method": f"{base_label} ({card_name})",
+                    "type":   f"{base_type}_card_{r['bank_card_id'] or 0}",
+                    "count":  r["count"],
+                    "amount": r["amount"],
+                })
+            elif method == "cash":
+                rows.append({
+                    "method": f"{base_label} (naqd)",
+                    "type":   f"{base_type}_cash",
+                    "count":  r["count"],
+                    "amount": r["amount"],
+                })
+            else:
+                # Eski yozuvlar: payment_method kiritilmagan
+                rows.append({
+                    "method": base_label,
+                    "type":   base_type,
+                    "count":  r["count"],
+                    "amount": r["amount"],
+                })
+        return rows
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
@@ -526,6 +567,7 @@ class ExpensesService:
             )
         )
 
+        # Ta'minotchilarga qarz to'lovlari — usul + karta kesimida
         supplier_pay = (
             SupplierTransaction.objects
             .filter(
@@ -534,7 +576,23 @@ class ExpensesService:
                 created_at__lt=end,
             )
             .filter(_store_q(store_id, "entry__store_id"))
-            .aggregate(
+            .values("payment_method", "bank_card_id", "bank_card__name")
+            .annotate(
+                count=Count("id"),
+                amount=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
+            )
+        )
+
+        # Xarid (kirim) paytida to'langan pullar — usul + karta kesimida
+        purchase_pay = (
+            StockEntryPayment.objects
+            .filter(
+                created_at__gte=start,
+                created_at__lt=end,
+            )
+            .filter(_store_q(store_id, "entry__store_id"))
+            .values("type", "bank_card_id", "bank_card__name")
+            .annotate(
                 count=Count("id"),
                 amount=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
             )
@@ -555,13 +613,35 @@ class ExpensesService:
             if r["amount"]
         ]
 
-        if supplier_pay["amount"]:
-            rows.append({
-                "method": "Ta'minotchilarga to'lov",
-                "type":   "supplier_payment",
-                "count":  supplier_pay["count"],
-                "amount": supplier_pay["amount"],
-            })
+        rows += ExpensesService._method_rows(
+            (
+                {
+                    "method": r["payment_method"],
+                    "bank_card_id": r["bank_card_id"],
+                    "bank_card_name": r["bank_card__name"],
+                    "count": r["count"],
+                    "amount": r["amount"],
+                }
+                for r in supplier_pay
+            ),
+            base_label="Ta'minotchilarga to'lov",
+            base_type="supplier_payment",
+        )
+
+        rows += ExpensesService._method_rows(
+            (
+                {
+                    "method": r["type"],
+                    "bank_card_id": r["bank_card_id"],
+                    "bank_card_name": r["bank_card__name"],
+                    "count": r["count"],
+                    "amount": r["amount"],
+                }
+                for r in purchase_pay
+            ),
+            base_label="Xarid to'lovi",
+            base_type="purchase_payment",
+        )
 
         rows.sort(key=lambda r: r["amount"], reverse=True)
         total = sum(r["amount"] for r in rows) or Decimal("1")
