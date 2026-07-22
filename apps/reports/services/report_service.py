@@ -29,7 +29,12 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
-from apps.contract.models import StockEntryPayment, SupplierTransaction
+from apps.contract.models import (
+    StockEntry,
+    StockEntryItem,
+    StockEntryPayment,
+    SupplierTransaction,
+)
 from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
 from apps.store.models import Store
 from ...debts.models import CustomerDebt
@@ -707,6 +712,77 @@ class DebtService:
 
 
 # ─────────────────────────────────────────────
+#  Supplier Statistics (ta'minotchi kirim/qarz statistikasi)
+# ─────────────────────────────────────────────
+class SupplierStatisticsService:
+    """
+    Ta'minotchilar kesimidagi umumlashgan ko'rsatkichlar — hammasi hisobot
+    filtriga (sana oralig'i + store_id) bo'ysunadi:
+
+      • supplierCount        — davrda kirim qilingan noyob ta'minotchilar soni
+      • distinctProductCount — davrda olingan noyob (xil) mahsulotlar soni
+      • totalPurchaseAmount  — davrda olingan tovarlar umumiy summasi (kirim summasi)
+      • totalDebt            — davr ichidagi SOF qarz: SUM(in) − SUM(pay)
+
+    3 ta SQL: StockEntry, StockEntryItem, SupplierTransaction aggregate.
+    """
+
+    @staticmethod
+    def get(date_from: date, date_to: date, store_id: int | None) -> dict:
+        start, end = _dt_bounds(date_from, date_to)
+
+        # Kirimlar (StockEntry): ta'minotchilar soni + olingan tovarlar summasi.
+        # StockEntry.store_id to'g'ridan-to'g'ri store filtriga mos keladi.
+        entry_agg = (
+            StockEntry.objects
+            .filter(created_at__gte=start, created_at__lt=end)
+            .filter(_store_q(store_id))
+            .aggregate(
+                supplier_count=Count("supplier", distinct=True),
+                total_purchase=Coalesce(
+                    Sum("total_amount"),
+                    Value(Decimal("0")), output_field=DecimalField(),
+                ),
+            )
+        )
+
+        # Kirim qatorlari (StockEntryItem): noyob (xil) mahsulotlar soni.
+        # StockEntryItem'da created_at yo'q — sana entry orqali filtrlanadi.
+        distinct_products = (
+            StockEntryItem.objects
+            .filter(entry__created_at__gte=start, entry__created_at__lt=end)
+            .filter(_store_q(store_id, "entry__store_id"))
+            .aggregate(count=Count("product", distinct=True))
+        )["count"]
+
+        # Qarz (SupplierTransaction): davr ichidagi sof qarz = kirim − to'lov.
+        # store filtri entry__store_id orqali (DebtService.supplier_debts bilan bir xil
+        # naqsh) — store_id=None bo'lganda barcha tranzaksiyalar hisobga olinadi.
+        debt_agg = (
+            SupplierTransaction.objects
+            .filter(created_at__gte=start, created_at__lt=end)
+            .filter(_store_q(store_id, "entry__store_id"))
+            .aggregate(
+                inc=Coalesce(
+                    Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.INVENTORY_IN)),
+                    Value(Decimal("0")), output_field=DecimalField(),
+                ),
+                dec=Coalesce(
+                    Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.PAYMENT)),
+                    Value(Decimal("0")), output_field=DecimalField(),
+                ),
+            )
+        )
+
+        return {
+            "supplierCount":        entry_agg["supplier_count"] or 0,
+            "distinctProductCount": distinct_products or 0,
+            "totalPurchaseAmount":  entry_agg["total_purchase"],
+            "totalDebt":            debt_agg["inc"] - debt_agg["dec"],
+        }
+
+
+# ─────────────────────────────────────────────
 #  Report Facade
 # ─────────────────────────────────────────────
 class ReportService:
@@ -741,6 +817,7 @@ class ReportService:
             "paymentStructure":   PaymentStructureService.get(date_from, date_to, store_id),
             "cardBreakdown":      BankCardBreakdownService.get(date_from, date_to, store_id),
             "expenses":           ExpensesService.get(date_from, date_to, store_id),
+            "supplierStatistics": SupplierStatisticsService.get(date_from, date_to, store_id),
             "debts": {
                 "customerDebts":  DebtService.customer_debts(store_id),
                 "supplierDebts":  DebtService.supplier_debts(),
