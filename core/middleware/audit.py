@@ -17,11 +17,17 @@ import json
 import logging
 import re
 
+from django.core.cache import cache
+
 from apps.users.authentication import CookieJWTAuthentication
 
 from .rbac import PATH_MODULE_MAP
 
 logger = logging.getLogger("core.audit")
+
+# Eski yozuvlarni tozalash kuniga ko'pi bilan bir marta ishlaydi
+PRUNE_CACHE_KEY = "audit_log:last_prune"
+PRUNE_INTERVAL_SECONDS = 24 * 60 * 60
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -90,8 +96,22 @@ class AuditLogMiddleware:
                 self._write_log(request, response, module, body)
             except Exception:  # jurnal hech qachon so'rovni buzmasin
                 logger.exception("Audit log yozib bo'lmadi: %s %s", request.method, request.path)
+            self._prune_expired()
 
         return response
+
+    def _prune_expired(self):
+        """60 kundan eski yozuvlarni o'chiradi (kuniga ko'pi bilan bir marta)."""
+        try:
+            if not cache.add(PRUNE_CACHE_KEY, "1", PRUNE_INTERVAL_SECONDS):
+                return  # bugun allaqachon tozalangan
+            from apps.users.models import AuditLog
+
+            deleted = AuditLog.prune_expired()
+            if deleted:
+                logger.info("Audit log: muddati o'tgan %d ta yozuv o'chirildi", deleted)
+        except Exception:
+            logger.exception("Audit logni tozalab bo'lmadi")
 
     def _should_log(self, request):
         if request.method not in MUTATING_METHODS:

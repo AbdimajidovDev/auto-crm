@@ -25,7 +25,10 @@ class StoreListSerializer(serializers.ModelSerializer):
         fields = (
             'id', 'type', 'name', 'phone_number',
             'address', 'latitude', 'longitude',
-            'is_active', 'sellers'
+            'is_active', 'sellers',
+            # Tahrirlash modali ikkala til variantini ham to'ldirishi uchun —
+            # busiz kril maydonlari bo'sh chiqardi (ro'yxatda faqat joriy til bor edi)
+            'name_uz', 'name_uz_cyrl', 'address_uz', 'address_uz_cyrl',
         )
 
     def get_sellers(self, obj):

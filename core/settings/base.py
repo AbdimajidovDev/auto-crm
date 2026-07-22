@@ -159,6 +159,9 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'users.User'
 
+# Amallar jurnali (audit log) yozuvlari necha kun saqlanadi — eskilari avto o'chadi
+AUDIT_LOG_RETENTION_DAYS = 60
+
 
 # ========================  Email settings  ==========================================
 # EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"

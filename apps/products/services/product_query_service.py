@@ -38,14 +38,16 @@ def apply_token_search(queryset, search):
     return queryset
 
 
-def annotate_stock_qty(queryset, store_id=None):
+def annotate_stock_qty(queryset, store_id=None, only_in_store=True):
     """
     stock_qty annotatsiyasi — stock_status filtri va stats uchun asos.
 
-    store_id berilsa: qoldiq faqat shu do'kon bo'yicha va ro'yxatda faqat shu
-    do'konda (faol batch bilan) mavjud mahsulotlar qoladi; bo'lmasa barcha
-    do'konlar jami. Subquery ishlatiladi: tashqi filter'da batches JOIN'i
-    takrorlansa Sum noto'g'ri (ko'paygan) qiymat berishi mumkin.
+    store_id berilsa: qoldiq faqat shu do'kon bo'yicha va (only_in_store=True
+    bo'lsa) ro'yxatda faqat shu do'konda faol batch bilan mavjud mahsulotlar
+    qoladi. only_in_store=False — butun katalog qoladi, do'konda yo'q
+    mahsulotlar stock_qty=0 bilan (POS katalogi shu rejimda sahifalaydi).
+    store_id bo'lmasa barcha do'konlar jami. Subquery ishlatiladi: tashqi
+    filter'da batches JOIN'i takrorlansa Sum noto'g'ri qiymat berishi mumkin.
     """
     if store_id:
         batches = ProductBatch.objects.filter(
@@ -53,21 +55,20 @@ def annotate_stock_qty(queryset, store_id=None):
             store_id=int(store_id),
             is_active=True,
         )
-        return (
-            queryset
-            .annotate(
-                stock_qty=Coalesce(
-                    Subquery(
-                        batches
-                        .values("product_id")
-                        .annotate(total=Sum("quantity"))
-                        .values("total")[:1]
-                    ),
-                    0,
-                )
+        annotated = queryset.annotate(
+            stock_qty=Coalesce(
+                Subquery(
+                    batches
+                    .values("product_id")
+                    .annotate(total=Sum("quantity"))
+                    .values("total")[:1]
+                ),
+                0,
             )
-            .filter(Exists(batches))
         )
+        if only_in_store:
+            annotated = annotated.filter(Exists(batches))
+        return annotated
 
     all_batches = ProductBatch.objects.filter(
         product_id=OuterRef("pk"),

@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 from django.db import transaction
 from django.db.models import F, Sum
@@ -135,6 +136,11 @@ class SaleReturnService:
 
         refund_payments = data.get("payments")
 
+        # Pul qaytarilgan bo'lsa Payment qatorlari shu guruh bilan yoziladi va
+        # guruh return_obj ga saqlanadi — detailda "qaysi kartadan qancha
+        # qaytarildi" aniq shu qaytarimga bog'lab ko'rsatiladi
+        refund_group = None
+
         if refund_payments:
             refund_total = sum(
                 (Decimal(str(p["amount"])) for p in refund_payments), Decimal("0")
@@ -147,21 +153,29 @@ class SaleReturnService:
                     )
                 })
 
+            refund_group = uuid.uuid4()
             SalePaymentService.record_payments(
                 sale=sale,
                 payments_data=refund_payments,
                 customer=customer,
                 is_refund=True,
+                payment_group=refund_group,
             )
 
         elif customer and money_refund > 0:
             # Eski (backward-compatible) xatti-harakat: pul qismi to'liq naqd qaytariladi
+            refund_group = uuid.uuid4()
             SalePaymentService.record_payments(
                 sale=sale,
                 payments_data=[{"type": Payment.Type.CASH, "amount": money_refund}],
                 customer=customer,
                 is_refund=True,
+                payment_group=refund_group,
             )
+
+        if refund_group is not None:
+            return_obj.payment_group = refund_group
+            return_obj.save(update_fields=["payment_group"])
 
         # To'lovlar o'zgardi — sotuvning to'lov turi markaziy metod bilan qayta hisoblanadi
         sale.recalculate_payment_type()

@@ -281,6 +281,11 @@ class SaleReturn(TimestampMixin):
 
     total_refund = models.DecimalField(max_digits=20, decimal_places=2, default=0)
 
+    # Shu qaytarimda mijozga qaytarilgan pul (Payment, is_refund=True) qatorlarini
+    # bog'lovchi guruh — detailda qaysi usul/kartadan qancha qaytarilgani ko'rinadi.
+    # NULL — pul qaytarilmagan (hammasi qarzdan yopilgan) yoki eski yozuvlar.
+    payment_group = models.UUIDField(null=True, blank=True, db_index=True)
+
     comment = models.TextField(null=True, blank=True)
 
     class Meta:

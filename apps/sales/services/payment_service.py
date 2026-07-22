@@ -34,18 +34,21 @@ def validate_payment_method(payment_type: str, bank_card) -> None:
 class SalePaymentService:
 
     @staticmethod
-    def record_payments(*, sale, payments_data, customer=None, is_refund=False) -> Decimal:
+    def record_payments(*, sale, payments_data, customer=None, is_refund=False, payment_group=None) -> Decimal:
         """
         To'lovlar ro'yxatini bitta bulk_create bilan yozadi va jami summani qaytaradi.
 
         payments_data: [{"type": "cash"|"card", "amount": Decimal, "bank_card": BankCard|None}, ...]
         is_refund=True — mijozga qaytarilgan pul (sale return oqimi).
+        payment_group — tashqaridan berilsa (masalan, SaleReturn o'ziga bog'lash uchun)
+        shu guruh ishlatiladi, aks holda yangi guruh yaratiladi.
 
         Diqqat: payment_type ni qayta hisoblash chaqiruvchi tomonda —
         sale.recalculate_payment_type() (har bir oqim o'z transaction nuqtasida chaqiradi).
         """
         # Bitta chaqiruv = bitta to'lov harakati — barcha qatorlar bitta guruhda
-        payment_group = uuid.uuid4()
+        if payment_group is None:
+            payment_group = uuid.uuid4()
         payments = [
             Payment(
                 sale=sale,

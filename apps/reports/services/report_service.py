@@ -552,6 +552,7 @@ class ExpensesService:
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
         start, end = _dt_bounds(date_from, date_to)
+        # Mijozga qaytarimlar — usul + karta kesimida (naqd / har bir karta alohida)
         refunds = (
             Payment.objects
             .filter(
@@ -560,7 +561,7 @@ class ExpensesService:
                 created_at__lt=end,
             )
             .filter(_store_q(store_id, "sale__store_id"))
-            .values("type")
+            .values("type", "bank_card_id", "bank_card__name")
             .annotate(
                 count=Count("id"),
                 amount=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
@@ -598,20 +599,20 @@ class ExpensesService:
             )
         )
 
-        refund_labels = {
-            "cash": "Mijozga qaytarim (naqd)",
-            "card": "Mijozga qaytarim (karta)",
-        }
-        rows = [
-            {
-                "method": refund_labels.get(r["type"], r["type"]),
-                "type":   f"refund_{r['type']}",
-                "count":  r["count"],
-                "amount": r["amount"],
-            }
-            for r in refunds
-            if r["amount"]
-        ]
+        rows = ExpensesService._method_rows(
+            (
+                {
+                    "method": r["type"],
+                    "bank_card_id": r["bank_card_id"],
+                    "bank_card_name": r["bank_card__name"],
+                    "count": r["count"],
+                    "amount": r["amount"],
+                }
+                for r in refunds
+            ),
+            base_label="Mijozga qaytarim",
+            base_type="refund",
+        )
 
         rows += ExpensesService._method_rows(
             (

@@ -27,7 +27,9 @@ class AuditLogListAPIView(generics.ListAPIView):
 
     def get_queryset(self):
         params = self.request.query_params
-        qs = AuditLog.objects.all()
+        # Saqlash muddati (60 kun) o'tgan yozuvlar avto o'chadi — tozalash hali
+        # ishlamagan bo'lsa ham ularni ko'rsatmaymiz
+        qs = AuditLog.objects.filter(created_at__gte=AuditLog.retention_cutoff())
 
         module = params.get("module")
         if module:
