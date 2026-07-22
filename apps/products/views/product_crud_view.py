@@ -134,6 +134,10 @@ from apps.products.services.product_query_service import (
                          description="Do'kon ID — faqat shu do'konda mavjud mahsulotlar, "
                                      "do'kondagi qoldiq bo'yicha kamayish tartibida. "
                                      "stock_status va stats ham shu do'kon qoldig'i bo'yicha hisoblanadi"),
+        OpenApiParameter("store_only", OpenApiTypes.STR,
+                         description="store_id bilan birga: 0 — do'konda yo'q mahsulotlar ham "
+                                     "ro'yxatda qoladi (qoldiq 0 bilan pastda); standart 1 — "
+                                     "faqat do'konda mavjudlar"),
         OpenApiParameter("stock_status", OpenApiTypes.STR,
                          description="Qoldiq holati: in_stock (>5), low_stock (1..5), out_of_stock (0). "
                                      "store_id berilsa — shu do'kon qoldig'i, bo'lmasa barcha do'konlar jami"),
@@ -231,7 +235,14 @@ class ProductListAPIView(generics.ListAPIView):
 
         store_id = self.request.query_params.get("store_id")
         if store_id and store_id.isdigit():
-            queryset = annotate_stock_qty(queryset, store_id).order_by("-stock_qty", "name")
+            # store_only=0 — do'konda yo'q mahsulotlar ham ro'yxatda qoladi
+            # (stock_qty=0 bilan pastda). POS katalogi shu rejimda butun
+            # katalogni sahifalab ko'rsatadi. -id — pagination barqarorligi
+            # uchun tiebreaker (bir xil nom+qoldiqda sahifalar suzmasin).
+            only_in_store = self.request.query_params.get("store_only", "1") != "0"
+            queryset = annotate_stock_qty(
+                queryset, store_id, only_in_store=only_in_store
+            ).order_by("-stock_qty", "name", "-id")
         else:
             # Qoldig'i ko'p mahsulotlar yuqorida; -id — pagination barqarorligi uchun tiebreaker
             queryset = annotate_stock_qty(queryset).order_by("-stock_qty", "-id")
