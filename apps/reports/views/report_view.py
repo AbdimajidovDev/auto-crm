@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.exceptions import ValidationError
 
+from apps.reports.permissions import scope_report_params
 from apps.reports.services.report_service import ReportService
 
 
@@ -131,7 +132,8 @@ class ReportsAPIView(APIView):
             # ✅ YECHIM: qarzlar ro'yxatini alohida paginatsiyalangan endpointga chiqarish
             # (StandardPagination) yoki eng bo'lmaganda DB darajasida .filter(...).order_by()[:N]
             # bilan cheklash.
-            data = ReportService.get(request.query_params)
+            # Do'kon admini faqat o'z do'koni bo'yicha ko'radi (superadmin — istalgan/umumiy)
+            data = ReportService.get(scope_report_params(request))
         except ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
