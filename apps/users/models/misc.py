@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
 
 
 class UserHistory(models.Model):
@@ -23,3 +26,15 @@ class UserHistory(models.Model):
 
     def __str__(self):
         return f"{self.user.email} - {self.action} - {self.created_at}"
+
+    @classmethod
+    def retention_cutoff(cls):
+        # Kirish loglari LOGIN_HISTORY_RETENTION_DAYS (standart 60) kun saqlanadi
+        days = getattr(settings, "LOGIN_HISTORY_RETENTION_DAYS", 60)
+        return timezone.now() - timedelta(days=days)
+
+    @classmethod
+    def prune_expired(cls) -> int:
+        """Muddati (60 kun) o'tgan kirish/chiqish yozuvlarini o'chiradi, sonini qaytaradi."""
+        deleted, _ = cls.objects.filter(created_at__lt=cls.retention_cutoff()).delete()
+        return deleted

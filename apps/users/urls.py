@@ -6,7 +6,7 @@ from apps.users.views.customer_view import (
     CustomerCreateView,
 )
 from apps.users.views.customer_export_view import CustomerExportAPIView
-from apps.users.views.profile_view import ProfileView
+from apps.users.views.profile_view import ProfileView, LoginHistoryListAPIView
 from apps.users.views.auth_view import (
     AdminLoginAPIView,
     LogOutView,
@@ -32,6 +32,8 @@ urlpatterns = [
 
     # Profile
     path('profile/', ProfileView.as_view()),
+    # Kirishlar tarixi — sahifalangan (?page=&limit=)
+    path('history/', LoginHistoryListAPIView.as_view()),
 
     # Role (RBAC)
     path('roles/', RoleListCreateAPIView.as_view()),

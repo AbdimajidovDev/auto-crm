@@ -1,10 +1,14 @@
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions
-from rest_framework.generics import RetrieveAPIView
+from rest_framework.generics import ListAPIView, RetrieveAPIView
 
+from apps.common.paginations import StandardPagination
 from apps.store.models import Store, StoreUser
-from apps.users.models import User
-from apps.users.serializers.profile_serializer import ProfileSerializer
+from apps.users.models import User, UserHistory
+from apps.users.serializers.profile_serializer import (
+    ProfileSerializer,
+    UserHistorySerializer,
+)
 
 
 # ─────────────────────────────────────────────
@@ -16,8 +20,7 @@ class ProfileView(RetrieveAPIView):
     serializer_class = ProfileSerializer
 
     def get_object(self):
-        from django.db.models import CharField, OuterRef, Prefetch, Subquery
-        from apps.users.models import UserHistory
+        from django.db.models import CharField, OuterRef, Subquery
 
         user = self.request.user
 
@@ -48,30 +51,52 @@ class ProfileView(RetrieveAPIView):
                 .order_by("name")
             )
 
-        # ── history prefetch — bitta SQL ────────────────────
-        # ✅ YAXSHI: stores uchun role `Subquery` orqali annotate qilingan — StoreUser bo'yicha N+1 yo'q.
-        # ⚠️ MUAMMO [PERF]: `Prefetch("history", ...)` foydalanuvchining BARCHA history qatorlarini yuklaydi.
-        # Sabab: UserHistory har login/logout'da yoziladi — bir user uchun vaqt o'tib minglab qator to'planadi.
-        #        Serializer `get_history` faqat oxirgi 5 tasini ko'rsatadi, qolgani behuda o'qiladi.
-        # ✅ YECHIM: history'ni cheklangan alohida so'rov bilan olish (Prefetch'da LIMIT ishlamaydi):
-        #     recent = list(UserHistory.objects.filter(user=user).order_by("-created_at")[:5])
-        #     user_with_history.recent_history = recent   # serializer shu atributdan foydalanadi
+        # ── history — DB darajasida oxirgi 5 qator (LIMIT) ──
+        # ✅ BAJARILDI: avvalgi `Prefetch("history", ...)` foydalanuvchining BARCHA
+        # history qatorlarini yuklab, serializer Pythonda sort+slice qilardi.
+        # Endi faqat kerakli 5 qator DB'dan olinadi; to'liq ro'yxat alohida
+        # sahifalangan endpoint'da (LoginHistoryListAPIView) beriladi.
         user_with_history = (
             User.objects
             .select_related("role")
-            .prefetch_related(
-                Prefetch(
-                    "history",
-                    queryset=UserHistory.objects.order_by("-created_at"),
-                )
-            )
             .get(pk=user.pk)
+        )
+        user_with_history.recent_history = list(
+            UserHistory.objects.filter(user=user).order_by("-created_at")[:5]
         )
 
         # stores ni attribute sifatida beramiz — serializer source="prefetched_stores"
         user_with_history.prefetched_stores = stores
 
         return user_with_history
+
+
+@extend_schema(
+    tags=["Profile"],
+    summary="Kirishlar tarixi — joriy foydalanuvchining login/logout yozuvlari (sahifalangan)",
+)
+class LoginHistoryListAPIView(ListAPIView):
+    """
+    Sozlamalar sahifasidagi "Kirishlar tarixi" ro'yxati.
+    StandardPagination: ?page= / ?limit= (max 100).
+    60 kundan eski yozuvlar ko'rsatilmaydi — ular kunlik prune (audit
+    middleware) bilan o'chiriladi; prune hali ishlamagan bo'lsa ham
+    cutoff filtri ularni yashiradi.
+    """
+
+    permission_classes = (permissions.IsAuthenticated,)
+    serializer_class = UserHistorySerializer
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        return (
+            UserHistory.objects
+            .filter(
+                user=self.request.user,
+                created_at__gte=UserHistory.retention_cutoff(),
+            )
+            .order_by("-created_at")
+        )
 
 
 # ═══════════════════════════════

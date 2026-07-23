@@ -105,11 +105,15 @@ class AuditLogMiddleware:
         try:
             if not cache.add(PRUNE_CACHE_KEY, "1", PRUNE_INTERVAL_SECONDS):
                 return  # bugun allaqachon tozalangan
-            from apps.users.models import AuditLog
+            from apps.users.models import AuditLog, UserHistory
 
             deleted = AuditLog.prune_expired()
             if deleted:
                 logger.info("Audit log: muddati o'tgan %d ta yozuv o'chirildi", deleted)
+            # Kirishlar tarixi (login/logout) ham xuddi shu kunlik tsiklda tozalanadi
+            deleted_history = UserHistory.prune_expired()
+            if deleted_history:
+                logger.info("Kirishlar tarixi: muddati o'tgan %d ta yozuv o'chirildi", deleted_history)
         except Exception:
             logger.exception("Audit logni tozalab bo'lmadi")
 
