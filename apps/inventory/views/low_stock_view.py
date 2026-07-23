@@ -1,7 +1,11 @@
+import math
+
 from drf_spectacular.utils import extend_schema, OpenApiParameter
 from drf_spectacular.types import OpenApiTypes
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter
 
@@ -9,6 +13,7 @@ from apps.common.paginations import StandardPagination
 from apps.inventory.filters import LowStockItemFilter
 from apps.inventory.models import LowStockItem
 from apps.inventory.serializers.low_stock_serializer import LowStockItemSerializer
+from apps.inventory.services.low_stock_service import LowStockService
 
 
 class _BaseLowStockListView(generics.ListAPIView):
@@ -44,18 +49,60 @@ class _BaseLowStockListView(generics.ListAPIView):
 
 @extend_schema(
     tags=["Low Stock"],
-    summary="Ochiq (OPEN) low-stock yozuvlari ro'yxati",
+    summary="Kam qolgan mahsulotlar — JONLI ro'yxat (qoldiqlardan hisoblanadi)",
     parameters=[
         OpenApiParameter("action_type", OpenApiTypes.STR, description="purchase | transfer"),
         OpenApiParameter("store", OpenApiTypes.INT, description="Store id"),
-        OpenApiParameter("product", OpenApiTypes.INT, description="Product id"),
-        OpenApiParameter("ordering", OpenApiTypes.STR, description="-created_at, current_quantity"),
+        OpenApiParameter("search", OpenApiTypes.STR, description="Mahsulot nomi/SKU bo'yicha"),
         OpenApiParameter("page", OpenApiTypes.INT),
         OpenApiParameter("limit", OpenApiTypes.INT),
     ],
 )
-class LowStockListAPIView(_BaseLowStockListView):
-    status_value = LowStockItem.Status.OPEN
+class LowStockListAPIView(APIView):
+    """
+    AVVAL: LowStockItem (hodisaviy) yozuvlarini o'qirdi — zaxira feature'dan
+    OLDIN kamayib qolgan yoki hodisa o'tkazib yuborilgan holatlarda ro'yxat
+    BO'SH chiqardi ("ishlamayapti" muammosining sababi).
+
+    ENDI: har so'rovda qoldiqlardan jonli hisoblanadi (LowStockService.compute_live):
+      * qoldiq <= min_stock va boshqa do'konda bor  -> transfer (sources bilan)
+      * qoldiq <= min_stock va hech qayerda yo'q    -> purchase
+    Javob shakli StandardPagination bilan bir xil (count/total_pages/results).
+    Hodisaviy LowStockItem yozuvlari tarix va bildirishnomalar uchun qolaveradi.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qp = request.query_params
+        results = LowStockService.compute_live(
+            store_id=qp.get("store"),
+            action_type=qp.get("action_type"),
+            search=qp.get("search"),
+        )
+
+        try:
+            page = max(1, int(qp.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            limit = min(100, max(1, int(qp.get("limit") or 20)))
+        except (TypeError, ValueError):
+            limit = 20
+
+        count = len(results)
+        total_pages = max(1, math.ceil(count / limit))
+        page = min(page, total_pages)
+        start = (page - 1) * limit
+
+        return Response({
+            "count": count,
+            "total_pages": total_pages,
+            "current_page": page,
+            "next": None,
+            "previous": None,
+            "results": results[start:start + limit],
+        })
 
 
 @extend_schema(

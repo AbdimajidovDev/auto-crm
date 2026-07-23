@@ -31,6 +31,108 @@ class LowStockService:
     """
 
     # =====================================================================
+    # LIVE COMPUTATION (ro'yxat/eksport uchun — yozuvlarga bog'lanmaydi)
+    # =====================================================================
+
+    @staticmethod
+    def compute_live(*, store_id=None, action_type=None, search=None):
+        """
+        Joriy kam-qoldiq ro'yxati — LowStockItem yozuvlariga bog'lanmasdan,
+        ProductBatch qoldiqlaridan TO'G'RIDAN-TO'G'RI hisoblanadi (shu sabab
+        ro'yxat hech qachon "bo'sh/eski" bo'lib qolmaydi):
+
+          * min_stock > 0 bo'lsa — qoldiq <= min_stock bo'lganda kam qolgan;
+          * min_stock KIRITILMAGAN bo'lsa ham — qoldiq TUGAGAN (<= 0) mahsulot
+            ro'yxatga tushadi (aks holda min_stock to'ldirilmagan bazalarda
+            ro'yxat doim bo'sh chiqardi);
+          * mahsulot BOSHQA faol do'kon/bazada bor bo'lsa -> TRANSFER kerak
+            (sources: qayerda qancha borligi bilan, ko'pdan ozga saralangan);
+          * hech qayerda bo'lmasa -> XARID kerak (yetkazib beruvchidan olish).
+
+        Bitta aggregate SQL + Python guruhlash. store filtri sources
+        hisoblangandan KEYIN qo'llanadi — boshqa do'konlardagi zaxira
+        ma'lumoti yo'qolmasligi uchun.
+        """
+        from apps.products.models import Product, ProductBatch
+
+        rows = (
+            ProductBatch.objects
+            .filter(
+                product__status=Product.ProductStatus.ACTIVE,
+                store__is_active=True,
+            )
+            .values(
+                "store_id", "store__name", "product_id",
+                "product__name", "product__sku", "product__min_stock",
+            )
+            .annotate(qty=Sum("quantity"))
+        )
+
+        per_product = {}
+        for r in rows:
+            per_product.setdefault(r["product_id"], []).append(r)
+
+        results = []
+        for product_id, prows in per_product.items():
+            for r in prows:
+                qty = r["qty"] or 0
+                # min_stock kiritilmagan (0) — "tugaganda" (qty <= 0) chiqadi
+                threshold = r["product__min_stock"] or 0
+                if qty > threshold:
+                    continue
+                sources = sorted(
+                    (
+                        {
+                            "store": o["store_id"],
+                            "store_name": o["store__name"],
+                            "quantity": o["qty"] or 0,
+                        }
+                        for o in prows
+                        if o["store_id"] != r["store_id"] and (o["qty"] or 0) > 0
+                    ),
+                    key=lambda s: -s["quantity"],
+                )
+                available = sum(s["quantity"] for s in sources)
+                results.append({
+                    "id": f"{r['store_id']}-{product_id}",
+                    "store": r["store_id"],
+                    "store_name": r["store__name"],
+                    "product": product_id,
+                    "product_name": r["product__name"],
+                    "sku": r["product__sku"] or "",
+                    "current_quantity": qty,
+                    "min_stock": threshold,
+                    "action_type": "transfer" if available > 0 else "purchase",
+                    "status": "open",
+                    "available_elsewhere": available,
+                    "sources": sources,
+                    "created_at": None,
+                    "resolved_at": None,
+                })
+
+        if store_id:
+            results = [x for x in results if str(x["store"]) == str(store_id)]
+        if action_type in ("purchase", "transfer"):
+            results = [x for x in results if x["action_type"] == action_type]
+        if search:
+            needle = str(search).strip().lower()
+            if needle:
+                results = [
+                    x for x in results
+                    if needle in (x["product_name"] or "").lower()
+                    or needle in (x["sku"] or "").lower()
+                ]
+
+        # Eng kritigi birinchi: qoldiq/minimal nisbati o'sish tartibida
+        results.sort(
+            key=lambda x: (
+                (x["current_quantity"] / x["min_stock"]) if x["min_stock"] else 0,
+                x["product_name"] or "",
+            )
+        )
+        return results
+
+    # =====================================================================
     # PUBLIC ENTRY POINTS
     # =====================================================================
 

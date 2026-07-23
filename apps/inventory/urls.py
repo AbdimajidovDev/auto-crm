@@ -1,7 +1,7 @@
 from django.urls import path
 
 from .views.low_stock_view import LowStockListAPIView, LowStockHistoryAPIView
-from .views.export_view import InventoryExportAPIView
+from .views.export_view import InventoryExportAPIView, LowStockExportAPIView
 from .views.inventory_count_view import InventoryOverCountView, InventoryShortCountView
 from .views.inventory_view import (
     InventoryListAPIView,
@@ -33,5 +33,6 @@ urlpatterns = [
     # Low stock monitoring
     path("low-stock/", LowStockListAPIView.as_view(), name="low-stock-list"),
     path("low-stock/history/", LowStockHistoryAPIView.as_view(), name="low-stock-history"),
+    path("low-stock/export/", LowStockExportAPIView.as_view(), name="low-stock-export"),
 
 ]
