@@ -344,7 +344,7 @@ class SaleStatisticsAPIView(APIView):
                     for r in group_rows
                 ],
             }
-            for group_rows in (recent_groups[k] for k in recent_order[:3])
+            for group_rows in (recent_groups[k] for k in recent_order[:4])
         ]
 
         # Qaytarilgan summa — davr ichida rasmiylashtirilgan qaytarimlar (SaleReturn).
