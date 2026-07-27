@@ -9,6 +9,7 @@ from apps.products.services.product_query_service import (
     apply_token_search,
     stock_status_label,
 )
+from apps.store.models import Store
 
 
 @extend_schema(
@@ -60,6 +61,13 @@ class ProductExportAPIView(BaseExcelExportAPIView):
         store_id = request.query_params.get("store_id")
         store_id = int(store_id) if store_id and store_id.isdigit() else None
 
+        # Umumiy eksportda har bir do'kon uchun alohida qoldiq ustuni chiqadi;
+        # do'kon kesimida esa faqat shu do'konning bitta "Qoldiq" ustuni
+        stores = (
+            [] if store_id
+            else list(Store.objects.filter(is_active=True).order_by("id"))
+        )
+
         columns = [
             ("ID", 8),
             ("Nomi", 40),
@@ -68,7 +76,11 @@ class ProductExportAPIView(BaseExcelExportAPIView):
             ("Kategoriya", 22),
             ("Brend", 16),
             ("O'lchov", 10),
+            ("Kelish narxi", 14),
+            ("Sotuv narxi", 14),
+            ("Ulgurji narx", 14),
             ("Qoldiq" if store_id else "Jami qoldiq", 12),
+            *((s.name, 12) for s in stores),
             ("Holat", 12),
             ("Min zaxira", 12),
             ("Yaratilgan", 17),
@@ -81,6 +93,12 @@ class ProductExportAPIView(BaseExcelExportAPIView):
                     if store_id is None or b.store_id == store_id
                 ]
                 qty = sum(b.quantity for b in batches)
+                # Ro'yxat sahifasi bilan bir xil: do'konlar orasida narx farq
+                # qilsa eng kichigi ko'rsatiladi (do'kon kesimida — o'zining narxi)
+                purchase = min((b.purchase_price for b in batches if b.purchase_price is not None), default=None)
+                selling = min((b.selling_price for b in batches if b.selling_price is not None), default=None)
+                wholesale = min((b.wholesale_price for b in batches if b.wholesale_price is not None), default=None)
+                qty_by_store = {b.store_id: b.quantity for b in batches}
                 yield [
                     product.id,
                     product.name,
@@ -89,7 +107,11 @@ class ProductExportAPIView(BaseExcelExportAPIView):
                     product.category.name if product.category else "",
                     product.brand.name if product.brand else "",
                     product.unit_measurement.measurement if product.unit_measurement else "",
+                    purchase,
+                    selling,
+                    wholesale,
                     qty,
+                    *(qty_by_store.get(s.id, 0) for s in stores),
                     stock_status_label(qty),
                     product.min_stock,
                     product.created_at,

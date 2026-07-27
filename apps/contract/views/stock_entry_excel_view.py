@@ -4,7 +4,8 @@ stock_entry_excel_view.py — Excel orqali omborga KIRIM API'lari.
   POST /contract/entry/import/           — Excel fayldan kirim yaratish
   GET  /contract/entry/import/template/  — kirim shablonini yuklab olish
 
-Kirim faqat asosiy do'konga (Store.type='b') qilinadi.
+Kirim tanlangan do'konga qilinadi; do'kon berilmasa asosiy do'kon (Store.type='b')
+avtomatik aniqlanadi (eski mijozlar bilan moslik uchun).
 """
 import os
 
@@ -39,6 +40,7 @@ TEMPLATE_PATH = os.path.join(
             "type": "object",
             "properties": {
                 "supplier": {"type": "integer", "description": "Yetkazib beruvchi ID (majburiy)"},
+                "store": {"type": "integer", "description": "Do'kon ID (ixtiyoriy — berilmasa asosiy do'kon type='b' olinadi)"},
                 "cash_amount": {"type": "string", "description": "Naqd to'lov (ixtiyoriy, default 0)"},
                 "card_amount": {"type": "string", "description": "Karta to'lovi (ixtiyoriy, default 0)"},
                 "file": {"type": "string", "format": "binary", "description": "Kirim Excel fayli (.xlsx)"},
@@ -70,9 +72,13 @@ class StockEntryImportAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        store, store_error = self._resolve_base_store()
-        if store_error:
-            return Response({"detail": store_error}, status=400)
+        # Do'kon so'rovda tanlangan bo'lsa — shu do'konga kirim qilinadi,
+        # aks holda (eski mijozlar) asosiy do'kon avtomatik aniqlanadi.
+        store = data.get("store")
+        if store is None:
+            store, store_error = self._resolve_base_store()
+            if store_error:
+                return Response({"detail": store_error}, status=400)
 
         try:
             result = StockEntryImportService.import_from_excel(
@@ -97,7 +103,7 @@ class StockEntryImportAPIView(APIView):
 
     @staticmethod
     def _resolve_base_store():
-        """Kirim har doim asosiy do'konga (type='b') qilinadi — avtomatik aniqlanadi."""
+        """Do'kon tanlanmagan bo'lsa fallback: asosiy do'kon (type='b') avtomatik aniqlanadi."""
         # YAXSHI: type va is_active boyicha filtr indekslangan (Store.Meta.indexes) - full-scan yoq.
         # MUAMMO [PERF]: count() + first() = 2 query. Dokon jadvali kichik, xavf past, lekin
         # list(base_qs[:2]) bilan bitta queryda hal qilsa boladi.
