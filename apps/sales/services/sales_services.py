@@ -5,7 +5,7 @@ from rest_framework.generics import get_object_or_404
 from apps.inventory.services.inventory_hooks_service import handle_sale_item
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.sales.services.payment_service import SalePaymentService
-from apps.products.models import ProductBatch
+from apps.products.models import Product, ProductBatch
 from apps.debts.services import DebtService
 from apps.store.models import StoreUser
 from apps.users.models.customers import Customer
@@ -56,6 +56,20 @@ class SaleService:
             customer = get_object_or_404(Customer, id=data["customer"])
 
         # Sotuvni yaratish
+
+        # Arxivlangan (status!='a') mahsulot sotilmaydi — POS keshi eskirgan
+        # bo'lsa ham server darajasida bloklanadi
+        sale_product_ids = [item["product"] for item in items_data]
+        archived_names = list(
+            Product.objects
+            .filter(id__in=sale_product_ids)
+            .exclude(status=Product.ProductStatus.ACTIVE)
+            .values_list("name", flat=True)
+        )
+        if archived_names:
+            raise ValidationError(
+                f"Arxivlangan mahsulotni sotib bo'lmaydi: {', '.join(archived_names)}"
+            )
 
         sale = Sale.objects.create(
             store=store,

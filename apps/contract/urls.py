@@ -7,7 +7,12 @@ from apps.contract.views import (
     StockEntryCreateAPIView,
     StockEntryListAPIView,
     StockEntryImportAPIView,
+    StockEntryImportAnalyzeAPIView,
     StockEntryImportTemplateAPIView,
+    StockEntryReturnCreateAPIView,
+    StockEntryReturnsByEntryAPIView,
+    StockEntryReturnListAPIView,
+    StockEntryReturnExportAPIView,
     PurchaseSessionListCreateAPIView,
     PurchaseSessionDetailAPIView,
     PurchaseSessionReceiveAPIView,
@@ -44,7 +49,14 @@ urlpatterns = [
 
     # Kirim — Excel import
     path("entry/import/", StockEntryImportAPIView.as_view()),
+    path("entry/import/analyze/", StockEntryImportAnalyzeAPIView.as_view()),
     path("entry/import/template/", StockEntryImportTemplateAPIView.as_view()),
+
+    # Kirim — qaytimlar (ta'minotchiga mahsulot qaytarish)
+    path("entry/returns/", StockEntryReturnListAPIView.as_view()),
+    path("entry/returns/export/", StockEntryReturnExportAPIView.as_view()),
+    path("entry/<int:entry_id>/return/", StockEntryReturnCreateAPIView.as_view()),
+    path("entry/<int:entry_id>/returns/", StockEntryReturnsByEntryAPIView.as_view()),
 
     path("supplier-payments/create/", SupplierPaymentAPIView.as_view()),
     path("supplier-payments/<int:entry_id>/", SupplierPaymentListAPIView.as_view()),

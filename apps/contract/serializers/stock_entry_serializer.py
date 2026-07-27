@@ -228,6 +228,10 @@ class StockEntryListSerializer(serializers.ModelSerializer):
     # Subquery annotatedan keladigan tayyor qiymatlar
     total_in = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
     total_paid = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    # Qaytimlar: total_ret — qarzdan kamaygan qism (ret tranzaksiyalari),
+    # returned_amount — qaytarilgan tovar qiymati (refund qismi ham ichida)
+    total_ret = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    returned_amount = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
     # ⚠️ MUAMMO [ARXITEKTURA]: `debt` hisob-kitobi serializer methodda qolgan.
     # Sabab: `total_in` va `total_paid` annotate qilingan, yakuniy debt ham querysetda annotate qilinsa filter/order mumkin bo'ladi.
     # Natija: biznes formula serializerga bog'lanadi.
@@ -243,7 +247,7 @@ class StockEntryListSerializer(serializers.ModelSerializer):
             "supplier", "supplier_name",
             "store", "store_name",
             "total_amount", "paid_amount",
-            "total_in", "total_paid", "debt",
+            "total_in", "total_paid", "total_ret", "returned_amount", "debt",
             "created_by", "full_name",
             "note",
             "items",
@@ -252,7 +256,8 @@ class StockEntryListSerializer(serializers.ModelSerializer):
         )
 
     def get_debt(self, obj) -> int | float:
-        debt = (obj.total_in or 0) - (obj.total_paid or 0)
+        # Qarz = kirim (in) − to'langan (pay) − qaytimlar (ret)
+        debt = (obj.total_in or 0) - (obj.total_paid or 0) - (getattr(obj, "total_ret", 0) or 0)
         return debt if debt > 0 else 0
 
 

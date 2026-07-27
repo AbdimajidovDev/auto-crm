@@ -77,6 +77,17 @@ def _supplier_queryset(search: str | None = None, is_active: str | None = None):
         .values("total")
     )
 
+    # --- RETURN tranzaksiyalar yig'indisi (qaytimlar ham qarzni kamaytiradi) ---
+    debt_returned_subquery = (
+        SupplierTransaction.objects.filter(
+            supplier=OuterRef("pk"),
+            type=SupplierTransaction.TransactionType.RETURN,
+        )
+        .values("supplier")
+        .annotate(total=Sum("amount"))
+        .values("total")
+    )
+
     zero = Value(Decimal("0.00"), output_field=DecimalField())
 
     qs = (
@@ -98,11 +109,15 @@ def _supplier_queryset(search: str | None = None, is_active: str | None = None):
                 Subquery(debt_paid_subquery, output_field=DecimalField()),
                 zero,
             ),
+            _debt_returned=Coalesce(
+                Subquery(debt_returned_subquery, output_field=DecimalField()),
+                zero,
+            ),
         )
         .annotate(
             # Ikkinchi .annotate() — birinchidagi annotatsiyalarga murojaat qilish uchun
             total_debt=models.ExpressionWrapper(
-                models.F("_debt_in") - models.F("_debt_paid"),
+                models.F("_debt_in") - models.F("_debt_paid") - models.F("_debt_returned"),
                 output_field=DecimalField(max_digits=15, decimal_places=2),
             )
         )

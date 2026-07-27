@@ -90,6 +90,44 @@ def _total_paid_subquery() -> Subquery:
     )
 
 
+def _total_ret_subquery() -> Subquery:
+    """
+    Har bir StockEntry uchun qaytimlar orqali kamaygan qarz (type="ret").
+    Entry qarzi = total_in − total_paid − total_ret.
+    """
+    return Coalesce(
+        Subquery(
+            SupplierTransaction.objects
+            .filter(entry=OuterRef("pk"), type="ret")
+            .values("entry")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1],
+            output_field=DecimalField(),
+        ),
+        Value(0, output_field=DecimalField()),
+    )
+
+
+def _returned_amount_subquery() -> Subquery:
+    """
+    Har bir StockEntry bo'yicha qaytarilgan TOVAR qiymati (StockEntryReturn.total_amount
+    yig'indisi). total_ret dan farqi: refund (qarzdan ortgan) qismini ham o'z ichiga oladi.
+    """
+    from apps.contract.models import StockEntryReturn
+
+    return Coalesce(
+        Subquery(
+            StockEntryReturn.objects
+            .filter(entry=OuterRef("pk"))
+            .values("entry")
+            .annotate(total=Sum("total_amount"))
+            .values("total")[:1],
+            output_field=DecimalField(),
+        ),
+        Value(0, output_field=DecimalField()),
+    )
+
+
 # ─────────────────────────────────────────────
 # VIEW
 # ─────────────────────────────────────────────
@@ -155,6 +193,8 @@ class StockEntryListAPIView(generics.ListAPIView):
             .annotate(
                 total_in=_total_in_subquery(),
                 total_paid=_total_paid_subquery(),
+                total_ret=_total_ret_subquery(),
+                returned_amount=_returned_amount_subquery(),
             )
         )
 

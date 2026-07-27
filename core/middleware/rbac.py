@@ -38,6 +38,13 @@ PATH_MODULE_MAP = [
     ("/api/writeoff/", "writeoff"),
 ]
 
+# Umumiy metod→amal mappingiga tushmaydigan yo'llar: prefiks → aniq permission kodi.
+# Masalan bulk-status POST bo'lsa ham "create" emas, "archive" huquqini talab qiladi.
+SPECIAL_PATH_CODES = [
+    ("/api/products/bulk-status/", "products.archive"),
+    ("/api/products/bulk-delete/", "products.delete"),
+]
+
 # Auth oqimi — rolga bog'liq emas
 EXEMPT_PREFIXES = (
     "/api/users/login/",
@@ -87,6 +94,24 @@ class RBACMiddleware:
         module = _resolve_module(path)
         if module is None:
             return None
+
+        # Maxsus yo'llar: metoddan qat'i nazar aniq permission kodi tekshiriladi
+        special_code = next(
+            (code for prefix, code in SPECIAL_PATH_CODES if path.startswith(prefix)),
+            None,
+        )
+        if special_code is not None:
+            user = self._get_user(request)
+            if user is None:
+                return None
+            request._rbac_user = user
+            perms = user_permissions(user)
+            if perms is None or special_code in perms:
+                return None
+            return JsonResponse(
+                {"detail": f"Ruxsat yo'q: bu amal uchun '{special_code}' huquqi kerak."},
+                status=403,
+            )
 
         action = METHOD_ACTION_MAP.get(request.method, "view")
         if action == "view" and module not in STRICT_VIEW_MODULES:

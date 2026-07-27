@@ -182,7 +182,9 @@ class Sale(models.Model):
 
 class SaleItem(models.Model):
     sale = models.ForeignKey(Sale, on_delete=models.CASCADE, related_name="items")
-    product = models.ForeignKey('products.Product', on_delete=models.CASCADE)
+    # PROTECT: mahsulot o'chirilganda sotuv tarixi qatorlari yo'qolmasin —
+    # sotilgan mahsulot avval arxivlanadi, butunlay o'chirish esa bloklanadi
+    product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
 
     quantity = models.PositiveIntegerField()
     purchase_price = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)

@@ -141,6 +141,9 @@ from apps.products.services.product_query_service import (
         OpenApiParameter("stock_status", OpenApiTypes.STR,
                          description="Qoldiq holati: in_stock (>5), low_stock (1..5), out_of_stock (0). "
                                      "store_id berilsa — shu do'kon qoldig'i, bo'lmasa barcha do'konlar jami"),
+        OpenApiParameter("archived", OpenApiTypes.STR,
+                         description="archived=1 — faqat arxivlangan (status='i') mahsulotlar "
+                                     "ro'yxati. Faqat superadmin uchun; boshqalar 403 oladi"),
         OpenApiParameter("page", OpenApiTypes.INT,
                          description="Sahifa raqami"),
         OpenApiParameter("limit", OpenApiTypes.INT,
@@ -160,6 +163,10 @@ class ProductListAPIView(generics.ListAPIView):
     ]
 
     filterset_class = ProductFilter
+
+    @staticmethod
+    def _wants_archived(request) -> bool:
+        return str(request.query_params.get("archived", "")).lower() in ("1", "true")
 
     def get_queryset(self):
 
@@ -196,10 +203,18 @@ class ProductListAPIView(generics.ListAPIView):
             )
         )
 
+        # Arxiv ko'rinishi (faqat superadmin, list() da tekshiriladi):
+        # status='i' mahsulotlar; oddiy rejimda faqat faollar
+        list_status = (
+            Product.ProductStatus.INACTIVE
+            if self._wants_archived(self.request)
+            else Product.ProductStatus.ACTIVE
+        )
+
         queryset = (
             Product.objects
             .filter(
-                status=Product.ProductStatus.ACTIVE
+                status=list_status
             )
             .select_related(
                 "category",
@@ -250,6 +265,13 @@ class ProductListAPIView(generics.ListAPIView):
         return queryset
 
     def list(self, request, *args, **kwargs):
+        # Arxiv ro'yxati faqat superadmin uchun
+        if self._wants_archived(request) and not request.user.is_superuser:
+            return Response(
+                {"detail": "Ruxsat yo'q: arxivlangan mahsulotlar ro'yxati faqat superadmin uchun."},
+                status=403,
+            )
+
         # search/category/store filtrlangan (lekin stock_status QO'LLANMAGAN) queryset —
         # stats shu asosda hisoblanadi, shunda tab sonlari doim to'liq ko'rinadi
         base_queryset = self.filter_queryset(self.get_queryset())
@@ -260,6 +282,12 @@ class ProductListAPIView(generics.ListAPIView):
             low_stock=Count("id", filter=Q(stock_qty__gt=0, stock_qty__lte=LOW_STOCK_THRESHOLD)),
             out_of_stock=Count("id", filter=Q(stock_qty__lte=0)),
         )
+
+        # Superadmin uchun arxiv tabining soni (global, joriy filtrlardan mustaqil)
+        if request.user.is_superuser:
+            stats["archived"] = Product.objects.filter(
+                status=Product.ProductStatus.INACTIVE
+            ).count()
 
         queryset = apply_stock_status(
             base_queryset, request.query_params.get("stock_status")
@@ -418,10 +446,24 @@ class ProductDetailAPIView(APIView):
 
     @extend_schema(
         tags=["Product"],
-        summary="- Productni o'chirish.",
+        summary="- Productni butunlay o'chirish (faqat superadmin, faqat arxivlangan mahsulot).",
     )
     def delete(self, request, pk):
+        # Butunlay o'chirish faqat superadmin uchun va faqat arxivlangan mahsulotga —
+        # faol mahsulot avval arxivlanadi (sotuvdan yo'qoladi), keyin o'chiriladi
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": "Ruxsat yo'q: mahsulotni butunlay o'chirish faqat superadmin uchun."},
+                status=403,
+            )
+
         product = get_object_or_404(Product, pk=pk)
+        if product.status != Product.ProductStatus.INACTIVE:
+            return Response(
+                {"detail": "Faqat arxivlangan mahsulotni o'chirish mumkin — avval arxivlang."},
+                status=400,
+            )
+
         try:
             product.delete()
         except ProtectedError:

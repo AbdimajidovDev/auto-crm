@@ -43,7 +43,12 @@ class Supplier(TimestampMixin):
             type=SupplierTransaction.TransactionType.PAYMENT
         ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
 
-        return total_in - total_paid
+        # Qaytimlar orqali kamaygan qarz (mahsulot qaytarilganda)
+        total_returned = self.transactions.filter(
+            type=SupplierTransaction.TransactionType.RETURN
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        return total_in - total_paid - total_returned
 
 
 
@@ -197,6 +202,77 @@ class StockEntryItem(models.Model):
 
 
 
+class StockEntryReturn(TimestampMixin):
+    """
+    Xarid (kirim) bo'yicha ta'minotchiga mahsulot qaytarish.
+
+    Hisob-kitob (create_return servisida bitta tranzaksiyada):
+      total_amount   = Σ (miqdor × olish narxi) — qaytarilgan tovar qiymati
+      debt_cancelled = shu kirimning qoldiq qarzidan kamaytirilgan qism
+                       (SupplierTransaction type='ret' qatori bilan)
+      refund_amount  = total_amount − debt_cancelled — qarzdan ortgan qism,
+                       ta'minotchi pul qaytarishi kerak bo'lgan summa
+
+    Kirimning asl yozuvlari (items, to'lovlar, total_amount) O'ZGARTIRILMAYDI —
+    tarix buzilmaydi, qaytimlar alohida jadvalda yig'iladi.
+    """
+
+    entry = models.ForeignKey(
+        StockEntry,
+        on_delete=models.PROTECT,
+        related_name="returns",
+    )
+    total_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    debt_cancelled = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    refund_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    note = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+    )
+
+    class Meta:
+        db_table = "stock_entry_return"
+        ordering = ["-created_at"]
+        indexes = [
+            # Qaytimlar ro'yxati/eksporti sana bo'yicha filtrlaydi
+            models.Index(fields=["created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Return #{self.pk} (Entry #{self.entry_id})"
+
+
+class StockEntryReturnItem(models.Model):
+    stock_return = models.ForeignKey(
+        StockEntryReturn,
+        on_delete=models.CASCADE,
+        related_name="items",
+    )
+    # Qaysi kirim satridan qaytarilgani — qaytarish limiti (olingan − qaytarilgan)
+    # shu bog' orqali hisoblanadi
+    entry_item = models.ForeignKey(
+        StockEntryItem,
+        on_delete=models.PROTECT,
+        related_name="returns",
+    )
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT,
+    )
+    quantity = models.PositiveIntegerField()
+    # Kirimdagi olish narxi (qaytim shu narxda hisoblanadi)
+    purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+    class Meta:
+        db_table = "stock_entry_return_item"
+
+    def __str__(self):
+        return f"Return #{self.stock_return_id}: {self.product} × {self.quantity}"
+
+
 class PurchaseSession(TimestampMixin):
     """
     Progressiv kirim (xarid) sessiyasi — wizard qoralamasi.
@@ -291,6 +367,9 @@ class SupplierTransaction(TimestampMixin):
     class TransactionType(models.TextChoices):
         INVENTORY_IN = "in", "Inventory Intake (Debt Increase)"
         PAYMENT = "pay", "Payment to Supplier (Debt Decrease)"
+        # Mahsulot qaytarilganda qarzdan kamaytirilgan qism.
+        # Alohida tur — 'pay' emas: to'lov/chiqim hisobotlariga aralashmaydi.
+        RETURN = "ret", "Return to Supplier (Debt Decrease)"
 
     class PaymentMethod(models.TextChoices):
         CASH = "cash", "Naqd"

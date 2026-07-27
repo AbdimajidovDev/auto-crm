@@ -2,10 +2,16 @@
 stock_entry_excel_view.py — Excel orqali omborga KIRIM API'lari.
 
   POST /contract/entry/import/           — Excel fayldan kirim yaratish
+  POST /contract/entry/import/analyze/   — faylni import qilmasdan tahlil qilish
+                                           (bazada yo'q mahsulotlarni aniqlaydi)
   GET  /contract/entry/import/template/  — kirim shablonini yuklab olish
 
 Kirim tanlangan do'konga qilinadi; do'kon berilmasa asosiy do'kon (Store.type='b')
 avtomatik aniqlanadi (eski mijozlar bilan moslik uchun).
+
+Yangi mahsulotlar oqimi: frontend avval analyze ni chaqiradi; yangi mahsulotlar
+bo'lsa foydalanuvchidan so'raydi va import ni create_products=true/false bilan
+yuboradi.
 """
 import os
 
@@ -32,6 +38,16 @@ TEMPLATE_PATH = os.path.join(
 )
 
 
+def _extract_xlsx(request):
+    """request.FILES dan .xlsx faylni oladi. Qaytaradi: (file, None) yoki (None, Response)."""
+    file = request.FILES.get("file")
+    if not file:
+        return None, Response({"detail": "file maydoni majburiy."}, status=400)
+    if not file.name.endswith(".xlsx"):
+        return None, Response({"detail": "Faqat .xlsx fayl qabul qilinadi."}, status=400)
+    return file, None
+
+
 @extend_schema(
     tags=["Stock Entry"],
     summary="Excel orqali omborga kirim qilish",
@@ -43,6 +59,7 @@ TEMPLATE_PATH = os.path.join(
                 "store": {"type": "integer", "description": "Do'kon ID (ixtiyoriy — berilmasa asosiy do'kon type='b' olinadi)"},
                 "cash_amount": {"type": "string", "description": "Naqd to'lov (ixtiyoriy, default 0)"},
                 "card_amount": {"type": "string", "description": "Karta to'lovi (ixtiyoriy, default 0)"},
+                "create_products": {"type": "boolean", "description": "Bazada yo'q mahsulotlarni yaratib kirim qilish (default false — bunday satrlar o'tkazib yuboriladi)"},
                 "file": {"type": "string", "format": "binary", "description": "Kirim Excel fayli (.xlsx)"},
             },
             "required": ["supplier", "file"],
@@ -62,11 +79,9 @@ class StockEntryImportAPIView(APIView):
         #   - uzun tranzaksiya butun jadvalga lock/tiqilinch keltiradi.
         # ✅ YECHIM: fayl hajmi/satr soniga limit (masalan MAX_ROWS=5000, file.size tekshiruvi),
         #   katta importni Celery background taskka o'tkazish, xizmatda bulk_create(batch_size=...) bilan chunk commit.
-        file = request.FILES.get("file")
-        if not file:
-            return Response({"detail": "file maydoni majburiy."}, status=400)
-        if not file.name.endswith(".xlsx"):
-            return Response({"detail": "Faqat .xlsx fayl qabul qilinadi."}, status=400)
+        file, file_error = _extract_xlsx(request)
+        if file_error:
+            return file_error
 
         serializer = StockEntryImportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -88,6 +103,7 @@ class StockEntryImportAPIView(APIView):
                 cash_amount=data["cash_amount"],
                 card_amount=data["card_amount"],
                 user=request.user,
+                create_products=data["create_products"],
             )
         except ValidationError as e:
             return Response({"detail": e.messages[0] if hasattr(e, "messages") else str(e)}, status=400)
@@ -114,6 +130,42 @@ class StockEntryImportAPIView(APIView):
         if count > 1:
             return None, "Bir nechta faol asosiy do'kon mavjud — sozlamalarda bittasini qoldiring."
         return base_qs.first(), None
+
+
+@extend_schema(
+    tags=["Stock Entry"],
+    summary="Excel importni tahlil qilish — bazada yo'q mahsulotlarni aniqlash",
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "format": "binary", "description": "Kirim Excel fayli (.xlsx)"},
+            },
+            "required": ["file"],
+        }
+    },
+    responses={200: OpenApiTypes.OBJECT},
+)
+class StockEntryImportAnalyzeAPIView(APIView):
+    """
+    Faylni import qilmasdan tahlil qiladi: qancha satr mavjud mahsulotga mos
+    kelishi, qaysi satrlar yangi mahsulot ekani (new_products) va qaysi satrlar
+    xato sabab o'tkazib yuborilishi (skipped) qaytariladi. DB ga yozmaydi.
+    """
+    permission_classes = [IsSuperUser]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        file, file_error = _extract_xlsx(request)
+        if file_error:
+            return file_error
+
+        try:
+            result = StockEntryImportService.analyze_from_excel(file=file)
+        except ValidationError as e:
+            return Response({"detail": e.messages[0] if hasattr(e, "messages") else str(e)}, status=400)
+
+        return Response(result, status=200)
 
 
 @extend_schema(

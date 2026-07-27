@@ -47,13 +47,18 @@ class SupplierPaymentService:
 
     @staticmethod
     def get_remaining_debt(entry) -> Decimal:
-        """Kirim bo'yicha qoldiq qarz: kirim (in) - to'langan (pay)."""
+        """Kirim bo'yicha qoldiq qarz: kirim (in) - to'langan (pay) - qaytimlar (ret)."""
         totals = SupplierTransaction.objects.filter(entry=entry).aggregate(
             total_in=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.INVENTORY_IN)),
             total_paid=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.PAYMENT)),
+            total_returned=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.RETURN)),
         )
         zero = Decimal("0")
-        return (totals["total_in"] or zero) - (totals["total_paid"] or zero)
+        return (
+            (totals["total_in"] or zero)
+            - (totals["total_paid"] or zero)
+            - (totals["total_returned"] or zero)
+        )
 
     @staticmethod
     @transaction.atomic

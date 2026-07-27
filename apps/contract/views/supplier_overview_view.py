@@ -13,7 +13,11 @@ from rest_framework.views import APIView
 from apps.common.paginations import StandardPagination
 from apps.contract.models import StockEntry, StockEntryItem, Supplier, SupplierTransaction
 from apps.contract.serializers.supplier_payment_serializer import SupplierPaymentListSerializer
-from apps.contract.views.stock_entry_view import _total_in_subquery, _total_paid_subquery
+from apps.contract.views.stock_entry_view import (
+    _total_in_subquery,
+    _total_paid_subquery,
+    _total_ret_subquery,
+)
 from apps.products.models import ProductImage
 
 
@@ -41,8 +45,12 @@ class SupplierStatsAPIView(APIView):
         #                  to'langan pul = paid_amount + total_paid(txn)
         entries = list(
             StockEntry.objects.filter(supplier=supplier)
-            .annotate(total_in=_total_in_subquery(), total_paid=_total_paid_subquery())
-            .values("id", "total_in", "total_paid", "paid_amount", "total_amount", "created_at")
+            .annotate(
+                total_in=_total_in_subquery(),
+                total_paid=_total_paid_subquery(),
+                total_ret=_total_ret_subquery(),
+            )
+            .values("id", "total_in", "total_paid", "total_ret", "paid_amount", "total_amount", "created_at")
         )
 
         paid_count = partial_count = unpaid_count = 0
@@ -51,11 +59,13 @@ class SupplierStatsAPIView(APIView):
         for entry in entries:
             txn_in = entry["total_in"] or Decimal("0")
             txn_paid = entry["total_paid"] or Decimal("0")
+            txn_ret = entry["total_ret"] or Decimal("0")
             paid_at_entry = entry["paid_amount"] or Decimal("0")
             purchase_sum += entry["total_amount"] or Decimal("0")
             paid_at_entry_sum += paid_at_entry
 
-            entry_debt = txn_in - txn_paid
+            # Qaytimlar (ret) ham qarzni kamaytiradi
+            entry_debt = txn_in - txn_paid - txn_ret
             if entry_debt <= 0:
                 paid_count += 1
             elif paid_at_entry + txn_paid <= 0:
@@ -68,16 +78,19 @@ class SupplierStatsAPIView(APIView):
                 first_entry_at = created if first_entry_at is None else min(first_entry_at, created)
                 last_entry_at = created if last_entry_at is None else max(last_entry_at, created)
 
-        txn_paid_total = SupplierTransaction.objects.filter(
-            supplier=supplier, type=SupplierTransaction.TransactionType.PAYMENT
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        txn_in_total = SupplierTransaction.objects.filter(
-            supplier=supplier, type=SupplierTransaction.TransactionType.INVENTORY_IN
-        ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+        txn_totals = SupplierTransaction.objects.filter(supplier=supplier).aggregate(
+            total_paid=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.PAYMENT)),
+            total_in=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.INVENTORY_IN)),
+            total_ret=Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.RETURN)),
+        )
+        txn_paid_total = txn_totals["total_paid"] or Decimal("0")
+        txn_in_total = txn_totals["total_in"] or Decimal("0")
+        txn_ret_total = txn_totals["total_ret"] or Decimal("0")
 
         # Jami to'langan = kirim paytidagi to'lovlar + keyingi qarz to'lovlari
         total_paid = paid_at_entry_sum + txn_paid_total
-        debt = txn_in_total - txn_paid_total
+        # Qarz = kirim (in) − to'lovlar (pay) − qaytimlar (ret)
+        debt = txn_in_total - txn_paid_total - txn_ret_total
 
         items_total = StockEntryItem.objects.filter(entry__supplier=supplier).aggregate(
             quantity=Sum("quantity"),
