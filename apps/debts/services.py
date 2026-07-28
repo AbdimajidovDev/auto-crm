@@ -4,7 +4,7 @@ from decimal import Decimal
 from django.db import transaction
 # DRF ValidationError — view'da avtomatik 400 qaytadi (django'niki 500 berardi)
 from rest_framework.exceptions import ValidationError
-from django.db.models import Sum
+from django.db.models import Case, DecimalField, F, Sum, Value, When
 
 from apps.debts.models import CustomerDebt
 from apps.sales.models import Sale, Payment
@@ -176,10 +176,12 @@ class DebtService:
             raise ValidationError("Miqdor ijobiy bo'lishi kerak")
 
         # Mijozning barcha sotuvlari qulflanadi — parallel ikki to'lov
-        # bir qarzni ikki marta yopib yubormasligi uchun
+        # bir qarzni ikki marta yopib yubormasligi uchun.
+        # Diqqat: select_related("customer") qo'shib bo'lmaydi — customer nullable FK,
+        # Postgres "FOR UPDATE cannot be applied to the nullable side of an outer join" beradi
+        # (xuddi pay_debt dagi kabi, 82-qatorga qarang).
         sales = list(
             Sale.objects.select_for_update()
-            .select_related("customer")
             .filter(customer_id=customer_id)
             .order_by("created_at", "id")
         )
@@ -285,35 +287,25 @@ class CustomerDebtService:
 
     @staticmethod
     def get(store_ids):
-        # ⚠️ MUAMMO [KRITIK]: Qarz summasi `type` farqini hisobga olmasdan `Sum("amount")` qilinyapti.
-        # Sabab: increase va decrease yozuvlari bir xil ishora bilan qo'shiladi.
-        # Natija: mijoz qarzi noto'g'ri, odatda oshirib ko'rsatiladi.
-        # ✅ YECHIM:
-        # return qs.values("customer__full_name").annotate(
-        #     debt=Sum(Case(
-        #         When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
-        #         When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
-        #         default=0,
-        #         output_field=DecimalField(),
-        #     ))
-        # )
-        # MUAMMO: `debt=Sum("amount")` `type=i/d` farqin hisobga olmaydi — qarz balansi noto'g'ri chiqishi mumkin;
-        # `DebtService.customer_debt` dagidek `Case/When` yoki alohida inc/dec kerak.
+        """
+        Mijozlar kesimida qarz balansi.
+
+        INCREASE qatorlari qo'shiladi, DECREASE (to'lov) qatorlari ayiriladi —
+        ilgari ikkalasi ham `Sum("amount")` bilan bir xil ishorada qo'shilardi,
+        ya'ni har bir to'lov qarzni kamaytirish o'rniga oshirib ko'rsatardi.
+        """
         qs = CustomerDebt.objects.all()
 
         if store_ids:
             qs = qs.filter(sale__store_id__in=store_ids)
 
         return qs.values("customer__full_name").annotate(
-            debt=Sum("amount")
+            debt=Sum(
+                Case(
+                    When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
+                    When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
+                    default=Value(Decimal("0")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
+            )
         )
-
-
-# ═══════════════════════════════
-# 📊 FAYL XULOSASI
-# Kritik muammolar soni: 1
-# Performance muammolari: 2
-# Arxitektura muammolari: 0
-# Umumiy baho: 6 / 10
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [CustomerDebtService.get balans hisobini Case/When bilan to'g'rilash]
-# ═══════════════════════════════

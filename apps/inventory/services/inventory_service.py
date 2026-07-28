@@ -1,6 +1,7 @@
 from django.db import transaction
 from django.db.models import Sum, F, Case, When, IntegerField
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from apps.inventory.models import (
@@ -85,7 +86,9 @@ class InventoryService:
 
         # 🔥 ASOSIY O‘ZGARISH
         obj.counted_quantity = quantity
-        obj.save(update_fields=["counted_quantity"])
+        obj.is_check = True
+        obj.counted_at = timezone.now()
+        obj.save(update_fields=["counted_quantity", "is_check", "counted_at"])
 
 
     @staticmethod
@@ -97,22 +100,21 @@ class InventoryService:
         if session.status != "active":
             raise ValidationError("Session yopilgan")
 
-        count = InventoryCount.objects.select_for_update().get(
+        # Sessiya boshlangandan keyin do'konga kirim qilingan mahsulotning
+        # count/snapshot qatori bo'lmaydi — `get()` bunda 500 berardi.
+        count, _ = InventoryCount.objects.select_for_update().get_or_create(
             session=session,
-            product_id=product_id
+            product_id=product_id,
+            defaults={"counted_quantity": 0, "status": InventoryCount.Status.PENDING},
         )
 
-
-        snapshot = InventorySnapshot.objects.get(
+        snapshot, _ = InventorySnapshot.objects.get_or_create(
             session=session,
-            product_id=product_id
+            product_id=product_id,
+            defaults={"store_id": session.store_id, "expected_quantity": 0},
         )
 
-        # 🔥 update quantity
         count.counted_quantity = quantity
-
-        # 🔥 status recalculation
-        # if real == snapshot.expected_quantity:
 
         if quantity == snapshot.expected_quantity:
             count.status = InventoryCount.Status.EQUAL
@@ -121,18 +123,9 @@ class InventoryService:
         else:
             count.status = InventoryCount.Status.MORE
 
-        # tekshirilganlarga o'tkazish
-        # ⚠️ MUAMMO [PERFORMANCE]: Bitta count uchun ikkita alohida `save()` chaqirilmoqda.
-        # Sabab: `is_check`, `counted_quantity`, `status` bitta update_fields ichida yozilmagan.
-        # Natija: har scan/update uchun ortiqcha UPDATE query ishlaydi.
-        # ✅ YECHIM:
-        # count.is_check = True
-        # count.save(update_fields=["is_check", "counted_quantity", "status"])
-        if not count.is_check:
-            count.is_check = True
-            count.save(update_fields=["is_check"])
-
-        count.save(update_fields=["counted_quantity", "status"])
+        count.is_check = True
+        count.counted_at = timezone.now()
+        count.save(update_fields=["counted_quantity", "status", "is_check", "counted_at"])
 
 
     # 🔹 FINALIZE
@@ -146,48 +139,59 @@ class InventoryService:
         if session.status != InventorySession.Status.ACTIVE:
             raise ValidationError("Session yopilgan")
 
-        movements = (
+        # Sanalgan mahsulotlar: (counted_quantity, sanoq vaqti).
+        # `is_check=False` — mahsulot umuman sanalmagan; uni "0 topildi" deb
+        # hisoblash butun qoldiqni nolga tushirib, ulkan kamomad yozardi,
+        # shuning uchun bunday mahsulotlar finalize'da chetlab o'tiladi.
+        counted_rows = {
+            row["product_id"]: row
+            for row in InventoryCount.objects
+            .filter(session=session, is_check=True)
+            .values("product_id", "counted_quantity", "counted_at")
+        }
+
+        # Harakatlar SANOQDAN KEYIN sodir bo'lganlari bo'yicha jamlanadi.
+        #
+        # Ilgari butun sessiya davomidagi harakatlar ayirilardi, holbuki
+        # `counted` — javonda AYNAN SANOQ PAYTIDA ko'rilgan miqdor, ya'ni undan
+        # oldingi sotuv/transferlar allaqachon hisobga olingan. Natijada ular
+        # ikkinchi marta ayirilib, mavjud tovar kamomad sifatida spisaniye
+        # qilinardi (dushanba ochilgan sessiyada 50 dona sotilib, juma kuni 200
+        # dona sanalsa, qoldiq 150 qilib yozilardi).
+        #
+        # Kesim vaqti har mahsulot uchun har xil bo'lgani sababli jamlash
+        # Python'da bajariladi — DB'ga baribir bitta so'rov ketadi.
+        movement_map = {}
+        movement_field = {
+            "s": "sold_out",
+            "r": "returned",
+            "to": "transfer_out",
+            "ti": "transfer_in",
+            "e": "entry",
+        }
+        for mv in (
             InventoryMovement.objects
             .filter(session=session)
-            .values("product")
-            .annotate(
-                sold_out=Coalesce(Sum(
-                    Case(When(type="s", then=F("quantity")), output_field=IntegerField())
-                ), 0),
-
-                returned=Coalesce(Sum(
-                    Case(When(type="r", then=F("quantity")), output_field=IntegerField())
-                ), 0),
-
-                transfer_out=Coalesce(Sum(
-                    Case(When(type="to", then=F("quantity")), output_field=IntegerField())
-                ), 0),
-
-                transfer_in=Coalesce(Sum(
-                    Case(When(type="ti", then=F("quantity")), output_field=IntegerField())
-                ), 0),
-
-                entry=Coalesce(Sum(
-                    Case(When(type="e", then=F("quantity")), output_field=IntegerField())
-                ), 0),
+            .values("product_id", "type", "quantity", "created_at")
+        ):
+            counted_row = counted_rows.get(mv["product_id"])
+            if counted_row is None:
+                continue  # sanalmagan mahsulot — pastda baribir chetlab o'tiladi
+            counted_at = counted_row["counted_at"]
+            if counted_at is not None and mv["created_at"] <= counted_at:
+                continue  # sanoqda allaqachon aks etgan harakat
+            field = movement_field.get(mv["type"])
+            if field is None:
+                continue
+            bucket = movement_map.setdefault(
+                mv["product_id"],
+                {"sold_out": 0, "returned": 0, "transfer_out": 0, "transfer_in": 0, "entry": 0},
             )
-        )
+            bucket[field] += mv["quantity"]
 
-        movement_map = {m["product"]: m for m in movements}
-
-        # 🔹 counts map
-        # ⚠️ MUAMMO [PERFORMANCE]: `InventoryCount.objects.filter(session=session)` barcha model ustunlarini olib keladi.
-        # Sabab: map uchun faqat `product_id` va `counted_quantity` kerak, ammo model instancelar yaratilmoqda.
-        # Natija: katta inventarizatsiyada xotira va CPU sarfi oshadi.
-        # ✅ YECHIM:
-        # counts_map = dict(
-        #     InventoryCount.objects.filter(session=session).values_list("product_id", "counted_quantity")
-        # )
-        # OPTIMIZATION: `counts_map` va `snapshots` uchun alohida filterlar o'rniga bitta querysetdan
-        # `values_list` yoki bitta annotate bilan birlashtirish DB round-trip sonini kamaytirishi mumkin.
         counts_map = {
-            c.product_id: c.counted_quantity
-            for c in InventoryCount.objects.filter(session=session)
+            product_id: row["counted_quantity"]
+            for product_id, row in counted_rows.items()
         }
 
         # 🔹 snapshots map
@@ -217,7 +221,12 @@ class InventoryService:
         # 🔥 SNAPSHOT BO‘YICHA YURAMIZ (MUHIM)
         for product_id, expected in snapshots.items():
 
-            counted = counts_map.get(product_id, 0)
+            if product_id not in counts_map:
+                # Sanalmagan mahsulot: qoldiq o'zgartirilmaydi va kamomad
+                # yozilmaydi. "Sanalmagan" — "0 topildi" degani emas.
+                continue
+
+            counted = counts_map[product_id]
 
             data = movement_map.get(product_id, {})
 

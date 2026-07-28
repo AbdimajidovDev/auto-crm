@@ -9,13 +9,15 @@ REST_FRAMEWORK = {
     #     "rest_framework.filters.SearchFilter",
     # ],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+    'EXCEPTION_HANDLER': 'apps.common.exception_handler.custom_exception_handler',
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
+    # BasicAuthentication olib tashlandi: cookie/JWT sxemasida ishlatilmaydi,
+    # lekin har bir endpointda throttling'siz parol taxmin qilish yuzasini ochardi.
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "apps.users.authentication.CookieJWTAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
-        "rest_framework.authentication.BasicAuthentication",
     ),
     # 'DEFAULT_THROTTLE_CLASSES': [
     #     'rest_framework.throttling.AnonRateThrottle',

@@ -6,7 +6,8 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 
 from apps.common.paginations import StandardPagination
-from apps.sales.models import Payment
+from apps.common.store_scope import ensure_store_access, scope_queryset
+from apps.sales.models import Payment, Sale
 from .models import CustomerDebt
 from .serializers import (
     CustomerPayDebtSerializer,
@@ -47,7 +48,13 @@ class PayDebtListAPIView(APIView):
         #   queryset modeli `CustomerDebt`, lekin `PayDebtListSerializer.Meta.model = Payment`.
         #   Bu to'g'rilik (correctness) muammosi; foydalanuvchi topshirig'i bo'yicha LOGIKA o'zgartirilmadi.
         #   Alohida tuzatish kerak: serializer'ni `CustomerDebt` uchun yozish (debts/serializers.py dagi izohga qarang).
-        qs = CustomerDebt.objects.select_related("customer", "sale").order_by("-created_at")
+        # Do'kon scoping: xodim faqat o'z do'koni sotuvlariga bog'liq qarzlarni
+        # ko'radi (ilgari butun kompaniya qarz daftari ochiq edi).
+        qs = scope_queryset(
+            CustomerDebt.objects.select_related("customer", "sale").order_by("-created_at"),
+            request.user,
+            store_field="sale__store",
+        )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(qs, request, view=self)
         serializer = self.serializer_class(page, many=True, context={'request': request})
@@ -68,6 +75,12 @@ class PayDebtAPIView(APIView):
         serializer.is_valid(raise_exception=True)
 
         data = serializer.validated_data
+
+        # Qarz to'lovi sotuv qaysi do'konda bo'lgan bo'lsa, o'sha do'kon xodimi
+        # tomonidan qabul qilinishi kerak — aks holda pul A kassada, yozuv esa
+        # B do'kon daftarida qolardi.
+        sale = get_object_or_404(Sale.objects.only("id", "store_id"), pk=data["sale"])
+        ensure_store_access(request.user, sale.store_id, "Siz bu sotuv qarzini qabul qila olmaysiz")
 
         payment = DebtService.pay_debt(
             sale_id=data["sale"],
@@ -127,11 +140,16 @@ class CustomerPaymentsAPIView(APIView):
     pagination_class = StandardPagination
 
     def get(self, request, customer_id):
-        qs = (
+        # To'lovlar tarixi ham do'kon bo'yicha cheklanadi: xodim boshqa
+        # do'kondagi to'lovlarni ko'rmasin. Mijozga bevosita bog'langan
+        # (sotuvsiz) to'lovlar superuser uchun qoladi.
+        qs = scope_queryset(
             Payment.objects
             .filter(customer_id=customer_id)
             .select_related("bank_card")
-            .order_by("-created_at")
+            .order_by("-created_at"),
+            request.user,
+            store_field="sale__store",
         )
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(qs, request, view=self)
@@ -152,7 +170,14 @@ class PayDebtDetailAPIView(APIView):
         #   AVVAL: get_object_or_404(CustomerDebt, pk=pk) → serializer `customer.full_name` ga tekkanda
         #          qo'shimcha so'rov chiqardi.
         #   HOZIR: select_related("customer", "sale") bilan bitta so'rovda keladi. Logika o'zgarmadi.
-        qs = get_object_or_404(CustomerDebt.objects.select_related("customer", "sale"), pk=pk)
+        qs = get_object_or_404(
+            scope_queryset(
+                CustomerDebt.objects.select_related("customer", "sale"),
+                request.user,
+                store_field="sale__store",
+            ),
+            pk=pk,
+        )
         serializer = self.serializer_class(qs)
         return Response(serializer.data, status=status.HTTP_200_OK)
 

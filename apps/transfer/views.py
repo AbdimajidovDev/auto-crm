@@ -5,10 +5,10 @@ from drf_spectacular.utils import extend_schema
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import generics, status, permissions
-from django.core.exceptions import ValidationError
 
 from apps.common.paginations import StandardPagination
 from apps.common.excel_export import parse_date_param
+from apps.common.store_scope import allowed_store_ids
 from apps.transfer.models import StockTransfer, Notification, TransferSession
 from apps.transfer.serializers import (
     TransferCreateSerializer,
@@ -138,6 +138,16 @@ class TransferListAPIView(APIView):
             .prefetch_related("items__product")
         )
 
+        # Do'kon scoping: xodim faqat o'z do'koni ishtirok etgan (jo'natuvchi
+        # yoki qabul qiluvchi) transferlarni ko'radi. Ilgari ro'yxat ochiq edi —
+        # har qanday foydalanuvchi barcha do'konlar orasidagi harakatni,
+        # mahsulot va miqdorlari bilan ko'ra olardi.
+        allowed = allowed_store_ids(request.user)
+        if allowed is not None:
+            transfers = transfers.filter(
+                Q(from_store_id__in=allowed) | Q(to_store_id__in=allowed)
+            )
+
         # 🔍 QIDIRUV: `?search=` — o'tkazma ID, mahsulot ID/nomi/SKU/shtrixkod va do'kon nomlari bo'yicha.
         # `items` JOIN'i bir o'tkazmani bir necha qator qilib qaytarishi mumkin, shuning uchun `.distinct()`.
         search = (request.query_params.get("search") or "").strip()
@@ -186,22 +196,16 @@ class TransferCreateAPIView(APIView):
         serializer = TransferCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            # ⚠️ MUAMMO [CLEAN CODE/XAVFSIZLIK]: Production kodda `print` ishlatilgan.
-            # Sabab: `validated_data` ichida biznes ma'lumotlar bo'lishi mumkin va stdout nazoratsiz to'lib boradi.
-            # Natija: loglarda maxfiy ma'lumot sizishi yoki keraksiz I/O xarajati yuzaga keladi.
-            # ✅ YECHIM:
-            # logger.debug("Transfer validation passed", extra={"user_id": request.user.id})
-            # MUAMMO: productionda `print` — keraksiz stdout va potentsial maxfiy ma'lumot sizishi.
-            print('validation data:', serializer.validated_data)
-            transfer = TransferService.create_transfer(
-                from_store=serializer.validated_data["from_store"],
-                to_store=serializer.validated_data["to_store"],
-                items_data=serializer.validated_data["items"],
-                user=request.user
-            )
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
+        # Servis DRF istisnolarini ko'taradi (ValidationError → 400,
+        # PermissionDenied → 403, NotFound → 404) — ularni DRF handler'i
+        # o'zi ishlaydi. Ilgari bu yerda `django.core.exceptions.ValidationError`
+        # ushlanardi, ya'ni except hech qachon ishlamas, xatolar 500 bo'lib chiqardi.
+        transfer = TransferService.create_transfer(
+            from_store=serializer.validated_data["from_store"],
+            to_store=serializer.validated_data["to_store"],
+            items_data=serializer.validated_data["items"],
+            user=request.user
+        )
 
         return Response({"id": transfer.id, "status": transfer.status}, status=201)
 
@@ -215,14 +219,9 @@ class TransferApproveAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
-        try:
-            transfer = TransferService.approve_transfer(
-                transfer_id=pk,
-                user=request.user
-            )
-        except ValidationError as e:
-            return Response({"detail": str(e)}, status=400)
-
+        # DRF istisnolari (400/403/404) handler orqali qaytadi — qarang:
+        # TransferCreateAPIView.post dagi izoh.
+        TransferService.approve_transfer(transfer_id=pk, user=request.user)
         return Response({"status": "approved"})
 
 

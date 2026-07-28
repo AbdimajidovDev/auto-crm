@@ -9,7 +9,9 @@ THIRD_PARTY_APPS = [
     "rest_framework",
     "drf_spectacular",
     'rest_framework_simplejwt',
-    # 'rest_framework_simplejwt.token_blacklist',
+    # Refresh token rotatsiyasi uchun kerak (jwt.py: BLACKLIST_AFTER_ROTATION) —
+    # ishlatilgan refresh tokenlar qora ro'yxatga tushadi.
+    'rest_framework_simplejwt.token_blacklist',
     # 'django_filters',
     # 'django_celery_beat',
 ]

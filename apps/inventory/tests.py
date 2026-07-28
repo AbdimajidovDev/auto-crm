@@ -3,9 +3,11 @@ from unittest import mock
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 
-from apps.inventory.models import LowStockItem
+from apps.inventory.models import InventoryMovement, LowStockItem
 from apps.inventory.services import LowStockService
+from apps.inventory.services.inventory_service import InventoryService
 from apps.products.models import Product, ProductBatch
+from apps.products.utils.barcode_utility import normalize_barcode
 from apps.store.models import Store, StoreUser
 from apps.transfer.models import Notification
 from apps.users.models import User
@@ -17,9 +19,13 @@ class LowStockTestBase(TestCase):
     _barcode_seq = 1000
 
     def make_product(self, name="P"):
-        # Pass an explicit barcode so Product.save() skips barcode-image generation.
+        # Yaroqli EAN-13 (12 raqam + checksum) beriladi — Product.save() qo'lda
+        # kelgan barcode uchun ham shtrix rasm generatsiya qiladi, yaroqsiz
+        # qiymatda esa rasm yaratilmay ogohlantirish yozilardi.
         LowStockTestBase._barcode_seq += 1
-        return Product.objects.create(name=name, barcode=str(LowStockTestBase._barcode_seq))
+        return Product.objects.create(
+            name=name, barcode=normalize_barcode(f"{LowStockTestBase._barcode_seq:012d}")
+        )
 
     def make_store(self, store_type=Store.StoreType.BASE, name="S"):
         return Store.objects.create(
@@ -225,3 +231,89 @@ class LowStockNotificationTests(LowStockTestBase):
             LowStockService.evaluate(store, product)  # still low, no new OPEN/notif
 
         self.assertEqual(Notification.objects.count(), 1)
+
+
+class InventoryFinalizeTests(LowStockTestBase):
+    """
+    finalize() sanoqdan KEYINGI harakatlarnigina hisobga olishi va sanalmagan
+    mahsulotlarni tegmasdan qoldirishi kerak.
+    """
+
+    def setUp(self):
+        self.store = self.make_store(Store.StoreType.BASE, name="Finalize do'kon")
+        self.user = User.objects.create(
+            phone_number="+998900001111", email="finalize@test.uz"
+        )
+
+    def _start(self):
+        return InventoryService.start_session(user=self.user, store_id=self.store.id)
+
+    def test_movements_before_count_are_not_subtracted_twice(self):
+        product = self.make_product("A")
+        self.make_batch(self.store, product, quantity=200, min_stock=0)
+        session = self._start()
+
+        # Sanoqdan OLDIN 50 dona sotilgan — javondagi 200 dona shundoq ham
+        # shu sotuvdan keyingi holat.
+        InventoryMovement.objects.create(
+            session=session, product=product, quantity=50, type=InventoryMovement.Type.SALE, ref_id=1
+        )
+        InventoryService.set_count(
+            session_id=session.id, product_id=product.id, quantity=200
+        )
+
+        InventoryService.finalize(session_id=session.id)
+
+        batch = ProductBatch.objects.get(store=self.store, product=product)
+        self.assertEqual(batch.quantity, 200)
+
+    def test_movement_after_count_is_applied(self):
+        product = self.make_product("B")
+        self.make_batch(self.store, product, quantity=100, min_stock=0)
+        session = self._start()
+
+        InventoryService.set_count(
+            session_id=session.id, product_id=product.id, quantity=100
+        )
+        # Sanoqdan KEYIN 10 dona sotildi — bu ayirilishi kerak
+        InventoryMovement.objects.create(
+            session=session, product=product, quantity=10, type=InventoryMovement.Type.SALE, ref_id=2
+        )
+
+        InventoryService.finalize(session_id=session.id)
+
+        batch = ProductBatch.objects.get(store=self.store, product=product)
+        self.assertEqual(batch.quantity, 90)
+
+    def test_uncounted_product_is_left_untouched(self):
+        counted = self.make_product("C")
+        uncounted = self.make_product("D")
+        self.make_batch(self.store, counted, quantity=10, min_stock=0)
+        self.make_batch(self.store, uncounted, quantity=77, min_stock=0)
+        session = self._start()
+
+        InventoryService.set_count(
+            session_id=session.id, product_id=counted.id, quantity=10
+        )
+
+        InventoryService.finalize(session_id=session.id)
+
+        # Sanalmagan mahsulot qoldig'i o'zgarmaydi va kamomad yozilmaydi
+        self.assertEqual(
+            ProductBatch.objects.get(store=self.store, product=uncounted).quantity, 77
+        )
+
+    def test_real_shortage_is_still_detected(self):
+        product = self.make_product("E")
+        self.make_batch(self.store, product, quantity=10, min_stock=0)
+        session = self._start()
+
+        # Javonda 10 o'rniga 7 topildi, hech qanday harakat bo'lmagan
+        InventoryService.set_count(
+            session_id=session.id, product_id=product.id, quantity=7
+        )
+
+        InventoryService.finalize(session_id=session.id)
+
+        batch = ProductBatch.objects.get(store=self.store, product=product)
+        self.assertEqual(batch.quantity, 7)

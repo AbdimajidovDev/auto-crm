@@ -8,11 +8,13 @@ Qoida:
     (rolsiz eski userlar cheklanmagan — user_has_perm qoidasi bo'yicha).
 """
 
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
-from apps.store.models import StoreUser
+from apps.common.store_scope import allowed_store_ids
+from apps.common.store_scope import ensure_store_access as _ensure_store_access
 from apps.users.permissions import user_has_perm
+
+__all__ = ["CanCreateStockEntry", "allowed_store_ids", "ensure_store_access"]
 
 
 class CanCreateStockEntry(BasePermission):
@@ -27,20 +29,6 @@ class CanCreateStockEntry(BasePermission):
         return user_has_perm(user, "stockentry.create")
 
 
-def allowed_store_ids(user):
-    """
-    Foydalanuvchi kirim qila oladigan do'kon ID'lari.
-    None — cheklanmagan (superuser); aks holda faol biriktirilgan do'konlar to'plami.
-    """
-    if user.is_superuser:
-        return None
-    return set(
-        StoreUser.objects.filter(user=user, is_active=True).values_list("store_id", flat=True)
-    )
-
-
 def ensure_store_access(user, store_id):
-    """Do'kon foydalanuvchiga biriktirilmagan bo'lsa 403 qaytaradi."""
-    allowed = allowed_store_ids(user)
-    if allowed is not None and int(store_id) not in allowed:
-        raise PermissionDenied("Siz faqat o'z do'koningizga xarid (kirim) qila olasiz")
+    """Do'kon foydalanuvchiga biriktirilmagan bo'lsa 403 qaytaradi (kirim matni bilan)."""
+    _ensure_store_access(user, store_id, "Siz faqat o'z do'koningizga xarid (kirim) qila olasiz")

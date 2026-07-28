@@ -6,6 +6,7 @@ from rest_framework import status, permissions
 
 from django.core.exceptions import ValidationError
 
+from apps.sales.models import Sale
 from apps.store.models import Store
 from apps.store.selectors import StoreSelector
 from apps.store.services import StoreService
@@ -97,7 +98,17 @@ class StoreDetailAPIView(APIView):
         summary="- Do'kon o'chirish",
     )
     def delete(self, request, pk):
+        # Sotuv/kirim tarixi bor do'konni o'chirib bo'lmaydi — Sale.store endi
+        # PROTECT, aks holda bitta o'chirish do'konning butun moliyaviy
+        # tarixini (Sale, SaleItem, Payment, ProductBatch) olib ketardi.
         store = StoreSelector.get_store(pk)
+
+        if Sale.objects.filter(store=store).exists():
+            return Response(
+                {"detail": "Bu do'konda sotuvlar tarixi bor — o'chirib bo'lmaydi."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         store.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

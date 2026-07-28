@@ -22,7 +22,6 @@ class AdminLoginSerializer(serializers.Serializer):
 
 
         user = authenticate(username=phone_number, password=password)  # Backend emailni ham tekshiradi
-        print('user', user)
 
         if user is None:
             raise ValidationError({'message':"phone_number yoki parol noto'g'ri!"})

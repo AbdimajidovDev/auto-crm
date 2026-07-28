@@ -64,6 +64,11 @@ class InventoryCount(TimestampMixin):
     counted_quantity = models.IntegerField(default=0)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     is_check = models.BooleanField(default=False)
+    # Javon AYNAN qachon sanalgani. finalize() faqat shu vaqtdan KEYINGI
+    # harakatlarni qoldiqqa qo'llaydi — undan oldingilari sanoqda allaqachon
+    # aks etgan. `updated_at` (auto_now) bunga yaramaydi: `save(update_fields=...)`
+    # ro'yxatga kirmagan auto_now maydonini bazaga yozmaydi.
+    counted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("session", "product")

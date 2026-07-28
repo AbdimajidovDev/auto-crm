@@ -94,6 +94,14 @@ class StockEntryService:
         batches_to_create = []
         item_objs = []
 
+        # Bitta kirimda bir mahsulot bir necha qatorda kelishi mumkin (10 dona +
+        # 15 dona). Qatorlar o'z narxlari bilan alohida saqlanadi, LEKIN ombor
+        # qoldig'i mahsulot bo'yicha JAMLANADI.
+        # Ilgari har qator `batch.quantity = F("quantity") + qty` ni qayta
+        # yozardi — natijada faqat oxirgi qator qo'shilib, qolgani yo'qolardi;
+        # yangi mahsulotda esa bir xil (store, product) uchun ikkita
+        # ProductBatch yaratilib, unique constraint 500 bilan yiqilardi.
+        merged = {}
         for item in items:
             product = item["product"]
             qty = item["quantity"]
@@ -112,22 +120,38 @@ class StockEntryService:
                 )
             )
 
-            if product.id in existing_batches:
-                batch = existing_batches[product.id]
-                batch.quantity = F("quantity") + qty
-                batch.purchase_price = p_price
-                batch.selling_price = s_price
-                batch.wholesale_price = w_price
+            if product.id in merged:
+                merged[product.id]["quantity"] += qty
+                # Narxlar oxirgi qator bo'yicha yangilanadi (avvalgi xatti-harakat)
+                merged[product.id].update(
+                    purchase_price=p_price, selling_price=s_price, wholesale_price=w_price
+                )
+            else:
+                merged[product.id] = {
+                    "product": product,
+                    "quantity": qty,
+                    "purchase_price": p_price,
+                    "selling_price": s_price,
+                    "wholesale_price": w_price,
+                }
+
+        for product_id, data in merged.items():
+            if product_id in existing_batches:
+                batch = existing_batches[product_id]
+                batch.quantity = F("quantity") + data["quantity"]
+                batch.purchase_price = data["purchase_price"]
+                batch.selling_price = data["selling_price"]
+                batch.wholesale_price = data["wholesale_price"]
                 batches_to_update.append(batch)
             else:
                 batches_to_create.append(
                     ProductBatch(
-                        product=product,
+                        product=data["product"],
                         store=store,
-                        quantity=qty,
-                        purchase_price=p_price,
-                        selling_price=s_price,
-                        wholesale_price=w_price,
+                        quantity=data["quantity"],
+                        purchase_price=data["purchase_price"],
+                        selling_price=data["selling_price"],
+                        wholesale_price=data["wholesale_price"],
                     )
                 )
 

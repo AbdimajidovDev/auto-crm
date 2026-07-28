@@ -3,7 +3,8 @@
 RBAC — rol asosidagi ruxsat nazorati (server darajasida).
 
 Qoidalar:
-  - superuser va rolsiz userlar cheklanmaydi (eski userlar buzilmasligi uchun);
+  - faqat superuser cheklanmaydi; rolsiz user hech qanday amal bajara olmaydi
+    (apps/users/permissions.py::user_permissions);
   - yozuv amallari (POST/PUT/PATCH/DELETE) barcha modullarda qat'iy tekshiriladi;
   - GET (ko'rish) faqat STRICT_VIEW_MODULES uchun tekshiriladi — qolgan
     modullarda sahifa ichi ma'lumotlari bir-biriga bog'liq (masalan POS sahifasi
@@ -127,7 +128,7 @@ class RBACMiddleware:
 
         perms = user_permissions(user)
         if perms is None:
-            return None  # superuser yoki rolsiz user — cheklanmagan
+            return None  # superuser — cheklanmagan
 
         code = f"{module}.{action}"
         allowed = code in perms

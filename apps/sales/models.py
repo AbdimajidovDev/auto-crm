@@ -89,7 +89,10 @@ class Sale(models.Model):
         PERCENTAGE = "p", "Percentage (%)"
         FIXED = "f", "Fixed Amount"
 
-    store = models.ForeignKey('store.Store', on_delete=models.CASCADE, db_index=True)
+    # PROTECT — sotuvlari bor do'konni o'chirib bo'lmaydi. CASCADE bo'lganida
+    # bitta do'konni o'chirish uning barcha Sale/SaleItem/Payment yozuvlarini
+    # ham olib ketardi (moliyaviy tarix qaytarib bo'lmas darajada yo'qolardi).
+    store = models.ForeignKey('store.Store', on_delete=models.PROTECT, db_index=True)
     customer = models.ForeignKey(
         'users.Customer',
         on_delete=models.SET_NULL,
@@ -98,7 +101,9 @@ class Sale(models.Model):
         db_index=True,
         related_name='sales'
     )
-    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # PROTECT — xodim o'chirilganda uning sotuvlari yo'qolmasin
+    # (ishdan bo'shatish moliyaviy tarixni o'chirmasligi kerak).
+    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     total_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     paid_amount = models.DecimalField(max_digits=20, decimal_places=2, default=0)
     status = models.CharField(max_length=10, choices=Status.choices, db_index=True)
@@ -208,9 +213,11 @@ class Payment(TimestampMixin):
         related_name="payments"
     )
 
+    # PROTECT — to'lov tarixi mijoz o'chirilganda yo'qolmasligi kerak
+    # (moliyaviy yozuv; CustomerDebt.customer bilan bir xil qoida).
     customer = models.ForeignKey(
         "users.Customer",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="payments"
@@ -276,7 +283,7 @@ class SaleReturn(TimestampMixin):
         related_name="returns"
     )
 
-    store = models.ForeignKey('store.Store', on_delete=models.CASCADE)
+    store = models.ForeignKey('store.Store', on_delete=models.PROTECT)
     customer = models.ForeignKey(
         'users.Customer',
         on_delete=models.SET_NULL,
@@ -284,7 +291,7 @@ class SaleReturn(TimestampMixin):
         blank=True
     )
 
-    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    seller = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
 
     total_refund = models.DecimalField(max_digits=20, decimal_places=2, default=0)
 

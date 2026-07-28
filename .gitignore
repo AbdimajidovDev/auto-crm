@@ -213,3 +213,7 @@ assets/staticfiles/
 
 #docs/
 #docs/*
+
+# Baza dumplari — mijoz maʼlumotlari, versiya nazoratiga tushmasin
+*.sql
+backup_*.sql

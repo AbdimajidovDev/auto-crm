@@ -2,7 +2,7 @@ import os
 import django # 1. Django ni import qiling
 
 # 2. Sozlamalarni ko'rsating
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "core.settings")
 
 # 3. Django ni rasman ishga tushiring (Barcha applar va modellar yuklanadi)
 django.setup()

@@ -5,10 +5,16 @@ from decouple import config
 
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=7),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
-    "ROTATE_REFRESH_TOKENS": False,
-    "BLACKLIST_AFTER_ROTATION": False,
+    # Access token qisqa muddatli: o'g'irlangan token uzoq yashamasin.
+    # Frontend 401 da avtomatik refresh qiladi (api.ts interceptor), shuning
+    # uchun foydalanuvchi buni sezmaydi. Ilgari 7 kun edi — parol o'zgartirilsa
+    # yoki xodim ishdan bo'shatilsa ham eski token bir hafta ishlayverardi.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=14),
+    # Har refresh'da yangi refresh token beriladi va eskisi qora ro'yxatga
+    # tushadi — o'g'irlangan refresh token qayta ishlatilsa aniqlanadi.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": False,
 
     "ALGORITHM": "HS256",

@@ -110,14 +110,18 @@ class Product(TimestampMixin):
                 self.barcode = generate_unique_barcode()
                 update_fields.append("barcode")
 
-            # SHTRIX CODE: barcode (qo'lda yoki avtomatik) uchun mos rasm yaratiladi
+            # SHTRIX CODE: barcode (qo'lda yoki avtomatik) uchun mos rasm yaratiladi.
+            # Yaroqsiz EAN-13 da generate_barcode_image None qaytaradi — bunda
+            # mahsulot rasmsiz saqlanadi (ilgari butun save() 500 bilan yiqilardi).
             if self.barcode and not self.shtrix_code:
-                self.shtrix_code.save(
-                    f"{self.barcode}.png",
-                    generate_barcode_image(self.barcode),
-                    save=False
-                )
-                update_fields.append("shtrix_code")
+                image = generate_barcode_image(self.barcode)
+                if image is not None:
+                    self.shtrix_code.save(
+                        f"{self.barcode}.png",
+                        image,
+                        save=False
+                    )
+                    update_fields.append("shtrix_code")
 
             if update_fields:
                 super().save(update_fields=update_fields)

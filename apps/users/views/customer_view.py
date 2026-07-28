@@ -245,6 +245,11 @@ def _customer_queryset():
                 description="1 bo'lsa minimal rejim: faqat id, full_name, phone_number "
                             "(POS dropdown uchun — agregatlar hisoblanmaydi).",
             ),
+            OpenApiParameter(
+                "debt", OpenApiTypes.STR,
+                description="Qarz bo'yicha filtr: `with_debt` (qarzi bor) yoki "
+                            "`no_debt` (qarzi yo'q). Filtrsiz — hammasi.",
+            ),
         ],
     )
 )
@@ -276,7 +281,34 @@ class CustomerListView(generics.ListAPIView):
             return Customer.objects.only("id", "full_name", "phone_number")
         # Jadval rejimi: agregatlar bor, lekin sales/debts prefetchlari YO'Q —
         # to'liq tarix faqat detail (/customers/<id>/) endpointida qaytadi.
-        return _customer_aggregate_queryset()
+        qs = _customer_aggregate_queryset()
+
+        # Qarz filtri SERVER tomonida qo'llanadi. Ilgari frontend uni faqat
+        # joriy sahifaga qo'llardi — 250 mijozdan 40 tasi qarzdor bo'lsa,
+        # "Qarzi bor" filtri 1-sahifadagi 2 tasini ko'rsatib, pager esa
+        # baribir 25 sahifa deb turardi.
+        debt_filter = (self.request.query_params.get("debt") or "").lower()
+        if debt_filter == "with_debt":
+            qs = qs.filter(total_debt__gt=0)
+        elif debt_filter == "no_debt":
+            qs = qs.filter(total_debt__lte=0)
+
+        return qs
+
+    def list(self, request, *args, **kwargs):
+        """Javobga BARCHA (nafaqat sahifadagi) mijozlar qarzi jamini qo'shadi."""
+        response = super().list(request, *args, **kwargs)
+
+        if not self._is_brief() and isinstance(response.data, dict):
+            aggregate = self.filter_queryset(self.get_queryset()).aggregate(
+                total_debt_sum=Coalesce(
+                    Sum("total_debt"),
+                    Value(Decimal("0"), output_field=DecimalField(max_digits=20, decimal_places=2)),
+                )
+            )
+            response.data["total_debt_sum"] = aggregate["total_debt_sum"]
+
+        return response
 
 
 
@@ -358,14 +390,22 @@ class CustomerDetailView(generics.RetrieveUpdateDestroyAPIView):
         return super().update(request, *args, **kwargs)
 
     def destroy(self, request, *args, **kwargs):
-        # ⚠️ MUAMMO [KRITIK]: Customer delete uchun bog'langan Sale/Debt mavjudligi tekshirilmayapti.
-        # Sabab: mijoz tarixiy sotuv yoki qarz yozuvlarida ishlatilgan bo'lishi mumkin.
-        # Natija: ProtectedError, 500 response yoki tarixiy audit yo'qolishi xavfi paydo bo'ladi.
-        # ✅ YECHIM:
-        # if instance.sales.exists() or instance.debts.exists():
-        #     raise ValidationError("Bu mijoz tizimda ishlatilgan, o'chirib bo'lmaydi")
-        # 204 No Content — standart, lekin string body bilan emas (RFC bo'yicha body bo'lmasligi kerak).
+        # Moliyaviy tarixi bor mijozni o'chirib bo'lmaydi: qarz va to'lov
+        # yozuvlari PROTECT bilan bog'langan, sotuvlar esa SET_NULL bo'lgani
+        # uchun "egasiz" qolib, debitorlik jimgina yo'qolardi.
         instance = self.get_object()
+
+        if instance.debts.exists() or instance.payments.exists():
+            return Response(
+                {"detail": "Bu mijozda qarz yoki to'lov tarixi bor — o'chirib bo'lmaydi."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if instance.sales.exists():
+            return Response(
+                {"detail": "Bu mijozda sotuvlar tarixi bor — o'chirib bo'lmaydi."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
         instance.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 

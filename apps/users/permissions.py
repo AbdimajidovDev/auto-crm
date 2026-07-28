@@ -6,8 +6,14 @@ Rolga shu kodlar ro'yxati biriktiriladi (Role.permissions JSON).
 
 Qoidalar:
   - superuser — hamma narsaga ruxsat (rol shart emas);
-  - roli YO'Q user — cheklanmagan (eski userlar buzilmasligi uchun);
+  - roli YO'Q user — HECH QANDAY ruxsat yo'q (fail-closed);
   - roli BOR user — faqat roldagi kodlarga ruxsat.
+
+Diqqat: ilgari rolsiz user "cheklanmagan" deb qaralardi. Bu fail-open edi —
+`role_id` majburiy bo'lmagani uchun rolsiz yaratilgan sotuvchi butun tizimga
+(shu jumladan foydalanuvchi va do'kon o'chirishga) ruxsat olardi. Endi rol
+biriktirilmagan user hech narsa qila olmaydi; mavjud rolsiz userlar
+0006_assign_role_to_roleless_users migratsiyasida eng cheklangan rolga o'tkazilgan.
 """
 
 ACTION_LABELS = {
@@ -68,12 +74,15 @@ def catalog_for_api():
 def user_permissions(user):
     """
     Userning amaldagi permission'lari.
-    None — cheklanmagan (superuser yoki rolsiz user).
+    None — cheklanmagan (faqat superuser).
+    frozenset() — hech qanday ruxsat yo'q (autentifikatsiyasiz yoki rolsiz user).
     """
     if not getattr(user, "is_authenticated", False):
         return frozenset()
-    if user.is_superuser or user.role_id is None:
+    if user.is_superuser:
         return None
+    if user.role_id is None:
+        return frozenset()
     return frozenset(user.role.permissions or [])
 
 

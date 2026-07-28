@@ -10,9 +10,13 @@ class CustomerDebt(TimestampMixin):
         INCREASE = "i", "Increase"
         DECREASE = "d", "Decrease"
 
+    # PROTECT — qarzi bor mijozni o'chirib bo'lmaydi. Ilgari CASCADE edi:
+    # mijoz o'chirilsa qarz daftari va to'lovlar yo'qolar, `Sale` esa
+    # (SET_NULL bo'lgani uchun) status='debt' bilan qolib ketardi — ya'ni
+    # debitorlik jimgina nolga tushardi.
     customer = models.ForeignKey(
         'users.Customer',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='debts'
     )
     sale = models.ForeignKey(

@@ -6,6 +6,7 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.users.models import UserHistory
@@ -50,6 +51,9 @@ class AdminLoginAPIView(APIView):
                 "permissions": None if perms is None else sorted(perms),
             }, status=status.HTTP_200_OK)
 
+            # Cookie muddatlari SIMPLE_JWT sozlamalaridan olinadi — ilgari
+            # qo'lda yozilgan qiymatlar token amal qilish muddatidan farq
+            # qilardi (cookie tirik, token o'lik yoki aksincha).
             # ACCESS TOKEN COOKIE
             response.set_cookie(
                 key="access_token",
@@ -57,7 +61,7 @@ class AdminLoginAPIView(APIView):
                 httponly=True,
                 secure=True,  # Productionda True
                 samesite="None",
-                max_age=60 * 60,  # 1 soat
+                max_age=int(api_settings.ACCESS_TOKEN_LIFETIME.total_seconds()),
             )
 
             # REFRESH TOKEN COOKIE
@@ -67,7 +71,7 @@ class AdminLoginAPIView(APIView):
                 httponly=True,
                 secure=True,
                 samesite="None",
-                max_age=7 * 24 * 60 * 60,  # 7 kun
+                max_age=int(api_settings.REFRESH_TOKEN_LIFETIME.total_seconds()),
             )
 
             # User login qilgan vaqtini saqlab qo'yish ----->
@@ -169,8 +173,33 @@ class TokenRefreshAPIView(APIView):
                 httponly=True,
                 secure=True,
                 samesite="None",
-                max_age=60 * 60,  # 1 soat — login bilan bir xil
+                max_age=int(api_settings.ACCESS_TOKEN_LIFETIME.total_seconds()),
             )
+
+            # ROTATE_REFRESH_TOKENS yoqilgan: eski refresh token qora ro'yxatga
+            # tushadi va YANGISI cookie'ga yozilishi SHART — aks holda
+            # foydalanuvchi birinchi yangilashdan keyin tizimdan chiqib ketardi.
+            if api_settings.ROTATE_REFRESH_TOKENS:
+                if api_settings.BLACKLIST_AFTER_ROTATION:
+                    try:
+                        refresh.blacklist()
+                    except AttributeError:
+                        # token_blacklist app o'chirilgan bo'lsa — jim o'tamiz
+                        pass
+
+                refresh.set_jti()
+                refresh.set_exp()
+                refresh.set_iat()
+
+                response.set_cookie(
+                    key="refresh_token",
+                    value=str(refresh),
+                    httponly=True,
+                    secure=True,
+                    samesite="None",
+                    max_age=int(api_settings.REFRESH_TOKEN_LIFETIME.total_seconds()),
+                )
+
             return response
 
         except TokenError:
@@ -246,9 +275,12 @@ class ForgotPasswordView(APIView):
         if user:
             PasswordResetService.send_reset_email(user)
 
-        # Security: do not reveal whether email exists
+        # Xavfsizlik: email ro'yxatdan o'tgan-o'tmaganini oshkor qilmaymiz.
+        # Ilgari javobga `user.email` qo'shilardi: mavjud bo'lmagan emailda
+        # `user` None bo'lib AttributeError → 500, mavjudida esa manzilning
+        # o'zi qaytarilardi — ikkalasi ham email enumeration imkonini berardi.
         return Response(
-            {"detail": f"If the email exists, a reset link has been sent.({user.email})"},
+            {"detail": "Agar bu email ro'yxatdan o'tgan bo'lsa, tiklash havolasi yuborildi."},
             status=status.HTTP_200_OK
         )
 

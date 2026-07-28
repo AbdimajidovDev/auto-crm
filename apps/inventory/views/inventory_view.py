@@ -6,6 +6,7 @@ from rest_framework import status, permissions, generics
 
 from apps.common.paginations import StandardPagination
 from apps.common.excel_export import parse_date_param
+from apps.common.store_scope import ensure_store_access, scope_queryset
 from apps.inventory.models import (
     InventoryMovement,
     InventorySession,
@@ -23,6 +24,16 @@ from apps.inventory.services.inventory_service import InventoryService
 from apps.inventory.services.inventory_selector import InventorySelector
 from apps.inventory.serializers.inventory_serializer import InventoryDetailSerializer
 
+
+
+def ensure_session_access(user, session_id):
+    """
+    Sessiya foydalanuvchining do'koniga tegishli ekanini tekshiradi.
+    Mavjud bo'lmasa 404, begona do'konniki bo'lsa 403.
+    """
+    session = get_object_or_404(InventorySession, pk=session_id)
+    ensure_store_access(user, session.store_id)
+    return session
 
 
 @extend_schema(
@@ -96,6 +107,8 @@ class InventoryDetailAPIView(APIView):
         #     Eski `status=p|e|l|m` (count status) filtri bu endpointda `checked|unchecked|all` ga almashtirildi
         #     (count status bo'yicha ajratish uchun /sessions/<id>/over/ va /short/ endpointlari bor).
 
+        ensure_session_access(request.user, session_id)
+
         status_param = (request.query_params.get("status") or "all").lower()
         if status_param not in ("checked", "unchecked", "all"):
             status_param = "all"
@@ -132,9 +145,12 @@ class InventoryStartAPIView(APIView):
         serializer = InventoryStartSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        store_id = serializer.validated_data["store_id"]
+        ensure_store_access(request.user, store_id)
+
         session = InventoryService.start_session(
             user=request.user,
-            store_id=serializer.validated_data["store_id"]
+            store_id=store_id,
         )
 
         return Response({"session_id": session.id})
@@ -153,9 +169,11 @@ class InventorySetCountAPIView(APIView):
         serializer = InventoryCountSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        ensure_session_access(request.user, serializer.validated_data["session_id"])
+        # `set_count` aniq sonni yozadi; `scan_product` esa uni qayta yozib
+        # yuborardi (get_or_create + overwrite) — ikkalasini chaqirish ortiqcha
+        # so'rov va poyga edi, faqat set_count qoldirildi.
         InventoryService.set_count(**serializer.validated_data)
-        InventoryService.scan_product(**serializer.validated_data)
-
 
         return Response({"status": "updated"})
 
@@ -173,6 +191,7 @@ class InventoryScanAPIView(APIView):
         serializer = InventoryCountSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        ensure_session_access(request.user, serializer.validated_data["session_id"])
         InventoryService.scan_product(**serializer.validated_data)
 
         return Response({"status": "ok"})
@@ -192,6 +211,7 @@ class InventoryFinalizeAPIView(APIView):
         serializer = InventoryFinalizeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        ensure_session_access(request.user, serializer.validated_data["session_id"])
         InventoryService.finalize(**serializer.validated_data)
 
         return Response({"status": "completed"})
@@ -212,6 +232,7 @@ class InventoryCancelAPIView(APIView):
         serializer = InventoryCancelSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        ensure_session_access(request.user, serializer.validated_data["session_id"])
         InventoryService.cancel(**serializer.validated_data)
 
         return Response({"status": "cancelled"})
@@ -219,9 +240,7 @@ class InventoryCancelAPIView(APIView):
 
 
 class InventoryMovementListView(APIView):
-    # XAVFSIZLIK: `AllowAny` — inventarizatsiya harakatlari ochiq endpoint bo'lib qolgan;
-    # kamida `IsAuthenticated` yoki do'kon/store scope tekshiruvi tavsiya etiladi.
-    permission_classes = (permissions.AllowAny,)
+    permission_classes = (permissions.IsAuthenticated,)
     serializer_class = InventoryMovementListSerializer
 
     @extend_schema(
@@ -229,31 +248,14 @@ class InventoryMovementListView(APIView):
         summary="Inventarizatsiya jarayonida sotuv, transfer, ... bo'lganlar ro'yxati."
     )
     def get(self, request, session_id):
-        inventory = get_object_or_404(InventorySession, pk=session_id)
-        # ⚠️ MUAMMO [KRITIK/XAVFSIZLIK]: Endpoint `AllowAny` va session store scope tekshiruvisiz ishlaydi.
-        # Sabab: istalgan foydalanuvchi session_id ni bilsa inventory movementlarni ko'rishi mumkin.
-        # Natija: stock harakatlari va biznes ma'lumotlar sizishi mumkin.
-        # ✅ YECHIM:
-        # permission_classes = (permissions.IsAuthenticated,)
-        # inventory = get_object_or_404(InventorySession.objects.filter(store__user_links__user=request.user), pk=session_id)
-        # ⚠️ MUAMMO [PERFORMANCE]: `InventoryMovement` product FK bilan select_related qilinmagan.
-        # Sabab: serializer `obj.product.name` o'qiydi.
-        # Natija: har movement uchun qo'shimcha SQL query chiqadi.
-        # ✅ YECHIM:
-        # qs = InventoryMovement.objects.filter(session=inventory).select_related("product").order_by("-created_at")
-        # N+1: har bir harakat uchun `product` nomi chiqarilsa, `select_related("product")` kerak.
-        qs = InventoryMovement.objects.filter(session=inventory)
+        inventory = get_object_or_404(
+            scope_queryset(InventorySession.objects.all(), request.user), pk=session_id
+        )
+        qs = (
+            InventoryMovement.objects
+            .filter(session=inventory)
+            .select_related("product")
+            .order_by("-created_at")
+        )
         serializer = InventoryMovementListSerializer(qs, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-# ═══════════════════════════════
-# 📊 FAYL XULOSASI (yangilangan)
-# Kritik muammolar soni: 1  (InventoryMovementListView AllowAny — hali ochiq; LOGIKA/xavfsizlik, tegilmadi)
-# Performance muammolari: 1  (avval 2 — InventoryDetailAPIView pagination TUZATILDI; qolgani: MovementList select_related)
-# Arxitektura muammolari: 0
-# Umumiy baho: 7 / 10  (avval 5/10)
-# ✅ BAJARILDI: InventoryDetailAPIView (/list/<session_id>/) → products StandardPagination bilan sahifalandi,
-#   `checked` esa alohida yengil so'rov bilan olinadi. "Malumot ko'pligidan qotib qolish" muammosi hal qilindi.
-# Prioritet bo'yicha birinchi hal qilinishi kerak: [InventoryMovementListView AllowAny -> IsAuthenticated + select_related("product")]
-# ═══════════════════════════════

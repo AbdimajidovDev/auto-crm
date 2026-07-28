@@ -1,8 +1,11 @@
+import logging
 import random
 import barcode
 from barcode.writer import ImageWriter
 from django.core.files.base import ContentFile
 from io import BytesIO
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -20,10 +23,21 @@ def generate_unique_barcode():
 
 
 def generate_barcode_image(barcode_number: str):
+    """
+    Barcode uchun PNG rasm yaratadi.
+
+    Qiymat yaroqli EAN-13 bo'lmasa None qaytaradi (istisno ko'tarmaydi):
+    shtrix rasm — qulaylik artefakti, uning yaratilmasligi butun mahsulot
+    yaratishni 500 bilan yiqitmasligi kerak.
+    """
     EAN = barcode.get_barcode_class('ean13')
     buffer = BytesIO()
-    ean = EAN(barcode_number, writer=ImageWriter())
-    ean.write(buffer, options={"write_text": True})
+    try:
+        ean = EAN(barcode_number, writer=ImageWriter())
+        ean.write(buffer, options={"write_text": True})
+    except Exception:
+        logger.warning("Barcode rasmi yaratilmadi (yaroqsiz EAN-13): %r", barcode_number)
+        return None
     return ContentFile(buffer.getvalue(), name=f"{barcode_number}.png")
 
 

@@ -81,11 +81,12 @@ class SellerCreateSerializer(serializers.Serializer):
     # store_id ixtiyoriy: do'konga bog'lanmagan (admin turidagi) user ham yaratish mumkin
     store_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     role = serializers.ChoiceField(StoreUser.Role.choices, required=False, default=StoreUser.Role.SELLER)
-    # Tizim roli (RBAC) — userga biriktiriladi
-    role_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
+    # Tizim roli (RBAC) — majburiy: rolsiz user hech qanday amal bajara olmaydi
+    # (apps/users/permissions.py), shuning uchun uni bo'sh qoldirish xatoga olib keladi.
+    role_id = serializers.IntegerField(write_only=True, allow_null=False, error_messages=_REQUIRED)
 
     def validate_role_id(self, value):
-        if value is not None and not Role.objects.filter(pk=value).exists():
+        if not Role.objects.filter(pk=value).exists():
             raise serializers.ValidationError(tr("role_not_found"))
         return value
 

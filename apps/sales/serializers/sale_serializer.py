@@ -8,6 +8,7 @@ from apps.sales.models import (
     Payment,
 )
 from apps.sales.services.payment_service import validate_payment_method
+from apps.store.models import StoreUser
 
 from decimal import Decimal
 
@@ -221,13 +222,46 @@ class SaleCreateSerializer(serializers.Serializer):
         user = request.user
 
         # 🔴 STORE LOGIC
+        # Superuser istalgan do'konni tanlaydi. Oddiy xodim uchun do'kon
+        # quyidagi tartibda aniqlanadi: so'rovdagi `store` → `X-Store-ID`
+        # sarlavhasi → yagona biriktirilgan do'kon.
+        # Ilgari bu yerda `data["store"] = None` qilinardi va servis
+        # `StoreUser...first()` ni ordering'siz olardi — ikki do'konga
+        # biriktirilgan sotuvchining sotuvi tasodifiy do'konga yozilardi.
         if user.is_superuser:
             if not data.get("store"):
                 raise serializers.ValidationError({
                     "store": "Superuser store tanlashi kerak"
                 })
         else:
-            data["store"] = None
+            requested_store = data.get("store")
+            if requested_store is None and getattr(request, "store", None) is not None:
+                requested_store = request.store
+
+            if requested_store is not None:
+                store_id = requested_store.id if hasattr(requested_store, "id") else requested_store
+                if not StoreUser.objects.filter(
+                    user=user, store_id=store_id, is_active=True
+                ).exists():
+                    raise serializers.ValidationError({
+                        "store": "Siz bu do'konda sotuv qila olmaysiz"
+                    })
+                data["store"] = requested_store
+            else:
+                links = list(
+                    StoreUser.objects.filter(user=user, is_active=True)
+                    .select_related("store")
+                    .order_by("store_id")[:2]
+                )
+                if not links:
+                    raise serializers.ValidationError({
+                        "store": "Siz hech qaysi do'konga biriktirilmagansiz"
+                    })
+                if len(links) > 1:
+                    raise serializers.ValidationError({
+                        "store": "Bir nechta do'konga biriktirilgansiz — do'konni tanlang"
+                    })
+                data["store"] = links[0].store
 
         if not items:
             raise serializers.ValidationError({

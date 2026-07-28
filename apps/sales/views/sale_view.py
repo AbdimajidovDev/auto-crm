@@ -428,7 +428,10 @@ class SaleDetailAPIView(APIView):
     serializer_class = SaleListSerializer
 
     def get(self, request, pk):
-        qs = Sale.objects.select_related(
+        # Ro'yxat va statistika view'lari scoping qiladi, detail esa qilmasdi —
+        # sotuvchi ID'ni ketma-ket sinab butun kompaniyaning sotuvlarini
+        # (mijoz, narx, to'lov tafsilotlari bilan) o'qiy olardi.
+        qs = _scope_to_user_stores(Sale.objects.all(), request.user).select_related(
             "store", "customer", "seller"
         ).prefetch_related(
             Prefetch("items", queryset=SaleItem.objects.select_related("product")),

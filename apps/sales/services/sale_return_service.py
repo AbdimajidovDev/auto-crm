@@ -1,9 +1,10 @@
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from django.db import transaction
 from django.db.models import F, Sum
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import NotFound, ValidationError
 
+from apps.common.store_scope import ensure_store_access
 from apps.debts.services import DebtService
 from apps.inventory.models import InventorySession, InventoryMovement
 from apps.inventory.services.inventory_hooks_service import handle_sale_return
@@ -19,15 +20,23 @@ class SaleReturnService:
     @transaction.atomic
     def create_return(*, user, data):
 
-        sale = (
-            Sale.objects
-            .select_for_update()
-            .prefetch_related("items")
-            .get(id=data["sale"])
-        )
+        try:
+            sale = (
+                Sale.objects
+                .select_for_update()
+                .prefetch_related("items")
+                .get(id=data["sale"])
+            )
+        except Sale.DoesNotExist:
+            raise NotFound("Sotuv topilmadi")
 
         store = sale.store
         customer = sale.customer
+
+        # Qaytarish sotuv qaysi do'konda bo'lgan bo'lsa, o'sha do'kon xodimi
+        # tomonidan amalga oshirilishi kerak. Busiz A do'kondagi sotuvchi
+        # B do'konning kassasidan pul qaytartira olardi.
+        ensure_store_access(user, sale.store_id, "Siz faqat o'z do'koningiz sotuvini qaytara olasiz")
 
         return_obj = SaleReturn.objects.create(
             sale=sale,
@@ -41,19 +50,38 @@ class SaleReturnService:
 
         sale_items_map = {item.id: item for item in sale.items.all()}
 
+        # Bitta so'rovda bir sale_item ikki marta kelsa: miqdorlar birlashtiriladi.
+        # Aks holda ikkinchi aylanishda `returned_quantity` F() ifodasi bo'lib
+        # qolib, `quantity > available` taqqoslashi TypeError bilan yiqilardi.
+        merged_items = {}
+        for raw in data["items"]:
+            item_id = raw["sale_item"]
+            merged_items[item_id] = merged_items.get(item_id, 0) + raw["quantity"]
+
+        # Sotuv darajasidagi chegirma har bir qatorga proportsional taqsimlanadi:
+        # mijoz chegirma bilan to'lagan, demak qaytarim ham chegirmali bo'lishi kerak.
+        # Bunsiz 30% chegirmali sotuvni to'liq qaytarganda do'kon olmagan pulini qaytarardi.
+        gross_total = sum(
+            (si.unit_price * si.quantity for si in sale_items_map.values()),
+            Decimal("0"),
+        )
+        discount_amount = sale.discount_amount or Decimal("0")
+        if gross_total > 0 and discount_amount > 0:
+            refund_ratio = (gross_total - discount_amount) / gross_total
+        else:
+            refund_ratio = Decimal("1")
+
         # 🔥 SESSIONNI 1 MARTA OLAMIZ (LOOP ICHIDA EMAS)
         session = InventorySession.objects.filter(
             store=store,
             status=InventorySession.Status.ACTIVE
         ).first()
 
-        for item in data["items"]:
+        for sale_item_id, quantity in merged_items.items():
 
-            sale_item = sale_items_map.get(item["sale_item"])
+            sale_item = sale_items_map.get(sale_item_id)
             if not sale_item:
                 raise ValidationError("SaleItem topilmadi")
-
-            quantity = item["quantity"]
 
             if quantity <= 0:
                 raise ValidationError("Quantity > 0 bo‘lishi kerak")
@@ -91,7 +119,10 @@ class SaleReturnService:
             # =========================
             # 🔹 4. RETURN ITEM
             # =========================
-            refund_amount = sale_item.unit_price * quantity
+            # Chegirma nisbati qo'llanadi (yuqoridagi refund_ratio izohiga qarang)
+            refund_amount = (sale_item.unit_price * quantity * refund_ratio).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
             total_refund += refund_amount
 
             SaleReturnItem.objects.create(

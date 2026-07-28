@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.test import TestCase
+from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.exceptions import ValidationError as DRFValidationError
 
 from apps.debts.services import DebtService
@@ -18,7 +19,7 @@ from apps.sales.payment_rules import compute_payment_type
 from apps.sales.serializers import PaymentInputSerializer
 from apps.sales.services import SaleService
 from apps.sales.services.sale_return_service import SaleReturnService
-from apps.store.models import Store
+from apps.store.models import Store, StoreUser
 from apps.users.models.customers import Customer
 from apps.users.models.user import User
 
@@ -270,3 +271,195 @@ class SaleReturnPaymentTest(SaleFlowTestMixin, TestCase):
         refund = Sale.objects.get(pk=sale.pk).payments.get(is_refund=True)
         self.assertEqual(refund.type, Payment.Type.CASH)
         self.assertEqual(refund.amount, Decimal("100"))
+
+
+class SaleDiscountRoundingTest(SaleFlowTestMixin, TestCase):
+    """
+    Foizli chegirma kasr qoldiq bermasligi kerak — aks holda kassada to'liq
+    to'langan sotuvda "arvoh qarz" paydo bo'lib, yakunlash bloklanardi.
+    """
+
+    def _sale_with_percentage_discount(self, unit_price, quantity, percent, paid):
+        return SaleService.create_sale(
+            user=self.user,
+            data={
+                "store": self.store.id,
+                "customer": None,
+                "items": [{
+                    "product": self.product.id,
+                    "quantity": quantity,
+                    "price": Decimal(unit_price),
+                }],
+                "discount_type": Sale.DiscountType.PERCENTAGE,
+                "discount_value": Decimal(percent),
+                "payments": [{"type": "cash", "amount": Decimal(paid)}],
+            },
+        )
+
+    def test_fractional_discount_is_rounded_and_sale_is_paid(self):
+        # 3 x 412 = 1236, 10% chegirma → 1112.40 → 1112 ga yaxlitlanadi
+        sale = self._sale_with_percentage_discount("412", 3, "10", "1112")
+
+        self.assertEqual(sale.total_amount, Decimal("1112"))
+        self.assertEqual(sale.status, Sale.Status.PAID)
+        # Chegirma yaxlitlangan jamiga mos: subtotal - discount == total
+        self.assertEqual(sale.discount_amount, Decimal("124"))
+        self.assertEqual(
+            sale.total_amount + sale.discount_amount, Decimal("1236")
+        )
+
+    def test_half_rounds_up_like_frontend(self):
+        # 5 x 247 = 1235, 10% → 1111.50 → ROUND_HALF_UP → 1112 (JS Math.round bilan bir xil)
+        sale = self._sale_with_percentage_discount("247", 5, "10", "1112")
+
+        self.assertEqual(sale.total_amount, Decimal("1112"))
+        self.assertEqual(sale.status, Sale.Status.PAID)
+
+    def test_whole_discount_is_unchanged(self):
+        # 2 x 100 = 200, 30% → 140 (kasr yo'q, o'zgarmasligi kerak)
+        sale = self._sale_with_percentage_discount("100", 2, "30", "140")
+
+        self.assertEqual(sale.total_amount, Decimal("140"))
+        self.assertEqual(sale.discount_amount, Decimal("60"))
+        self.assertEqual(sale.status, Sale.Status.PAID)
+
+
+class SaleReturnDiscountTest(SaleFlowTestMixin, TestCase):
+    """Chegirmali sotuvni qaytarganda do'kon olmagan pulini qaytarmasligi kerak."""
+
+    def _discounted_sale(self):
+        # 2 x 100 = 200, 30% chegirma → mijoz 140 to'laydi
+        sale = SaleService.create_sale(
+            user=self.user,
+            data={
+                "store": self.store.id,
+                "customer": None,
+                "items": [{
+                    "product": self.product.id,
+                    "quantity": 2,
+                    "price": Decimal("100.00"),
+                }],
+                "discount_type": Sale.DiscountType.PERCENTAGE,
+                "discount_value": Decimal("30"),
+                "payments": [{"type": "cash", "amount": Decimal("140")}],
+            },
+        )
+        return sale
+
+    def test_full_return_refunds_only_what_was_paid(self):
+        sale = self._discounted_sale()
+        self.assertEqual(sale.discount_amount, Decimal("60"))
+        self.assertEqual(sale.paid_amount, Decimal("140"))
+
+        sale_item = sale.items.get()
+        return_obj = SaleReturnService.create_return(
+            user=self.user,
+            data={
+                "sale": sale.id,
+                "items": [{"sale_item": sale_item.id, "quantity": 2}],
+            },
+        )
+
+        # Gross 200 emas, chegirmali 140 qaytarilishi kerak
+        self.assertEqual(return_obj.total_refund, Decimal("140.00"))
+
+    def test_partial_return_is_prorated(self):
+        sale = self._discounted_sale()
+        sale_item = sale.items.get()
+
+        return_obj = SaleReturnService.create_return(
+            user=self.user,
+            data={
+                "sale": sale.id,
+                "items": [{"sale_item": sale_item.id, "quantity": 1}],
+            },
+        )
+
+        # 1 dona: 100 * 0.7 = 70
+        self.assertEqual(return_obj.total_refund, Decimal("70.00"))
+
+    def test_sale_without_discount_refunds_gross(self):
+        sale = self.make_sale([{"type": "cash", "amount": Decimal("200")}])
+        sale_item = sale.items.get()
+
+        return_obj = SaleReturnService.create_return(
+            user=self.user,
+            data={
+                "sale": sale.id,
+                "items": [{"sale_item": sale_item.id, "quantity": 2}],
+            },
+        )
+
+        self.assertEqual(return_obj.total_refund, Decimal("200.00"))
+
+
+class SaleReturnDuplicateItemTest(SaleFlowTestMixin, TestCase):
+    """Bitta sale_item so'rovda ikki marta kelsa 500 bermasligi kerak."""
+
+    def test_duplicate_sale_item_is_merged(self):
+        sale = self.make_sale([{"type": "cash", "amount": Decimal("200")}], quantity=2)
+        sale_item = sale.items.get()
+
+        return_obj = SaleReturnService.create_return(
+            user=self.user,
+            data={
+                "sale": sale.id,
+                "items": [
+                    {"sale_item": sale_item.id, "quantity": 1},
+                    {"sale_item": sale_item.id, "quantity": 1},
+                ],
+            },
+        )
+
+        self.assertEqual(return_obj.total_refund, Decimal("200.00"))
+        sale_item.refresh_from_db()
+        self.assertEqual(sale_item.returned_quantity, 2)
+
+    def test_duplicate_exceeding_available_is_rejected(self):
+        sale = self.make_sale([{"type": "cash", "amount": Decimal("200")}], quantity=2)
+        sale_item = sale.items.get()
+
+        with self.assertRaises(DRFValidationError):
+            SaleReturnService.create_return(
+                user=self.user,
+                data={
+                    "sale": sale.id,
+                    "items": [
+                        {"sale_item": sale_item.id, "quantity": 2},
+                        {"sale_item": sale_item.id, "quantity": 1},
+                    ],
+                },
+            )
+
+
+class SaleReturnStoreScopeTest(SaleFlowTestMixin, TestCase):
+    """Boshqa do'kon sotuvini qaytarib bo'lmaydi."""
+
+    def test_foreign_store_sale_is_denied(self):
+        sale = self.make_sale([{"type": "cash", "amount": Decimal("200")}])
+        sale_item = sale.items.get()
+
+        outsider = User.objects.create(
+            phone_number="+998900000099", email="outsider@test.uz"
+        )
+        other_store = Store.objects.create(
+            name="Boshqa do'kon", phone_number="+998900000098",
+            address="Boshqa", type=Store.StoreType.STORE,
+        )
+        StoreUser.objects.create(user=outsider, store=other_store, is_active=True)
+
+        with self.assertRaises(PermissionDenied):
+            SaleReturnService.create_return(
+                user=outsider,
+                data={
+                    "sale": sale.id,
+                    "items": [{"sale_item": sale_item.id, "quantity": 1}],
+                },
+            )
+
+    def test_missing_sale_raises_not_found(self):
+        with self.assertRaises(NotFound):
+            SaleReturnService.create_return(
+                user=self.user,
+                data={"sale": 999999, "items": []},
+            )

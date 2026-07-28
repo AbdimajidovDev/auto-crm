@@ -79,8 +79,21 @@ TEMPLATES = [
 WSGI_APPLICATION = 'core.wsgi.application'
 
 
-CORS_ALLOW_ALL_ORIGINS = True
+# CORS: auth cookie'lar SameSite=None bilan yuboriladi, shuning uchun
+# credentials bilan birga "hamma origin" ruxsati istalgan saytga foydalanuvchi
+# nomidan API o'qish imkonini beradi. Default — faqat oq ro'yxat.
+CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in config('CORS_ALLOWED_ORIGINS', default='').split(',')
+    if origin.strip()
+]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in config('CSRF_TRUSTED_ORIGINS', default=config('CORS_ALLOWED_ORIGINS', default='')).split(',')
+    if origin.strip()
+]
 
 
 # Password validation

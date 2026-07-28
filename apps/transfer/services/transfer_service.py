@@ -1,14 +1,13 @@
-from rest_framework.exceptions import ValidationError
-
-from apps.inventory.services.inventory_hooks_service import handle_transfer_approved, handle_transfer_in
-from apps.products.utils.barcode_utility import generate_unique_barcode
-from rest_framework.exceptions import PermissionDenied
-
+# DIQQAT: `django.core.exceptions.PermissionDenied` ni bu yerga import qilmang —
+# u DRF'nikini soyalab, xato matnini yo'qotardi (DRF handler'i uni matnsiz 403 ga
+# aylantiradi). Servis DRF istisnolarini ko'taradi, view'lar shunga tayanadi.
+from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
 
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
-from django.core.exceptions import PermissionDenied
 
+from apps.inventory.services.inventory_hooks_service import handle_transfer_approved, handle_transfer_in
 from apps.transfer.models import StockTransfer, StockTransferItem
 from apps.products.models import ProductBatch
 
@@ -73,10 +72,17 @@ class TransferService:
             # }
             # item_objs = [StockTransferItem(stock_transfer=transfer, product=item["product"], quantity=item["quantity"], ...) for item in items_data]
             # StockTransferItem.objects.bulk_create(item_objs)
-            batch = ProductBatch.objects.select_for_update().get(
-                store=from_store,
-                product=item['product']
-            )
+            try:
+                batch = ProductBatch.objects.select_for_update().get(
+                    store=from_store,
+                    product=item['product']
+                )
+            except ProductBatch.DoesNotExist:
+                # Jo'natuvchi do'kon bu mahsulotni hech qachon saqlamagan —
+                # 500 emas, tushunarli 400 qaytariladi.
+                raise ValidationError(
+                    f"{item['product'].name} jo'natuvchi do'konda mavjud emas"
+                )
 
             if batch.quantity < item['quantity']:
                 raise ValidationError(
@@ -116,7 +122,10 @@ class TransferService:
         #     .prefetch_related("items__product")
         #     .get(id=transfer_id)
         # )
-        transfer = StockTransfer.objects.select_for_update().get(id=transfer_id)
+        try:
+            transfer = StockTransfer.objects.select_for_update().get(id=transfer_id)
+        except StockTransfer.DoesNotExist:
+            raise NotFound("Transfer topilmadi")
 
         TransferService._validate_transfer_action(user, transfer)
 
@@ -132,30 +141,41 @@ class TransferService:
             # source_batches = ProductBatch.objects.select_for_update().filter(store=transfer.from_store, product_id__in=product_ids)
             # target_batches = ProductBatch.objects.select_for_update().filter(store=transfer.to_store, product_id__in=product_ids)
             # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
-            source_batch = ProductBatch.objects.select_for_update().get(
-                store=transfer.from_store,
-                product=item.product
-            )
+            try:
+                source_batch = ProductBatch.objects.select_for_update().get(
+                    store=transfer.from_store,
+                    product=item.product
+                )
+            except ProductBatch.DoesNotExist:
+                raise ValidationError(f"{item.product.name} jo'natuvchi do'konda mavjud emas")
 
             if source_batch.quantity < item.quantity:
                 raise ValidationError(f"{item.product.name} yetishmayapti")
 
-            source_batch.quantity -= item.quantity
-            source_batch.save()
+            # F() ifodasi bilan atomik kamaytirish — o'qib-yozish poygasi bo'lmasin
+            ProductBatch.objects.filter(pk=source_batch.pk).update(
+                quantity=F("quantity") - item.quantity
+            )
 
-            target_batch, _ = ProductBatch.objects.get_or_create(
+            target_batch, created = ProductBatch.objects.get_or_create(
                 store=transfer.to_store,
                 product=item.product,
                 defaults={
                     'purchase_price': item.purchase_price,
                     'selling_price': item.selling_price,
-                    # 'barcode': generate_unique_barcode(),
-                    'quantity': 0
+                    'quantity': item.quantity,
                 }
             )
 
-            target_batch.quantity += item.quantity
-            target_batch.save()
+            if not created:
+                # Diqqat: `get_or_create` qator qulfini olmaydi. Ilgari
+                # `target_batch.quantity += ...; save()` o'qib-yozish edi — bir
+                # do'konga parallel kelgan ikki transfer bir-birining natijasini
+                # yo'qotardi (ikkalasi 10 ni o'qib, ikkalasi 15 yozardi), ustiga
+                # `save()` update_fields'siz eskirgan narxlarni ham qayta yozardi.
+                ProductBatch.objects.filter(pk=target_batch.pk).update(
+                    quantity=F("quantity") + item.quantity
+                )
 
         transfer.status = StockTransfer.Status.APPROVED
         transfer.approved_by = user
@@ -176,7 +196,10 @@ class TransferService:
     def reject_transfer(*, transfer_id, user):
 
         # 🔥 race condition fix
-        transfer = StockTransfer.objects.select_for_update().get(id=transfer_id)
+        try:
+            transfer = StockTransfer.objects.select_for_update().get(id=transfer_id)
+        except StockTransfer.DoesNotExist:
+            raise NotFound("Transfer topilmadi")
 
         TransferService._validate_transfer_action(user, transfer)
 

@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
 from rest_framework.generics import get_object_or_404
 
@@ -7,6 +7,7 @@ from apps.sales.models import Sale, SaleItem, Payment
 from apps.sales.services.payment_service import SalePaymentService
 from apps.products.models import Product, ProductBatch
 from apps.debts.services import DebtService
+from apps.common.store_scope import ensure_store_access
 from apps.store.models import StoreUser
 from apps.users.models.customers import Customer
 
@@ -37,19 +38,30 @@ class SaleService:
         discount_value = data.get("discount_value", Decimal("0"))
 
         # 🔴 STORE LOGIC
-        if user.is_superuser:
-            store = get_object_or_404(Store, id=data["store"])
+        # Do'kon serializer'da aniqlanadi va tekshiriladi (SaleCreateSerializer.validate):
+        # so'rovdagi `store` → X-Store-ID → yagona biriktirilgan do'kon.
+        # Bu yerda faqat qiymat normallashtiriladi va ruxsat qayta tasdiqlanadi —
+        # servis to'g'ridan-to'g'ri (test/skript) chaqirilishi ham mumkin.
+        requested_store = data.get("store")
 
-        else:
-            store_link = StoreUser.objects.filter(
-                user=user,
-                is_active=True
-            ).select_related("store").first()
-
-            if not store_link:
+        if requested_store is None:
+            store_links = list(
+                StoreUser.objects.filter(user=user, is_active=True)
+                .select_related("store")
+                .order_by("store_id")[:2]
+            )
+            if not store_links:
                 raise ValidationError("Siz hech qaysi do‘konga biriktirilmagansiz")
+            if len(store_links) > 1:
+                raise ValidationError("Bir nechta do'konga biriktirilgansiz — do'konni tanlang")
+            store = store_links[0].store
+        elif isinstance(requested_store, Store):
+            store = requested_store
+        else:
+            store = get_object_or_404(Store, id=requested_store)
 
-            store = store_link.store
+        if not user.is_superuser:
+            ensure_store_access(user, store.id, "Siz bu do'konda sotuv qila olmaysiz")
         customer = None
 
         if data.get("customer"):
@@ -113,6 +125,16 @@ class SaleService:
             # 🔥 CRITICAL FIX
             purchase_price = batch.purchase_price
 
+            # Narx mijoz tomonidan yuboriladi, shuning uchun tannarxdan past
+            # sotuv bloklanadi: aks holda sotuvchi 500 000 lik detalni `price: 1`
+            # bilan "sotib", chegirma cheklovlarini ham chetlab o'tardi.
+            # Superuser (masalan likvidatsiya) uchun cheklov qo'llanmaydi.
+            if not user.is_superuser and price < purchase_price:
+                raise ValidationError(
+                    f"Sotuv narxi tannarxdan past bo'lishi mumkin emas "
+                    f"(tannarx: {purchase_price})"
+                )
+
             ProductBatch.objects.filter(id=batch.pk).update(
                 quantity=F('quantity') - quantity_to_sell
             )
@@ -151,7 +173,17 @@ class SaleService:
                 "attempted_discount": calculated_discount
             })
 
-        final_total_amount = subtotal - calculated_discount
+        # Jami summa butun so'mga yaxlitlanadi (UZS'da tiyin yo'q).
+        # Foizli chegirma kasr qoldiq berardi (masalan 1236 - 10% = 1112.40), kassa
+        # esa faqat butun so'm qabul qiladi — natijada to'liq to'langan sotuvda
+        # 0.40 so'mlik "arvoh qarz" paydo bo'lib, yakunlash bloklanardi.
+        # Yaxlitlash frontenddagi Math.round bilan bir xil (ROUND_HALF_UP).
+        final_total_amount = (subtotal - calculated_discount).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+        # discount_amount yaxlitlangan jamiga mos bo'lishi kerak,
+        # aks holda subtotal - discount != total bo'lib qolardi.
+        calculated_discount = subtotal - final_total_amount
 
         # 🔴 PAYMENTS — markaziy service orqali (bulk_create + bank_card invarianti)
         paid_amount = SalePaymentService.record_payments(

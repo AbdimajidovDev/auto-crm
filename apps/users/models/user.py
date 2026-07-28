@@ -17,7 +17,7 @@ class User(AbstractBaseUser, PermissionsMixin, TimestampMixin):
     phone_number = models.CharField(max_length=20, unique=True, db_index=True)
     email = models.EmailField(unique=True, db_index=True, blank=True, null=True)
 
-    # Tizim roli (RBAC). None — cheklanmagan (superuser yoki eski userlar).
+    # Tizim roli (RBAC). None — hech qanday ruxsat yo'q (superuserdan tashqari).
     role = models.ForeignKey(
         "users.Role",
         on_delete=models.SET_NULL,

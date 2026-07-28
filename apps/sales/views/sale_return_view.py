@@ -1,10 +1,14 @@
+from collections import defaultdict
+
 from django.db.models import Prefetch
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, generics
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.sales.models import SaleReturn, SaleReturnItem
+from apps.common.paginations import StandardPagination
+from apps.common.store_scope import scope_queryset
+from apps.sales.models import Payment, SaleReturn, SaleReturnItem
 from apps.sales.serializers import SaleReturnCreateSerializer, SaleReturnListSerializer
 from apps.sales.services.sale_return_service import SaleReturnService
 
@@ -16,6 +20,7 @@ from apps.sales.services.sale_return_service import SaleReturnService
 class SaleReturnListAPIView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = SaleReturnListSerializer
+    pagination_class = StandardPagination
 
     def get_queryset(self):
         user = self.request.user
@@ -44,13 +49,41 @@ class SaleReturnListAPIView(generics.ListAPIView):
         if date_to:
             qs = qs.filter(created_at__date__lte=date_to)
 
-        if user.is_superuser:
-            return qs
+        return scope_queryset(qs, user)
 
-        return qs.filter(
-            store__user_links__user=user,
-            store__user_links__is_active=True,
+    def list(self, request, *args, **kwargs):
+        """
+        Qaytarim to'lovlarini sahifa bo'yicha bitta so'rovda yuklaydi.
+
+        Serializer `get_refund_payments` da har qator uchun alohida
+        `Payment.objects.filter(payment_group=...)` so'rovi yuborardi (N+1).
+        `payment_group` FK emas (UUID maydon), shuning uchun Prefetch o'rniga
+        sahifadagi guruhlar bo'yicha bitta so'rov qilib, xarita context'ga beriladi.
+        """
+        page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
+        if page is None:
+            page = list(self.filter_queryset(self.get_queryset()))
+            paginated = False
+        else:
+            paginated = True
+
+        groups = [r.payment_group for r in page if r.payment_group]
+        payments_by_group = defaultdict(list)
+        if groups:
+            for payment in (
+                Payment.objects
+                .filter(payment_group__in=groups, is_refund=True)
+                .select_related("bank_card")
+                .order_by("id")
+            ):
+                payments_by_group[payment.payment_group].append(payment)
+
+        serializer = self.get_serializer(
+            page, many=True, context={**self.get_serializer_context(), "payments_by_group": payments_by_group}
         )
+        if paginated:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
 
 #

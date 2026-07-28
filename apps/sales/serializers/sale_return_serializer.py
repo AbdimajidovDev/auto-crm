@@ -70,6 +70,12 @@ class SaleReturnListSerializer(serializers.ModelSerializer):
     def get_refund_payments(self, obj):
         if not obj.payment_group:
             return []
+        # View (SaleReturnListAPIView.list) sahifa uchun to'lovlarni bitta
+        # so'rovda yuklab, xaritani context'ga qo'yadi — N+1 shu yerda oldi olinadi.
+        payments_by_group = self.context.get("payments_by_group")
+        if payments_by_group is not None:
+            return PaymentSerializer(payments_by_group.get(obj.payment_group, []), many=True).data
+
         qs = (
             Payment.objects
             .filter(payment_group=obj.payment_group, is_refund=True)
