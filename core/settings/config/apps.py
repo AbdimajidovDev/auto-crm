@@ -5,7 +5,7 @@ DAPHNE_APP = [
 
 THIRD_PARTY_APPS = [
     "channels",  # buni ham shu yerda qoldiring
-    # "corsheaders",
+    "corsheaders",
     "rest_framework",
     "drf_spectacular",
     'rest_framework_simplejwt',

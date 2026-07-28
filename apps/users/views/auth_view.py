@@ -114,8 +114,19 @@ class LogOutView(APIView):
     def post(self, request):
         response = Response({"success": True})
 
-        response.delete_cookie("access_token")
-        response.delete_cookie("refresh_token")
+        # delete_cookie SameSite/Secure atributlarini qo'ymaydi — brauzer
+        # cross-site (avtoyon.uz -> api.avtoyon.uz) kontekstda bunday o'chirish
+        # cookie'sini qabul qilmaydi va logout'dan keyin token tirik qolardi.
+        # Shuning uchun login bilan bir xil atributlarda bo'sh cookie yozamiz.
+        for cookie_name in ("access_token", "refresh_token"):
+            response.set_cookie(
+                key=cookie_name,
+                value="",
+                max_age=0,
+                httponly=True,
+                secure=True,
+                samesite="None",
+            )
 
         # # ======= LogOut vaqtini saqlab qo'yish ========
         if request.user.is_authenticated:

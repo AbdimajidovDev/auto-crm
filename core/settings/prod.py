@@ -1,9 +1,20 @@
+from django.core.exceptions import ImproperlyConfigured
+
 from .base import *
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
-ALLOWED_HOSTS = config('ALLOWED_HOSTS').split(',')
+ALLOWED_HOSTS = [h.strip() for h in config('ALLOWED_HOSTS').split(',') if h.strip()]
+
+# Prod'da CORS oq ro'yxati bo'sh qolsa frontend umuman ishlamaydi (birorta
+# javobda Access-Control-Allow-Origin chiqmaydi) — jim sinishdan ko'ra
+# ishga tushishda darhol yiqilgan ma'qul.
+if not CORS_ALLOWED_ORIGINS:
+    raise ImproperlyConfigured(
+        "CORS_ALLOWED_ORIGINS bo'sh. .env ga frontend originlarini yozing, "
+        "masalan: CORS_ALLOWED_ORIGINS=https://avtoyon.uz,https://www.avtoyon.uz"
+    )
 
 
 # DATABASE ----------------------------------------->
@@ -31,6 +42,11 @@ DATABASES = {
 # }
 
 # Xavfsizlik --------------------------------------------->
+# TLS'ni nginx tugatadi, Django'ga so'rov http bo'lib keladi. Bu headersiz
+# SECURE_SSL_REDIRECT cheksiz redirect halqasiga tushadi va request.is_secure()
+# doim False bo'ladi. nginx proxy_set_header X-Forwarded-Proto https yuborishi shart.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = True
