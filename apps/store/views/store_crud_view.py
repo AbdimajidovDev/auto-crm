@@ -6,6 +6,7 @@ from rest_framework import status, permissions
 
 from django.core.exceptions import ValidationError
 
+from apps.common.paginations import StandardPagination
 from apps.sales.models import Sale
 from apps.store.models import Store
 from apps.store.selectors import StoreSelector
@@ -34,6 +35,17 @@ class StoreListAPIView(APIView):
         # + kerak bo'lsa StandardPagination qo'shish:
         #   class StoreListAPIView(generics.ListAPIView): pagination_class = StandardPagination ...
         shops = StoreSelector.store_list()
+
+        # `page` param kelsa sahifalangan javob ({count, results, ...}) qaytadi —
+        # do'konlar ro'yxati sahifasi shu rejimda ishlaydi. Param bo'lmasa avvalgidek
+        # to'liq massiv qaytadi: select/dropdown ishlatuvchilar (masalan transfer,
+        # kirim dialoglari) barcha do'konlarni kutadi, ular buzilmasligi kerak.
+        if request.query_params.get("page"):
+            paginator = StandardPagination()
+            page = paginator.paginate_queryset(shops, request, view=self)
+            serializer = self.serializer_classes(page, many=True, context={'request': request})
+            return paginator.get_paginated_response(serializer.data)
+
         serializer = self.serializer_classes(shops, many=True, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 

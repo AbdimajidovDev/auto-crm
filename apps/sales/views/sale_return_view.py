@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, Sum
 from drf_spectacular.utils import extend_schema
 from rest_framework import permissions, generics
 from rest_framework.response import Response
@@ -60,12 +60,17 @@ class SaleReturnListAPIView(generics.ListAPIView):
         `payment_group` FK emas (UUID maydon), shuning uchun Prefetch o'rniga
         sahifadagi guruhlar bo'yicha bitta so'rov qilib, xarita context'ga beriladi.
         """
-        page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
         if page is None:
-            page = list(self.filter_queryset(self.get_queryset()))
+            page = list(queryset)
             paginated = False
         else:
             paginated = True
+
+        # Statistika kartalari sahifalanganda ham butun (filtrlangan) davr
+        # bo'yicha to'g'ri chiqishi uchun jami summa alohida hisoblanadi
+        total_refund = queryset.aggregate(total=Sum("total_refund"))["total"] or 0
 
         groups = [r.payment_group for r in page if r.payment_group]
         payments_by_group = defaultdict(list)
@@ -82,8 +87,14 @@ class SaleReturnListAPIView(generics.ListAPIView):
             page, many=True, context={**self.get_serializer_context(), "payments_by_group": payments_by_group}
         )
         if paginated:
-            return self.get_paginated_response(serializer.data)
-        return Response(serializer.data)
+            response = self.get_paginated_response(serializer.data)
+            response.data["total_refund"] = str(total_refund)
+            return response
+        return Response({
+            "count": len(page),
+            "results": serializer.data,
+            "total_refund": str(total_refund),
+        })
 
 
 #

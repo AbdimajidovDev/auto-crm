@@ -27,7 +27,9 @@ from rest_framework.views import APIView
 
 class SupplierPagination(PageNumberPagination):
     page_size = 20
-    page_size_query_param = "page_size"
+    # Frontend barcha ro'yxatlarda `limit` yuboradi (StandardPagination bilan bir xil);
+    # avval `page_size` kutilardi va client limiti umuman qo'llanmasdi
+    page_size_query_param = "limit"
     max_page_size = 100
 
 
