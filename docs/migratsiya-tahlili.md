@@ -59,7 +59,7 @@ Cheklov bilan ko'chiriladigan qism: **sotuv tarixi** (kunlik yig'ma, chek daraja
 | Баркод | `Product.barcode` |
 | Категория | `Category.name` (get_or_create → `Product.category`) |
 | Бренд | `Brand.name` (get_or_create → `Product.brand`) |
-| Ед. измерения (шт) | `ProductUnitMeasurement` (get_or_create → `Product.unit_measurement`) |
+| Ед. измерения (dona) | `ProductUnitMeasurement` (get_or_create → `Product.unit_measurement`) |
 | Архивирован | `Product.status` (a/i) |
 
 ### 4.2 Joriy qoldiq (manba: `остатки` → `ProductBatch`)
