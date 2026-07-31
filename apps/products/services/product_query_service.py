@@ -5,13 +5,27 @@ Ikkala view ham aynan shu funksiyalarni ishlatadi — sahifada ko'ringan
 natija bilan eksport qilingan fayl doim bir xil bo'lishi kafolatlanadi.
 """
 
-from django.db.models import Exists, OuterRef, Q, Subquery, Sum
+from django.db.models import (
+    Case,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce
 
 from apps.products.models import ProductBatch
 
 # Frontend bilan kelishilgan qoldiq chegarasi: 0 < qty <= 5 → "kam qolgan"
 LOW_STOCK_THRESHOLD = 5
+
+# Kod bo'yicha mos kelmagan (ya'ni nom/tavsif bo'yicha topilgan) yozuvlar darajasi.
+# Kichik raqam = ro'yxatda yuqori.
+SEARCH_RANK_OTHER = 9
 
 
 def apply_token_search(queryset, search):
@@ -36,6 +50,42 @@ def apply_token_search(queryset, search):
             token_q |= Q(id=int(token))
         queryset = queryset.filter(token_q)
     return queryset
+
+
+def apply_search_rank(queryset, search):
+    """
+    Qidiruv natijalarini moslik turi bo'yicha darajalaydi (`search_rank`).
+
+    Tartib: artikul (SKU) birlamchi, shtrix kod (barcode) ikkilamchi, qolgani
+    (nom/tavsif bo'yicha topilganlar) oxirida. Har guruh ichida aniq moslik →
+    boshidan moslik → oxiridan moslik → ichidan moslik. Oxiridan moslik alohida
+    ajratilgan, chunki artikul "prefiks + raqam" ko'rinishida (A00544) — raqam
+    qismini to'liq yozgan odam aynan shu mahsulotni izlaydi.
+
+    Masalan "00544" yozilsa avval artikuli A00544 bo'lgan mahsulot, keyin
+    artikulida 00544 uchraydiganlar, undan keyin shtrix kodi bo'yicha mos
+    kelganlar chiqadi.
+
+    Bir nechta so'z yozilganda (artikul/shtrix kodda probel bo'lmaydi) barcha
+    yozuv bir xil darajaga tushadi — nom bo'yicha qidiruv tartibi o'zgarmaydi.
+    """
+    search = (search or "").strip()
+    if not search:
+        return queryset
+    return queryset.annotate(
+        search_rank=Case(
+            When(sku__iexact=search, then=Value(0)),
+            When(sku__istartswith=search, then=Value(1)),
+            When(sku__iendswith=search, then=Value(2)),
+            When(sku__icontains=search, then=Value(3)),
+            When(barcode__iexact=search, then=Value(4)),
+            When(barcode__istartswith=search, then=Value(5)),
+            When(barcode__iendswith=search, then=Value(6)),
+            When(barcode__icontains=search, then=Value(7)),
+            default=Value(SEARCH_RANK_OTHER),
+            output_field=IntegerField(),
+        )
+    )
 
 
 def annotate_stock_qty(queryset, store_id=None, only_in_store=True):

@@ -40,6 +40,7 @@ from apps.store.models import Store
 from apps.users.models.customers import Customer
 
 from .report_service import _dt_bounds, _store_q, ExpensesService
+from .stock_history_service import day_end, stock_delta_after
 
 # Eksportda ham cheklov bor — "hamma yozuvlar" hech qachon yuklanmaydi
 EXPORT_MAX_ROWS = 5000
@@ -66,6 +67,20 @@ def _parse_dates(params) -> tuple[date, date]:
         except ValueError:
             raise ValidationError({"from/to": "ISO format: YYYY-MM-DD"})
     return today - timedelta(days=30), today
+
+
+def _parse_as_of(params) -> date | None:
+    """
+    as_of (ISO) — qoldiq holati SHU KUN OXIRIGA hisoblanadi ("boshidan shu
+    kungacha"). Berilmasa — joriy (bugungi) holat.
+    """
+    raw = (params.get("as_of") or "").strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise ValidationError({"as_of": "ISO format: YYYY-MM-DD"})
 
 
 def _parse_store(params) -> int | None:
@@ -115,6 +130,10 @@ def _f_category():
         for c in Category.objects.values("id", "name").order_by("name")
     ]
     return {"param": "category_id", "type": "select", "label": "Kategoriya", "options": options}
+
+
+def _f_date(param, label):
+    return {"param": param, "type": "date", "label": label}
 
 
 def _f_select(param, label, pairs, empty_label=None):
@@ -546,12 +565,15 @@ def _build_expenses(params, store_id):
     return columns, rows, None, summary
 
 
-def _last_supplier_map(product_ids) -> dict:
+def _last_supplier_map(product_ids, before=None) -> dict:
     """
     product_id → oxirgi kirim (StockEntry) ta'minotchisi nomi.
     Mahsulotda to'g'ridan-to'g'ri supplier maydoni yo'q — bog'lanish kirim
     tarixidan olinadi: id bo'yicha o'sish tartibida yozib borilganda oxirgi
     kirim ta'minotchisi dictda qoladi.
+
+    before — o'tmish holati (as-of) hisoboti uchun: shu vaqtdan keyingi
+    kirimlar hisobga olinmaydi, ya'ni o'sha sanadagi ta'minotchi ko'rinadi.
     """
     smap = {}
     items = (
@@ -560,6 +582,8 @@ def _last_supplier_map(product_ids) -> dict:
         .order_by("id")
         .values("product_id", "entry__supplier__name")
     )
+    if before is not None:
+        items = items.filter(entry__created_at__lt=before)
     for it in items:
         smap[it["product_id"]] = it["entry__supplier__name"]
     return smap
@@ -676,8 +700,15 @@ def _build_supplier_sales(params, store_id):
 def _build_stock_leftovers(params, store_id):
     """
     BILLZ "Qoldiqlar bo'yicha hisobot" formati: har (do'kon, mahsulot) uchun
-    joriy qoldiq — o'lchov birligi, toifa, brend, ta'minotchi va narxlar bilan.
+    qoldiq — o'lchov birligi, toifa, brend, ta'minotchi va narxlar bilan.
+
+    `as_of` (YYYY-MM-DD) berilsa — qoldiq SHU KUN OXIRIGA hisoblanadi, ya'ni
+    "boshidan tanlangan sanagacha" holat: joriy qoldiqdan o'sha kundan keyingi
+    barcha ombor harakatlari teskari qilinadi (stock_history_service). Berilmasa
+    — joriy holat (avvalgi xatti-harakat, to'liq queryset yo'li bilan).
     """
+    as_of = _parse_as_of(params)
+
     qs = (
         ProductBatch.objects
         .filter(is_active=True, product__status=Product.ProductStatus.ACTIVE)
@@ -694,10 +725,13 @@ def _build_stock_leftovers(params, store_id):
     qs = _supplied_by_filter(qs, params)
 
     state = params.get("leftover_state")
-    if state == "in_stock":
-        qs = qs.filter(quantity__gt=0)
-    elif state == "out":
-        qs = qs.filter(quantity__lte=0)
+    # as_of rejimida qoldiq Python tomonda qayta hisoblanadi — holat filtri ham
+    # o'sha sanadagi qiymatga qo'llanishi kerak (joriy qiymatga emas)
+    if as_of is None:
+        if state == "in_stock":
+            qs = qs.filter(quantity__gt=0)
+        elif state == "out":
+            qs = qs.filter(quantity__lte=0)
 
     search = (params.get("search") or "").strip()
     if search:
@@ -707,19 +741,6 @@ def _build_stock_leftovers(params, store_id):
             | Q(product__barcode__icontains=search)
         )
     qs = qs.order_by("store__name", "-quantity", "product__name")
-
-    agg = qs.aggregate(
-        n=Count("id"),
-        qty=Coalesce(Sum("quantity"), Value(0), output_field=IntegerField()),
-        value=Coalesce(
-            Sum(ExpressionWrapper(
-                F("quantity") * F("purchase_price"), output_field=DecimalField(),
-            )),
-            Value(Decimal("0")), output_field=DecimalField(),
-        ),
-    )
-    # Ta'minotchi — bitta so'rovda barcha (filtrlangan) mahsulotlar uchun
-    smap = _last_supplier_map(qs.values("product_id"))
 
     columns = [
         {"key": "store", "label": "Do'kon", "kind": "text"},
@@ -736,7 +757,7 @@ def _build_stock_leftovers(params, store_id):
         {"key": "value", "label": "Qoldiq summasi", "kind": "money"},
     ]
 
-    def row(b):
+    def build_row(b, qty, smap):
         p = b.product
         return {
             "store": b.store.name if b.store else "-",
@@ -749,16 +770,56 @@ def _build_stock_leftovers(params, store_id):
             "supplier": smap.get(b.product_id) or "-",
             "purchase_price": _money(b.purchase_price),
             "selling_price": _money(b.selling_price),
-            "qty": b.quantity,
-            "value": _money((b.quantity or 0) * (b.purchase_price or 0)),
+            "qty": qty,
+            "value": _money(qty * (b.purchase_price or 0)),
         }
 
+    # ── Joriy holat: queryset + row_fn (DB tomonda saralash/aggregat/pagination)
+    if as_of is None:
+        agg = qs.aggregate(
+            n=Count("id"),
+            qty=Coalesce(Sum("quantity"), Value(0), output_field=IntegerField()),
+            value=Coalesce(
+                Sum(ExpressionWrapper(
+                    F("quantity") * F("purchase_price"), output_field=DecimalField(),
+                )),
+                Value(Decimal("0")), output_field=DecimalField(),
+            ),
+        )
+        # Ta'minotchi — bitta so'rovda barcha (filtrlangan) mahsulotlar uchun
+        smap = _last_supplier_map(qs.values("product_id"))
+        summary = [
+            {"label": "Qatorlar (do'kon×mahsulot)", "value": agg["n"], "kind": "int"},
+            {"label": "Jami qoldiq (dona)", "value": agg["qty"], "kind": "int"},
+            {"label": "Qoldiq summasi (kelish narxida)", "value": _money(agg["value"]), "kind": "money"},
+        ]
+        return columns, qs, lambda b: build_row(b, b.quantity or 0, smap), summary
+
+    # ── O'tmish holati: sanadan keyingi harakatlar teskari qilinadi
+    cutoff = day_end(as_of)
+    delta = stock_delta_after(cutoff, store_id)
+    batches = list(qs[:LARGE_EXPORT_CAP])
+    smap = _last_supplier_map({b.product_id for b in batches}, before=cutoff)
+
+    rows = []
+    for b in batches:
+        qty = (b.quantity or 0) - delta.get((b.store_id, b.product_id), 0)
+        if state == "in_stock" and qty <= 0:
+            continue
+        if state == "out" and qty > 0:
+            continue
+        rows.append(build_row(b, qty, smap))
+    # Joriy holatdagi tartib bilan bir xil: do'kon → qoldiq (kamayish) → nom
+    rows.sort(key=lambda r: (r["store"], -r["qty"], r["name"]))
+
+    total_qty = sum(r["qty"] for r in rows)
+    total_value = sum(Decimal(r["value"]) for r in rows)
     summary = [
-        {"label": "Qatorlar (do'kon×mahsulot)", "value": agg["n"], "kind": "int"},
-        {"label": "Jami qoldiq (dona)", "value": agg["qty"], "kind": "int"},
-        {"label": "Qoldiq summasi (kelish narxida)", "value": _money(agg["value"]), "kind": "money"},
+        {"label": "Qatorlar (do'kon×mahsulot)", "value": len(rows), "kind": "int"},
+        {"label": "Jami qoldiq (dona)", "value": total_qty, "kind": "int"},
+        {"label": "Qoldiq summasi (kelish narxida)", "value": _money(total_value), "kind": "money"},
     ]
-    return columns, qs, row, summary
+    return columns, rows, None, summary
 
 
 # ─────────────────────────────────────────────
@@ -841,6 +902,8 @@ REPORTS = {
         # Do'kon×mahsulot qatorlari 5k dan ko'p — to'liq eksport uchun keng cap
         "export_cap": LARGE_EXPORT_CAP,
         "filters": lambda: [
+            # Boshidan shu kun oxirigacha bo'lgan holat; bo'sh — bugungi holat
+            _f_date("as_of", "Holat sanasi (bo'sh — bugun)"),
             _f_store(), _f_category(), _f_supplier(),
             _f_select("leftover_state", "Qoldiq holati", [
                 ("in_stock", "Bor (>0)"), ("out", "Tugagan (0)"),
@@ -930,4 +993,10 @@ class ReportBuilderService:
             rows = list(rows_or_qs)[:cap]
         else:
             rows = [row_fn(obj) for obj in rows_or_qs[:cap]]
-        return spec["label"], columns, rows, summary
+        # Fayl sarlavhasida holat sanasi ko'rinsin — o'tmish qoldig'i joriysi
+        # bilan aralashib ketmasligi uchun
+        label = spec["label"]
+        as_of = _parse_as_of(params)
+        if as_of:
+            label = f"{label} ({as_of.strftime('%d.%m.%Y')} holatiga)"
+        return label, columns, rows, summary

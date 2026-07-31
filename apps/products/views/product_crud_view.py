@@ -34,6 +34,7 @@ from drf_spectacular.types import OpenApiTypes
 from apps.products.services.product_query_service import (
     LOW_STOCK_THRESHOLD,
     annotate_stock_qty,
+    apply_search_rank,
     apply_stock_status,
     apply_token_search,
 )
@@ -246,7 +247,15 @@ class ProductListAPIView(generics.ListAPIView):
         )
 
         # Umumiy logika (eksport bilan bir xil): token qidiruv + stock_qty annotatsiyasi
-        queryset = apply_token_search(queryset, self.request.query_params.get("search"))
+        search = self.request.query_params.get("search")
+        queryset = apply_token_search(queryset, search)
+
+        # Kod bo'yicha qidirilganda artikul mosligi birlamchi, shtrix kod
+        # ikkilamchi bo'lib tartiblanadi (POS'da "00544" → avval artikullar).
+        # Nom bo'yicha qidiruvda barcha yozuv bir darajada qoladi, ya'ni
+        # quyidagi qoldiq/nom tartibi o'zgarmaydi.
+        queryset = apply_search_rank(queryset, search)
+        rank_order = ("search_rank",) if (search or "").strip() else ()
 
         store_id = self.request.query_params.get("store_id")
         if store_id and store_id.isdigit():
@@ -257,10 +266,10 @@ class ProductListAPIView(generics.ListAPIView):
             only_in_store = self.request.query_params.get("store_only", "1") != "0"
             queryset = annotate_stock_qty(
                 queryset, store_id, only_in_store=only_in_store
-            ).order_by("-stock_qty", "name", "-id")
+            ).order_by(*rank_order, "-stock_qty", "name", "-id")
         else:
             # Qoldig'i ko'p mahsulotlar yuqorida; -id — pagination barqarorligi uchun tiebreaker
-            queryset = annotate_stock_qty(queryset).order_by("-stock_qty", "-id")
+            queryset = annotate_stock_qty(queryset).order_by(*rank_order, "-stock_qty", "-id")
 
         return queryset
 

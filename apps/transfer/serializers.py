@@ -110,8 +110,25 @@ class TransferCreateSerializer(serializers.Serializer):
         if data["from_store"] == data["to_store"]:
             raise serializers.ValidationError("Do'konlar bir xil bo'lmasligi kerak")
 
-        if not data.get("items"):
+        items = data.get("items")
+        if not items:
             raise serializers.ValidationError("Kamida bitta mahsulot bo'lishi shart")
+
+        # Bir mahsulot ikki qatorda kelmasin: har qator qoldiqqa alohida
+        # tekshiriladi, shuning uchun dublikat bilan qoldiqdan ko'p tovar
+        # jo'natilib, keyin tasdiqlashda butun o'tkazma o'tmay qolardi.
+        seen = set()
+        duplicates = []
+        for item in items:
+            product = item["product"]
+            if product.pk in seen:
+                duplicates.append(product.name)
+            else:
+                seen.add(product.pk)
+        if duplicates:
+            raise serializers.ValidationError(
+                f"Bir mahsulot ikki marta kiritilgan: {', '.join(sorted(set(duplicates)))}"
+            )
 
         return data
 

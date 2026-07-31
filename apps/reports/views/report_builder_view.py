@@ -99,7 +99,9 @@ class ReportBuilderExportAPIView(APIView):
         # Excel
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {"in_memory": True})
-        ws = wb.add_worksheet(label[:31])
+        # Varaq nomi 31 belgidan oshmasligi kerak; sarlavhadagi qavs ichidagi
+        # izoh (masalan holat sanasi) faqat sarlavha satrida qoladi
+        ws = wb.add_worksheet(label.split(" (")[0][:31] or "Hisobot")
         f_title = wb.add_format({"bold": True, "font_size": 13, "font_color": "#FFFFFF",
                                  "bg_color": "#0D366B", "valign": "vcenter", "indent": 1})
         f_meta = wb.add_format({"font_size": 9, "italic": True, "font_color": "#52514E"})
