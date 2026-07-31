@@ -11,6 +11,7 @@ from apps.contract.views import (
     StockEntryImportTemplateAPIView,
     StockEntryReturnCreateAPIView,
     StockEntryReturnsByEntryAPIView,
+    StockEntryTransferPrecheckAPIView,
     StockEntryReturnListAPIView,
     StockEntryReturnExportAPIView,
     PurchaseSessionListCreateAPIView,
@@ -57,6 +58,9 @@ urlpatterns = [
     path("entry/returns/export/", StockEntryReturnExportAPIView.as_view()),
     path("entry/<int:entry_id>/return/", StockEntryReturnCreateAPIView.as_view()),
     path("entry/<int:entry_id>/returns/", StockEntryReturnsByEntryAPIView.as_view()),
+
+    # Kirim — tovarlarni o'tkazmaga (transfer) ko'chirishdan oldingi tekshiruv
+    path("entry/<int:entry_id>/transfer-precheck/", StockEntryTransferPrecheckAPIView.as_view()),
 
     path("supplier-payments/create/", SupplierPaymentAPIView.as_view()),
     path("supplier-payments/<int:entry_id>/", SupplierPaymentListAPIView.as_view()),

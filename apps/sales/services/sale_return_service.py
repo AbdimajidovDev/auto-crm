@@ -173,16 +173,32 @@ class SaleReturnService:
         refund_group = None
 
         if refund_payments:
+            refund_payments = [dict(p) for p in refund_payments]
             refund_total = sum(
                 (Decimal(str(p["amount"])) for p in refund_payments), Decimal("0")
             )
-            if refund_total != money_refund:
+            # Mijoz tomoni chegirma nisbatini o'zi hisoblaydi (chegirmali sotuvda
+            # qaytarim = narx × miqdor × nisbat), shuning uchun yaxlitlashda bir
+            # necha tiyinlik farq bo'lishi mumkin. Bunday farq uchun qaytarimni
+            # rad etish noto'g'ri — 1 so'mgacha farqga yo'l qo'yiladi va farq
+            # oxirgi qatorga qo'shilib, yozuvlar yig'indisi server hisoblagan
+            # summaga AYNAN tenglashtiriladi.
+            drift = money_refund - refund_total
+            if abs(drift) > Decimal("1"):
                 raise ValidationError({
                     "payments": (
                         f"Qaytariladigan to'lovlar jami {refund_total} — "
                         f"pul bilan qaytarilishi kerak bo'lgan summa {money_refund} ga teng bo'lishi shart"
                     )
                 })
+            if drift != 0:
+                last = refund_payments[-1]
+                adjusted = Decimal(str(last["amount"])) + drift
+                if adjusted <= 0:
+                    raise ValidationError({
+                        "payments": "To'lov qatori summasi yaxlitlashdan keyin musbat bo'lishi kerak"
+                    })
+                last["amount"] = adjusted
 
             refund_group = uuid.uuid4()
             SalePaymentService.record_payments(
