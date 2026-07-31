@@ -193,8 +193,13 @@ class SaleReturnService:
                 payment_group=refund_group,
             )
 
-        elif customer and money_refund > 0:
-            # Eski (backward-compatible) xatti-harakat: pul qismi to'liq naqd qaytariladi
+        elif money_refund > 0:
+            # payments[] yuborilmagan — pul qismi to'liq naqd qaytarilgan hisoblanadi.
+            # DIQQAT: bu yerda ilgari `customer and ...` sharti bor edi va mijozsiz
+            # (walk-in) sotuvni naqd qaytarganda Payment umuman yozilmasdi — kassadan
+            # pul chiqqani hech qayerda ko'rinmasdi (qaytarim detalida ham,
+            # to'lovlar/NET hisobotida ham). Qaytarim mijoz ro'yxatdan o'tgan-o'tmaganiga
+            # bog'liq emas: pul kassadan chiqqan bo'lsa, yozuv bo'lishi shart.
             refund_group = uuid.uuid4()
             SalePaymentService.record_payments(
                 sale=sale,

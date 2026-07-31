@@ -10,7 +10,9 @@ from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.common.store_scope import ensure_store_access
 from apps.products.services.product_import_service import ProductImportService
+from apps.products.services.product_excel_lookup_service import ProductExcelLookupService
 
 from django.conf import settings
 
@@ -44,6 +46,55 @@ class ProductImportAPIView(APIView):
             result = ProductImportService.import_from_excel(file)
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
+
+        return Response(result, status=200)
+
+
+@extend_schema(
+    tags=["Product"],
+    summary="Excel shablondan mahsulotlarni topish (sotuv cheki uchun)",
+    description=(
+        "Faylni O'QIYDI, hech narsa yozmaydi. Har qator SKU (artikul) → barcode → nom "
+        "tartibida qidiriladi; topilganlar tanlangan do'kondagi qoldiq va narxlari "
+        "bilan qaytariladi. Miqdor ustuni bo'lsa (masalan kirim shablonidagi "
+        "'Miqdori'), miqdor ham fayldan olinadi."
+    ),
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "format": "binary"},
+                "store": {"type": "integer"},
+            },
+        }
+    },
+    responses={200: OpenApiTypes.OBJECT},
+)
+class ProductExcelLookupAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser]
+
+    def post(self, request):
+        file = request.FILES.get("file")
+        if not file:
+            return Response({"detail": "file maydoni majburiy."}, status=400)
+
+        if not file.name.lower().endswith(".xlsx"):
+            return Response({"detail": "Faqat .xlsx fayl qabul qilinadi."}, status=400)
+
+        raw_store = request.data.get("store")
+        try:
+            store_id = int(raw_store)
+        except (TypeError, ValueError):
+            return Response({"detail": "store maydoni majburiy."}, status=400)
+
+        # Xodim faqat o'z do'koni bo'yicha qoldiq/narx ko'ra oladi
+        ensure_store_access(request.user, store_id)
+
+        try:
+            result = ProductExcelLookupService.resolve(file, store_id)
+        except ValidationError as e:
+            return Response({"detail": e.messages[0] if e.messages else str(e)}, status=400)
 
         return Response(result, status=200)
 

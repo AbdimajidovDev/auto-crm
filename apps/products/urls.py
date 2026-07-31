@@ -20,7 +20,11 @@ from apps.products.views.product_batch_view import (
     ProductLocationDetailView,
     ProductBatchDetailView,
 )
-from apps.products.views.product_excel_view import ProductImportAPIView, ProductImportTemplateAPIView
+from apps.products.views.product_excel_view import (
+    ProductImportAPIView,
+    ProductImportTemplateAPIView,
+    ProductExcelLookupAPIView,
+)
 from apps.products.views.export_views import ProductExportAPIView, CategoryExportAPIView
 from apps.products.views.product_bulk_view import ProductBulkStatusAPIView, ProductBulkDeleteAPIView
 
@@ -58,5 +62,7 @@ urlpatterns = [
     # Excel Import, Export
     path("products/import/",          ProductImportAPIView.as_view()),
     path("products/import/template/", ProductImportTemplateAPIView.as_view()),
+    # Sotuv cheki uchun: Excel'dan mahsulotlarni topish (import emas — faqat o'qish)
+    path("products/import/lookup/",   ProductExcelLookupAPIView.as_view()),
 
 ]
