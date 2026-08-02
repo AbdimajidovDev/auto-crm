@@ -374,6 +374,34 @@ class SaleStatisticsAPIView(APIView):
         else:
             returned_all = returned
 
+        # Qaytarib berilgan PULning taqsimoti: naqd + har bir karta (Uzcard/Humo/...) bo'yicha.
+        # Davr/do'kon filtri qaytarim to'lovi sanasiga qarab — "Qaytarilgan summa" bilan bir xil mantiq.
+        # Eslatma: qaytarim qarzni kamaytirishga ketgan qismi pul harakati emas,
+        # shuning uchun bu taqsimot yig'indisi total_returned'dan kichik bo'lishi mumkin.
+        refund_rows_qs = Payment.objects.filter(
+            is_refund=True,
+            sale__in=debt_scope.values("id"),
+        )
+        if date_from:
+            refund_rows_qs = refund_rows_qs.filter(created_at__date__gte=date_from)
+        if date_to:
+            refund_rows_qs = refund_rows_qs.filter(created_at__date__lte=date_to)
+        refund_rows = (
+            refund_rows_qs
+            .values("type", "bank_card__name")
+            .annotate(amount=Coalesce(Sum("amount"), Value(0, output_field=DecimalField())))
+            .order_by("-amount")
+        )
+        returned_breakdown = [
+            {
+                "type": row["type"],
+                "name": row["bank_card__name"],
+                "amount": str(row["amount"]),
+            }
+            for row in refund_rows
+            if row["amount"]
+        ]
+
         return Response(
             {
                 "total_sales": totals["total_sales"],
@@ -387,6 +415,7 @@ class SaleStatisticsAPIView(APIView):
                 "total_returned": str(returned["total"]),
                 "total_returned_all": str(returned_all["total"]),
                 "paid_breakdown": paid_breakdown,
+                "returned_breakdown": returned_breakdown,
                 "recent_debt_payments": recent_debt_payments,
             },
             status=status.HTTP_200_OK,
