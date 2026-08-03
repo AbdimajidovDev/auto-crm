@@ -12,6 +12,7 @@ from apps.products.models import Product, ProductBatch, ProductImage
 from apps.products.serializers import ProductBatchListSerializer
 from apps.products.serializers.product_crud_serializer import (
     ProductCreateSerializer,
+    ProductDetailSerializer,
     ProductGetSerializer,
     ProductListSerializer,
     # ProductBatchSerializer,
@@ -129,6 +130,11 @@ from apps.products.services.product_query_service import (
                                      "SKU, barcode, tavsif bo'yicha). Masalan 'cobalt dvornik' = 'dvornik cobalt'"),
         OpenApiParameter("category", OpenApiTypes.INT,
                          description="Kategoriya ID bo'yicha filter"),
+        OpenApiParameter("ids", OpenApiTypes.STR,
+                         description="Vergul bilan ajratilgan ID'lar (masalan 12,45,78) — faqat "
+                                     "shu mahsulotlar. Mijozdagi katalog keshida yo'q tovarni "
+                                     "(qoralama, Excel import) bitta so'rov bilan olish uchun. "
+                                     "Bir so'rovda ko'pi bilan 200 ta ID"),
         OpenApiParameter("is_active", OpenApiTypes.BOOL,
                          description="Faollik holati bo'yicha filter"),
         OpenApiParameter("store_id", OpenApiTypes.INT,
@@ -397,23 +403,36 @@ class ProductDetailAPIView(APIView):
 
     @extend_schema(
         tags=["Product"],
-        summary="- ID orqali Product malumotlarini olish.",
+        summary="- ID orqali Product malumotlarini olish (to'liq: narx, qoldiq, kategoriya).",
     )
     def get(self, request, pk):
-        # ⚠️ MUAMMO [PERFORMANCE]: Detail queryset `select_related/prefetch_related` ishlatmayapti.
-        # Sabab: `ProductUpdateSerializer` hozir yengil, lekin detail javob kengaysa category/unit/images uchun N+1 yoki ortiqcha query chiqadi.
-        # Natija: detail endpoint listdagi optimizatsiyadan farqli ishlaydi va kelajakdagi o'zgarishda sekinlashadi.
-        # ✅ YECHIM:
-        # product = get_object_or_404(
-        #     Product.objects.select_related("category", "unit_measurement").prefetch_related("images", "batches"),
-        #     pk=pk,
-        # )
+        # Javob ProductDetailSerializer bilan qaytadi: tahrirlash formasi
+        # kutadigan maydonlar (nom, kirill nomi, kategoriya/birlik ID, rasmlar,
+        # min_stock, barcode/sku) SAQLANGAN, ustiga mahsulot sahifasi uchun
+        # kerak bo'lganlari qo'shilgan — kategoriya/brend nomi, o'lchov birligi
+        # nomi va do'konlar kesimidagi qoldiq/narxlar (`batches`).
+        # select_related/prefetch — batches va rasmlar uchun N+1 bo'lmasin.
         product = get_object_or_404(
-            Product.objects.prefetch_related("images"), pk=pk
+            Product.objects
+            .select_related("category", "brand", "unit_measurement")
+            .prefetch_related("images", "batches__store", "batches__location"),
+            pk=pk,
+        )
+        # Do'konlar ro'yxati list endpoint bilan bir xil: harakati bo'lmagan
+        # do'kon ham qoldiq 0 bilan ko'rinadi (frontend jadvali bir xil shaklda)
+        all_stores = list(
+            Store.objects
+            .filter(is_active=True)
+            # only(): `name` modeltranslation bilan tarjima qilinadi — til
+            # variantlarisiz har do'kon uchun alohida deferred SQL chiqadi
+            .only("id", "name", "name_uz", "name_uz_cyrl")
+            .order_by("name")
         )
         # request kontekstisiz ImageField nisbiy URL qaytaradi — frontend
         # rasmlarni to'liq URL sifatida kutadi
-        serializer = self.serializer_class(product, context={"request": request})
+        serializer = ProductDetailSerializer(
+            product, context={"request": request, "all_stores": all_stores}
+        )
         return Response(serializer.data, status=200)
 
     @extend_schema(

@@ -188,6 +188,52 @@ class ProductListSerializer(serializers.ModelSerializer):
         return ProductBatchListSerializer(result, many=True).data
 
 
+class ProductDetailSerializer(ProductListSerializer):
+    """
+    Bitta mahsulotning TO'LIQ ko'rinishi (detail sahifa va tarix sahifasi uchun).
+
+    ProductListSerializer'ning ustiga qo'shiladi: kirill nomi/tavsifi
+    (tahrirlash formasi ularni kutadi), o'lchov birligi ID'si va yangilanish
+    vaqti. `batches` — do'konlar kesimidagi qoldiq/narxlar: kontekstdagi
+    `all_stores` bo'yicha to'ldiriladi (view uni beradi).
+    """
+
+    class Meta(ProductListSerializer.Meta):
+        # name_uz_cyrl / description_uz_cyrl — modeltranslation qo'shgan haqiqiy
+        # model maydonlari, shuning uchun alohida e'lon qilish shart emas
+        fields = ProductListSerializer.Meta.fields + (
+            "name_uz_cyrl",
+            "description_uz_cyrl",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_batches(self, product):
+        # Kontekstda do'kon ro'yxati bo'lmasa — mahsulotning o'z partiyalari
+        # (do'kon nomi bilan). Shunda detail javob list bilan bir xil shaklda
+        # bo'ladi va frontend qayta ishlashi o'zgarmaydi.
+        if self.context.get("all_stores"):
+            return super().get_batches(product)
+
+        rows = [
+            {
+                "id": batch.id,
+                "store_id": batch.store_id,
+                "store_name": batch.store.name if batch.store_id else "—",
+                "location": batch.location_id,
+                "location_name": getattr(batch.location, "location", None),
+                "quantity": batch.quantity,
+                "purchase_price": batch.purchase_price,
+                "selling_price": batch.selling_price,
+                "wholesale_price": batch.wholesale_price,
+                "is_active": batch.is_active,
+            }
+            for batch in product.batches.all()
+            if batch.is_active
+        ]
+        return ProductBatchListSerializer(rows, many=True).data
+
+
 class ProductCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(
         child=serializers.ImageField(),

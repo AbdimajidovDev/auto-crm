@@ -26,6 +26,7 @@ from apps.products.views.product_excel_view import (
     ProductExcelLookupAPIView,
 )
 from apps.products.views.export_views import ProductExportAPIView, CategoryExportAPIView
+from apps.products.views.product_history_view import ProductHistoryAPIView
 from apps.products.views.product_bulk_view import ProductBulkStatusAPIView, ProductBulkDeleteAPIView
 
 urlpatterns = [
@@ -43,6 +44,8 @@ urlpatterns = [
     path("bulk-status/", ProductBulkStatusAPIView.as_view()),
     path("bulk-delete/", ProductBulkDeleteAPIView.as_view()),
     path("<int:pk>/", ProductDetailAPIView.as_view()),
+    # Mahsulot tarixi: kirim / o'tkazma / sotuv / qaytim / spisaniye statistikasi
+    path("<int:pk>/history/", ProductHistoryAPIView.as_view()),
 
     path("item/list/", ProductBatchListAPIView.as_view()),
     path("item/<int:pk>/", ProductBatchDetailView.as_view()),

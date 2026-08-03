@@ -29,6 +29,10 @@ from rest_framework.exceptions import ValidationError
 from apps.contract.models import StockEntryItem, Supplier, SupplierTransaction
 from apps.debts.models import CustomerDebt
 from apps.products.models import Category, Product, ProductBatch
+from apps.products.services.product_history_service import (
+    ProductHistoryService,
+    parse_date_param,
+)
 from apps.products.services.product_query_service import (
     LOW_STOCK_THRESHOLD,
     annotate_stock_qty,
@@ -52,6 +56,37 @@ MAX_LIMIT = 100
 
 PAYMENT_TYPE_LABELS = {"cash": "Naqd", "card": "Karta", "mixed": "Aralash", "debt": "Qarz"}
 SALE_STATUS_LABELS = {"paid": "To'langan", "partial": "Qisman", "debt": "Qarz", "r": "Qaytarilgan"}
+
+# ── Mahsulot tarixi hisoboti ──
+PRODUCT_EVENT_LABELS = {
+    "entry": "Kirim",
+    "entry_return": "Kirim qaytimi",
+    "transfer": "O'tkazma",
+    "sale": "Sotuv",
+    "sale_return": "Sotuv qaytimi",
+    "writeoff": "Spisaniye",
+    "inventory": "Inventarizatsiya",
+}
+# Hodisa holati har manbada boshqacha kodlanadi (o'tkazma / sotuv / spisaniye /
+# inventarizatsiya) — jadvalda o'qiladigan matn chiqishi uchun bir joyga yig'ildi
+PRODUCT_EVENT_STATUS_LABELS = {
+    "transfer": {"p": "Kutilmoqda", "a": "Tasdiqlangan", "r": "Rad etilgan"},
+    "sale": SALE_STATUS_LABELS,
+    "writeoff": {
+        "damaged": "Buzilgan / yaroqsiz",
+        "expired": "Muddati o'tgan",
+        "lost": "Yo'qolgan / o'g'irlangan",
+        "inventory": "Inventarizatsiya kamomadi",
+        "catalog": "Katalogdan chiqarish",
+        "other": "Boshqa",
+    },
+    "inventory": {"active": "Faol", "completed": "Yakunlangan", "cancelled": "Bekor qilingan"},
+}
+# Bitta mahsulot uchun birlashtiriladigan hodisalar chegarasi. Lenta 7 xil
+# jadvaldan yig'ilib Python'da saralanadi — chegarasiz eng faol mahsulotda
+# o'n minglab qator xotiraga ko'tarilardi. Cap urilsa foydalanuvchi
+# ogohlantiriladi (jimgina kesish yo'q).
+PRODUCT_HISTORY_MAX_EVENTS = 2000
 
 
 # ─────────────────────────────────────────────
@@ -141,6 +176,14 @@ def _f_select(param, label, pairs, empty_label=None):
         {"value": v, "label": l} for v, l in pairs
     ]
     return {"param": param, "type": "select", "label": label, "options": options}
+
+
+def _f_product():
+    """
+    Bitta mahsulot tanlash. Katalog minglab qatorli — variantlar meta bilan
+    yuborilmaydi, frontend qidiruv (autocomplete) orqali tanlaydi.
+    """
+    return {"param": "product_id", "type": "product", "label": "Mahsulot", "required": True}
 
 
 def _f_supplier():
@@ -822,6 +865,162 @@ def _build_stock_leftovers(params, store_id):
     return columns, rows, None, summary
 
 
+def _parse_optional_dates(params) -> tuple[date | None, date | None]:
+    """
+    from/to — berilmasa BUTUN tarix. (_parse_dates oxirgi 30 kunni beradi;
+    mahsulot tarixida bu noto'g'ri — mahsulot bir yil oldin kirgan bo'lishi
+    mumkin va hisobot bo'sh chiqardi.)
+    """
+    parsed = []
+    for key in ("from", "to"):
+        raw = (params.get(key) or "").strip()
+        if not raw:
+            parsed.append(None)
+            continue
+        try:
+            parsed.append(date.fromisoformat(raw))
+        except ValueError:
+            raise ValidationError({key: "ISO format: YYYY-MM-DD"})
+    return parsed[0], parsed[1]
+
+
+def _event_status_label(event: dict) -> str:
+    status = event.get("status")
+    if not status:
+        return "-"
+    return PRODUCT_EVENT_STATUS_LABELS.get(event["type"], {}).get(status, str(status))
+
+
+def _dt_label(value) -> str:
+    return timezone.localtime(value).strftime("%d.%m.%Y") if value else "-"
+
+
+def _build_product_history(params, store_id, user):
+    """
+    Bitta mahsulotning kartochkasi (info) + harakatlar tarixi (kirim, o'tkazma,
+    sotuv, qaytimlar, spisaniye, inventarizatsiya) bitta jadvalda.
+
+    Hisob-kitob ProductHistoryService'da — mahsulot tarixi sahifasi bilan
+    AYNAN bir xil manba, shuning uchun raqamlar hech qachon farq qilmaydi.
+    Do'kon ruxsati ham o'sha servisda (xodim faqat o'z do'konlari yozuvlarini
+    ko'radi), shuning uchun bu yerga `user` uzatiladi.
+    """
+    raw_id = str(params.get("product_id") or "").strip()
+    if not raw_id.isdigit():
+        raise ValidationError({"product_id": "Mahsulotni tanlang"})
+
+    product = (
+        Product.objects
+        .select_related("category", "brand", "unit_measurement")
+        .filter(pk=int(raw_id))
+        .first()
+    )
+    if product is None:
+        raise ValidationError({"product_id": "Mahsulot topilmadi"})
+
+    d_from, d_to = _parse_optional_dates(params)
+    event_type = params.get("event_type") or None
+    if event_type not in PRODUCT_EVENT_LABELS:
+        event_type = None
+
+    service = ProductHistoryService(
+        product,
+        user,
+        date_from=parse_date_param(d_from.isoformat() if d_from else None),
+        date_to=parse_date_param(d_to.isoformat() if d_to else None, end_of_day=True),
+        store_id=store_id,
+    )
+    by_store = service.build_by_store()
+    totals = service.build_summary(by_store)
+    events = service.collect_events(limit=PRODUCT_HISTORY_MAX_EVENTS, event_type=event_type)
+    total_events = service.count_events(event_type)
+
+    columns = [
+        {"key": "date", "label": "Sana", "kind": "text"},
+        {"key": "event", "label": "Harakat", "kind": "text"},
+        {"key": "doc_id", "label": "Hujjat №", "kind": "int"},
+        {"key": "store", "label": "Do'kon", "kind": "text"},
+        {"key": "to_store", "label": "Qabul qiluvchi", "kind": "text"},
+        {"key": "quantity", "label": "Miqdor", "kind": "int"},
+        {"key": "price", "label": "Narx", "kind": "money"},
+        {"key": "amount", "label": "Summa", "kind": "money"},
+        {"key": "counterparty", "label": "Kontragent", "kind": "text"},
+        {"key": "user", "label": "Xodim", "kind": "text"},
+        {"key": "status", "label": "Holat", "kind": "text"},
+        {"key": "note", "label": "Izoh", "kind": "text"},
+    ]
+
+    rows = [
+        {
+            "date": timezone.localtime(e["date"]).strftime("%d.%m.%Y %H:%M"),
+            "event": PRODUCT_EVENT_LABELS.get(e["type"], e["type"]),
+            "doc_id": e["doc_id"],
+            "store": e.get("store_name") or "-",
+            "to_store": e.get("to_store_name") or "-",
+            "quantity": e["quantity"],
+            "price": _money(e["price"]),
+            "amount": _money(e["amount"]),
+            "counterparty": e.get("counterparty") or "-",
+            "user": e.get("user") or "-",
+            "status": _event_status_label(e),
+            "note": e.get("note") or "-",
+        }
+        for e in events
+    ]
+
+    summary = [
+        {"label": "Kirim (dona)", "value": totals["purchased_qty"], "kind": "int"},
+        {"label": "Sotilgan (dona)", "value": totals["sold_qty"], "kind": "int"},
+        {"label": "Sotuv summasi", "value": _money(totals["sold_amount"]), "kind": "money"},
+        {"label": "Foyda", "value": _money(totals["profit"]), "kind": "money"},
+        {"label": "Sotuv qaytimi (dona)", "value": totals["sale_returned_qty"], "kind": "int"},
+        {"label": "Spisaniye (dona)", "value": totals["written_off_qty"], "kind": "int"},
+        {"label": "O'tkazilgan (dona)", "value": totals["transferred_qty"], "kind": "int"},
+        {"label": "Joriy qoldiq", "value": totals["current_qty"], "kind": "int"},
+    ]
+
+    identity = " · ".join(
+        part for part in (
+            f"SKU: {product.sku}" if product.sku else "",
+            f"Shtrix: {product.barcode}" if product.barcode else "",
+        ) if part
+    )
+    fields = [
+        {"label": "Kategoriya", "value": product.category.name if product.category_id else "-"},
+        {"label": "Brend", "value": product.brand.name if product.brand_id else "-"},
+        {
+            "label": "O'lchov birligi",
+            "value": product.unit_measurement.measurement if product.unit_measurement_id else "-",
+        },
+        {"label": "Holat", "value": product.get_status_display()},
+        {"label": "Joriy qoldiq", "value": totals["current_qty"], "kind": "int"},
+        {"label": "Minimal qoldiq", "value": product.min_stock, "kind": "int"},
+        {"label": "O'rtacha kirim narxi", "value": _money(totals["avg_purchase_price"]), "kind": "money"},
+        {"label": "O'rtacha sotuv narxi", "value": _money(totals["avg_selling_price"]), "kind": "money"},
+        {"label": "Kirimlar soni", "value": totals["entry_count"], "kind": "int"},
+        {"label": "Ta'minotchilar", "value": totals["supplier_count"], "kind": "int"},
+        {"label": "Birinchi kirim", "value": _dt_label(totals["first_entry_at"])},
+        {"label": "Oxirgi kirim", "value": _dt_label(totals["last_entry_at"])},
+        {"label": "Oxirgi sotuv", "value": _dt_label(totals["last_sale_at"])},
+        {"label": "Harakatlar soni", "value": total_events, "kind": "int"},
+    ]
+    # Tannarxi yo'q sotuvlar bo'lsa foyda to'liq emas — yashirmaymiz
+    if totals["profit_partial"]:
+        fields.append({
+            "label": "Diqqat",
+            "value": "Ba'zi sotuvlarda tannarx yo'q — foyda taxminiy",
+        })
+    # Cap urilgan bo'lsa jimgina kesmaymiz, aytamiz
+    if total_events > len(rows):
+        fields.append({
+            "label": "Eslatma",
+            "value": f"Jadvalda oxirgi {len(rows)} ta harakat ({total_events} tadan)",
+        })
+
+    info = {"title": product.name, "subtitle": identity, "fields": fields}
+    return columns, rows, None, summary, info
+
+
 # ─────────────────────────────────────────────
 #  REGISTRY
 # ─────────────────────────────────────────────
@@ -866,6 +1065,19 @@ REPORTS = {
         "builder": _build_low_stock,
         "search": True,
         "filters": lambda: [_f_store(), _f_category()],
+    },
+    "product_history": {
+        "label": "Mahsulot tarixi (bitta mahsulot)",
+        "builder": _build_product_history,
+        "search": False,
+        # Do'kon ruxsati ProductHistoryService ichida hisoblanadi
+        "needs_user": True,
+        # Lenta baribir PRODUCT_HISTORY_MAX_EVENTS bilan chegaralangan
+        "export_cap": PRODUCT_HISTORY_MAX_EVENTS,
+        "filters": lambda: [
+            _f_product(), _f_daterange(), _f_store(),
+            _f_select("event_type", "Harakat turi", list(PRODUCT_EVENT_LABELS.items()), "Barchasi"),
+        ],
     },
     "customers": {
         "label": "Mijozlar hisoboti",
@@ -946,19 +1158,29 @@ class ReportBuilderService:
         }
 
     @staticmethod
-    def _run(params) -> tuple[list, list, list]:
-        """Builder ishga tushirib to'liq (columns, rows, summary) qaytaradi — cap bilan."""
+    def _run(params, user=None) -> tuple[list, list, object, list, dict | None]:
+        """
+        Builder ishga tushirib (columns, rows/queryset, row_fn, summary, info)
+        qaytaradi. `info` — ixtiyoriy kartochka bloki (masalan mahsulot
+        tafsilotlari); builder qaytarmasa None.
+        """
         report_type = params.get("report_type")
         spec = REPORTS.get(report_type)
         if not spec:
             raise ValidationError({"report_type": "Noma'lum hisobot turi"})
         store_id = _parse_store(params)
-        columns, rows_or_qs, row_fn, summary = spec["builder"](params, store_id)
-        return columns, rows_or_qs, row_fn, summary
+        # Ayrim hisobotlar (mahsulot tarixi) do'kon ruxsatini o'zi hisoblaydi
+        if spec.get("needs_user"):
+            result = spec["builder"](params, store_id, user)
+        else:
+            result = spec["builder"](params, store_id)
+        columns, rows_or_qs, row_fn, summary = result[:4]
+        info = result[4] if len(result) > 4 else None
+        return columns, rows_or_qs, row_fn, summary, info
 
     @staticmethod
-    def generate(params) -> dict:
-        columns, rows_or_qs, row_fn, summary = ReportBuilderService._run(params)
+    def generate(params, user=None) -> dict:
+        columns, rows_or_qs, row_fn, summary, info = ReportBuilderService._run(params, user)
         page = max(1, _parse_int(params, "page", 1))
         limit = min(MAX_LIMIT, max(1, _parse_int(params, "limit", DEFAULT_LIMIT)))
         offset = (page - 1) * limit
@@ -971,7 +1193,7 @@ class ReportBuilderService:
             total = rows_or_qs.count()
             rows = [row_fn(obj) for obj in rows_or_qs[offset:offset + limit]]
 
-        return {
+        data = {
             "columns": columns,
             "rows": rows,
             "summary": summary,
@@ -979,15 +1201,18 @@ class ReportBuilderService:
             "page": page,
             "limit": limit,
         }
+        if info:
+            data["info"] = info
+        return data
 
     @staticmethod
-    def export_rows(params) -> tuple[str, list, list, list]:
-        """Eksport uchun: (label, columns, BARCHA qatorlar[cap], summary) — generate bilan bir xil filtrlar."""
+    def export_rows(params, user=None) -> tuple[str, list, list, list, dict | None]:
+        """Eksport uchun: (label, columns, BARCHA qatorlar[cap], summary, info) — generate bilan bir xil filtrlar."""
         report_type = params.get("report_type")
         spec = REPORTS.get(report_type)
         if not spec:
             raise ValidationError({"report_type": "Noma'lum hisobot turi"})
-        columns, rows_or_qs, row_fn, summary = ReportBuilderService._run(params)
+        columns, rows_or_qs, row_fn, summary, info = ReportBuilderService._run(params, user)
         cap = spec.get("export_cap", EXPORT_MAX_ROWS)
         if row_fn is None:
             rows = list(rows_or_qs)[:cap]
@@ -999,4 +1224,8 @@ class ReportBuilderService:
         as_of = _parse_as_of(params)
         if as_of:
             label = f"{label} ({as_of.strftime('%d.%m.%Y')} holatiga)"
-        return label, columns, rows, summary
+        # Bitta obyekt bo'yicha hisobotda (mahsulot tarixi) sarlavhada uning
+        # nomi turadi — bir nechta yuklangan fayl aralashib ketmasligi uchun
+        if info and info.get("title"):
+            label = f"{label} — {info['title']}"
+        return label, columns, rows, summary, info

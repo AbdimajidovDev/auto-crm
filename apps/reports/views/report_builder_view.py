@@ -58,7 +58,7 @@ class ReportBuilderGenerateAPIView(APIView):
     def get(self, request):
         try:
             # Do'kon admini faqat o'z do'koni bo'yicha (superadmin — istalgan/umumiy)
-            data = ReportBuilderService.generate(scope_report_params(request))
+            data = ReportBuilderService.generate(scope_report_params(request), request.user)
         except ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         return Response(data)
@@ -74,7 +74,7 @@ class ReportBuilderExportAPIView(APIView):
     def get(self, request):
         params = scope_report_params(request)
         try:
-            label, columns, rows, summary = ReportBuilderService.export_rows(params)
+            label, columns, rows, summary, info = ReportBuilderService.export_rows(params, request.user)
         except ValidationError as e:
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
 
@@ -87,6 +87,15 @@ class ReportBuilderExportAPIView(APIView):
             response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
             response["Content-Disposition"] = f"attachment; filename={report_type}_{stamp}.csv"
             writer = csv.writer(response)
+            # Kartochka (mahsulot tafsilotlari) jadval tepasida — fayl o'zi
+            # yetarli bo'lishi uchun (qaysi mahsulot ekani ko'rinib tursin)
+            if info:
+                writer.writerow([info.get("title", "")])
+                if info.get("subtitle"):
+                    writer.writerow([info["subtitle"]])
+                for field in info.get("fields", []):
+                    writer.writerow([field["label"], field["value"]])
+                writer.writerow([])
             writer.writerow([c["label"] for c in columns])
             for r in rows:
                 writer.writerow([r.get(c["key"], "") for c in columns])
@@ -115,34 +124,60 @@ class ReportBuilderExportAPIView(APIView):
         f_sum_l = wb.add_format({"bold": True})
         f_sum_v = wb.add_format({"bold": True, "num_format": "#,##0.00"})
 
+        f_card = wb.add_format({"bold": True, "font_size": 11, "font_color": "#0D366B"})
+
         last_col = len(columns) - 1
         ws.set_row(0, 26)
         ws.merge_range(0, 0, 0, max(last_col, 1), label, f_title)
         gen = datetime.now().strftime("%d.%m.%Y %H:%M")
         ws.merge_range(1, 0, 1, max(last_col, 1), f"Yaratildi: {gen}  |  Qatorlar: {len(rows)}", f_meta)
 
+        # Kartochka bloki (mahsulot tafsilotlari) — jadval sarlavhasidan tepada.
+        # Jadval qatori shu blokdan keyin boshlanadi, shuning uchun kursor bilan.
+        head_row = 3
+        if info:
+            cursor = 3
+            ws.write(cursor, 0, info.get("title", ""), f_card)
+            cursor += 1
+            if info.get("subtitle"):
+                ws.write(cursor, 0, info["subtitle"], f_meta)
+                cursor += 1
+            for field in info.get("fields", []):
+                ws.write(cursor, 0, field["label"], f_sum_l)
+                value = field.get("value")
+                if field.get("kind") in ("money", "int"):
+                    try:
+                        ws.write_number(cursor, 1, float(value), f_sum_v)
+                    except (TypeError, ValueError):
+                        ws.write(cursor, 1, str(value))
+                else:
+                    ws.write(cursor, 1, "-" if value in (None, "") else str(value))
+                cursor += 1
+            head_row = cursor + 1
+
+        first_data_row = head_row + 1
         for col, c in enumerate(columns):
             width = {"text": 28, "money": 16, "int": 12}.get(c["kind"], 16)
             ws.set_column(col, col, width)
-            ws.write(3, col, c["label"], f_head)
+            ws.write(head_row, col, c["label"], f_head)
         for i, r in enumerate(rows):
             for col, c in enumerate(columns):
                 val = r.get(c["key"], "")
                 if c["kind"] == "money":
                     try:
-                        ws.write_number(4 + i, col, float(val), f_money)
+                        ws.write_number(first_data_row + i, col, float(val), f_money)
                     except (TypeError, ValueError):
-                        ws.write(4 + i, col, str(val), f_text)
+                        ws.write(first_data_row + i, col, str(val), f_text)
                 elif c["kind"] == "int":
                     try:
-                        ws.write_number(4 + i, col, int(val), f_int)
+                        ws.write_number(first_data_row + i, col, int(val), f_int)
                     except (TypeError, ValueError):
-                        ws.write(4 + i, col, str(val), f_text)
+                        ws.write(first_data_row + i, col, str(val), f_text)
                 else:
-                    ws.write(4 + i, col, "-" if val in (None, "") else str(val), f_text)
+                    ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
 
         # Summary bloki jadval ostida
-        srow = 5 + len(rows)
+        srow = first_data_row + len(rows) + 1
         for s in summary:
             ws.write(srow, 0, s["label"], f_sum_l)
             try:
@@ -151,9 +186,9 @@ class ReportBuilderExportAPIView(APIView):
                 ws.write(srow, 1, str(s["value"]), f_sum_v)
             srow += 1
 
-        ws.freeze_panes(4, 0)
+        ws.freeze_panes(first_data_row, 0)
         if rows:
-            ws.autofilter(3, 0, 3 + len(rows), last_col)
+            ws.autofilter(head_row, 0, head_row + len(rows), last_col)
         wb.close()
         output.seek(0)
 
