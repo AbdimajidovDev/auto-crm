@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db.models import F, OuterRef, Subquery, IntegerField, Sum
+from django.db.models import DecimalField, F, OuterRef, Subquery, Sum
 from django.db.models.functions import Coalesce
 from django_filters import rest_framework as filters
 from django_filters.rest_framework import DjangoFilterBackend
@@ -53,6 +53,8 @@ class InventoryResultService:
           umumiy qoldiq miqdori.
           Subquery orqali — kartezian xavfi yo'q.
         """
+        # DecimalField: quantity endi kasr (juft mahsulotda 0.5 qadam) bo'lishi mumkin
+        qty_field = DecimalField(max_digits=12, decimal_places=2)
         system_qty_sq = Coalesce(
             Subquery(
                 ProductBatch.objects
@@ -64,10 +66,10 @@ class InventoryResultService:
                 .values("product")  # GROUP BY product
                 .annotate(total=Sum("quantity"))
                 .values("total")[:1],
-                output_field=IntegerField(),
+                output_field=qty_field,
             ),
             0,
-            output_field=IntegerField(),
+            output_field=qty_field,
         )
 
         return (

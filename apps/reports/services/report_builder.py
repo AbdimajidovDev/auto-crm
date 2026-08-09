@@ -20,7 +20,7 @@ from decimal import Decimal
 
 from django.db.models import (
     Case, Count, DecimalField, Exists, ExpressionWrapper, F, IntegerField, OuterRef,
-    Q, Sum, Value, When,
+    Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce, TruncDate
 from django.utils import timezone
@@ -40,6 +40,7 @@ from apps.products.services.product_query_service import (
     apply_token_search,
 )
 from apps.sales.models import BankCard, Payment, Sale, SaleItem
+from apps.sales.profit import partial_cost_filter, sum_item_profit
 from apps.store.models import Store
 from apps.users.models.customers import Customer
 
@@ -92,16 +93,55 @@ PRODUCT_HISTORY_MAX_EVENTS = 2000
 # ─────────────────────────────────────────────
 #  Param parsing yordamchilari
 # ─────────────────────────────────────────────
-def _parse_dates(params) -> tuple[date, date]:
-    """from/to (ISO) — berilmasa oxirgi 30 kun."""
+# Sana tanlanmaganda "boshidan" chegarasi. Aniq sana kerak, chunki filtr
+# indeksdan foydalanadigan (sargable) oraliq bo'lib qolishi shart.
+ALL_TIME_START = date(2000, 1, 1)
+
+
+def _one_date(raw: str, field: str) -> date:
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise ValidationError({field: "ISO format: YYYY-MM-DD"})
+
+
+def _parse_dates(params, default_all: bool = False) -> tuple[date, date]:
+    """
+    from/to (ISO) sana oralig'i.
+
+    Bittasi berilmasa ham hisobot chiqadi:
+      - faqat from  → o'sha kundan bugungacha
+      - faqat to    → boshidan o'sha kungacha
+      - ikkalasi yo'q → default_all bo'lsa BOSHIDAN bugungacha (jami),
+                        aks holda oxirgi 30 kun
+    """
     today = timezone.localdate()
-    from_raw, to_raw = params.get("from"), params.get("to")
+    from_raw = (params.get("from") or "").strip()
+    to_raw = (params.get("to") or "").strip()
+
     if from_raw and to_raw:
-        try:
-            return date.fromisoformat(from_raw), date.fromisoformat(to_raw)
-        except ValueError:
-            raise ValidationError({"from/to": "ISO format: YYYY-MM-DD"})
+        return _one_date(from_raw, "from"), _one_date(to_raw, "to")
+    if from_raw:
+        return _one_date(from_raw, "from"), today
+    if to_raw:
+        return ALL_TIME_START, _one_date(to_raw, "to")
+    # Sana umuman tanlanmagan
+    if default_all:
+        return ALL_TIME_START, today
     return today - timedelta(days=30), today
+
+
+def _period_label(params, d_from: date, d_to: date) -> str:
+    """
+    Hisobot qaysi davrni qamraganini foydalanuvchiga aytadi — sana tanlanmagan
+    holatda "jami" ekani ko'rinib tursin (raqamlar sirli bo'lib qolmasin).
+    """
+    from_given = bool((params.get("from") or "").strip())
+    to_given = bool((params.get("to") or "").strip())
+    to_label = d_to.strftime("%d.%m.%Y")
+    if not from_given and d_from == ALL_TIME_START:
+        return f"Boshidan {to_label} gacha (jami)"
+    return f"{d_from.strftime('%d.%m.%Y')} — {to_label}" if to_given or from_given else to_label
 
 
 def _parse_as_of(params) -> date | None:
@@ -199,13 +239,31 @@ def _f_supplier():
 #  rows: dict ro'yxati (column key → qiymat)
 # ─────────────────────────────────────────────
 def _build_sales(params, store_id):
-    d_from, d_to = _parse_dates(params)
+    # Sana tanlanmasa — boshidan bugungacha JAMI (foydalanuvchi "hammasi"ni
+    # ko'rish uchun har safar sana tanlab o'tirmasin)
+    d_from, d_to = _parse_dates(params, default_all=True)
     start, end = _dt_bounds(d_from, d_to)
+    # Har chek uchun sof foyda — Subquery (JOIN emas): items bo'yicha aggregate
+    # asosiy queryset qatorlarini ko'paytirib, jami summalarni buzib yuborardi
+    profit_sq = (
+        SaleItem.objects
+        .filter(sale=OuterRef("pk"))
+        .values("sale")
+        .annotate(total=sum_item_profit())
+        .values("total")[:1]
+    )
     qs = (
         Sale.objects
         .filter(created_at__gte=start, created_at__lt=end)
         .filter(_store_q(store_id))
         .select_related("store", "customer", "seller")
+        .annotate(
+            net_profit=Coalesce(
+                Subquery(profit_sq, output_field=DecimalField()),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
+            )
+        )
     )
     payment_type = params.get("payment_type")
     if payment_type in PAYMENT_TYPE_LABELS:
@@ -226,6 +284,7 @@ def _build_sales(params, store_id):
         n=Count("id"),
         total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()),
         paid=Coalesce(Sum("paid_amount"), Value(Decimal("0")), output_field=DecimalField()),
+        profit=Coalesce(Sum("net_profit"), Value(Decimal("0")), output_field=DecimalField()),
     )
     columns = [
         {"key": "id", "label": "Chek №", "kind": "int"},
@@ -236,6 +295,7 @@ def _build_sales(params, store_id):
         {"key": "total", "label": "Jami", "kind": "money"},
         {"key": "paid", "label": "To'langan", "kind": "money"},
         {"key": "debt", "label": "Qarz", "kind": "money"},
+        {"key": "profit", "label": "Sof foyda", "kind": "money"},
         {"key": "payment", "label": "To'lov turi", "kind": "text"},
         {"key": "status", "label": "Holat", "kind": "text"},
     ]
@@ -250,16 +310,31 @@ def _build_sales(params, store_id):
             "total": _money(s.total_amount),
             "paid": _money(s.paid_amount),
             "debt": _money((s.total_amount or 0) - (s.paid_amount or 0)),
+            "profit": _money(getattr(s, "net_profit", 0)),
             "payment": PAYMENT_TYPE_LABELS.get(s.payment_type, s.payment_type),
             "status": SALE_STATUS_LABELS.get(s.status, s.status),
         }
 
+    revenue = agg["total"]
+    margin = (agg["profit"] / revenue * 100) if revenue else Decimal("0")
     summary = [
+        {"label": "Davr", "value": _period_label(params, d_from, d_to), "kind": "text"},
         {"label": "Sotuvlar soni", "value": agg["n"], "kind": "int"},
         {"label": "Jami summa", "value": _money(agg["total"]), "kind": "money"},
         {"label": "To'langan", "value": _money(agg["paid"]), "kind": "money"},
         {"label": "Qarz", "value": _money(agg["total"] - agg["paid"]), "kind": "money"},
+        {"label": "Sof foyda", "value": _money(agg["profit"]), "kind": "money"},
+        {"label": "Marja", "value": f"{margin:.1f}%", "kind": "text"},
     ]
+    # Tannarxi yo'q sotuvlar bo'lsa foyda oshiq ko'rinadi — jimgina o'tkazmaymiz
+    if SaleItem.objects.filter(
+        sale__in=qs.values("id"),
+    ).filter(partial_cost_filter()).exists():
+        summary.append({
+            "label": "Diqqat",
+            "value": "Ba'zi sotuvlarda tannarx yo'q — foyda taxminiy",
+            "kind": "text",
+        })
     return columns, qs, row, summary
 
 
@@ -267,7 +342,7 @@ def _build_top_products(params, store_id):
     d_from, d_to = _parse_dates(params)
     start, end = _dt_bounds(d_from, d_to)
     top_n = _parse_int(params, "top", 20, allowed={10, 20, 50, 100})
-    sort_by = params.get("sort_by") if params.get("sort_by") in ("quantity", "revenue") else "revenue"
+    sort_by = params.get("sort_by") if params.get("sort_by") in ("quantity", "revenue", "profit") else "revenue"
 
     qs = (
         SaleItem.objects
@@ -286,11 +361,12 @@ def _build_top_products(params, store_id):
     grouped = (
         qs.values("product_id", "product__name", "product__sku", "product__category__name")
         .annotate(
+            # DecimalField: quantity kasr bo'lishi mumkin (juft mahsulotda 0.5 qadam)
             sold_qty=Coalesce(
                 Sum(ExpressionWrapper(
-                    F("quantity") - F("returned_quantity"), output_field=IntegerField(),
+                    F("quantity") - F("returned_quantity"), output_field=DecimalField(),
                 )),
-                Value(0), output_field=IntegerField(),
+                Value(0), output_field=DecimalField(),
             ),
             revenue_sum=Coalesce(
                 Sum(ExpressionWrapper(
@@ -299,9 +375,14 @@ def _build_top_products(params, store_id):
                 )),
                 Value(Decimal("0")), output_field=DecimalField(),
             ),
+            # Sof foyda — sotuvlar hisoboti bilan aynan bir formula
+            profit_sum=sum_item_profit(),
         )
         .filter(sold_qty__gt=0)
-        .order_by("-sold_qty" if sort_by == "quantity" else "-revenue_sum")[:top_n]
+        .order_by(
+            "-sold_qty" if sort_by == "quantity"
+            else ("-profit_sum" if sort_by == "profit" else "-revenue_sum")
+        )[:top_n]
     )
     rows_raw = list(grouped)
     # Har mahsulotning (oxirgi kirimdagi) ta'minotchisi — qaysi ta'minotchidan
@@ -316,6 +397,7 @@ def _build_top_products(params, store_id):
         {"key": "supplier", "label": "Yetkazib beruvchi", "kind": "text"},
         {"key": "quantity", "label": "Sotilgan", "kind": "int"},
         {"key": "revenue", "label": "Daromad", "kind": "money"},
+        {"key": "profit", "label": "Sof foyda", "kind": "money"},
     ]
     rows = [
         {
@@ -326,13 +408,19 @@ def _build_top_products(params, store_id):
             "supplier": smap.get(r["product_id"]) or "-",
             "quantity": r["sold_qty"],
             "revenue": _money(r["revenue_sum"]),
+            "profit": _money(r["profit_sum"]),
         }
         for i, r in enumerate(rows_raw)
     ]
+    total_revenue = sum((Decimal(r["revenue"]) for r in rows), Decimal("0"))
+    total_profit = sum((Decimal(r["profit"]) for r in rows), Decimal("0"))
+    margin = (total_profit / total_revenue * 100) if total_revenue else Decimal("0")
     summary = [
         {"label": "Mahsulotlar", "value": len(rows), "kind": "int"},
         {"label": "Jami sotilgan", "value": sum(r["quantity"] for r in rows), "kind": "int"},
-        {"label": "Jami daromad", "value": _money(sum(Decimal(r["revenue"]) for r in rows)), "kind": "money"},
+        {"label": "Jami daromad", "value": _money(total_revenue), "kind": "money"},
+        {"label": "Sof foyda", "value": _money(total_profit), "kind": "money"},
+        {"label": "Marja", "value": f"{margin:.1f}%", "kind": "text"},
     ]
     return columns, rows, None, summary
 
@@ -350,7 +438,7 @@ def _build_products(params, store_id, forced_stock_status=None):
 
     agg = qs.aggregate(
         n=Count("id"),
-        stock=Coalesce(Sum("stock_qty"), Value(0), output_field=IntegerField()),
+        stock=Coalesce(Sum("stock_qty"), Value(0), output_field=DecimalField()),
     )
     columns = [
         {"key": "name", "label": "Mahsulot", "kind": "text"},
@@ -686,8 +774,8 @@ def _build_supplier_sales(params, store_id):
     grouped = (
         qs.values(*group_fields)
         .annotate(
-            sold_qty=Coalesce(Sum("quantity"), Value(0), output_field=IntegerField()),
-            returned_qty=Coalesce(Sum("returned_quantity"), Value(0), output_field=IntegerField()),
+            sold_qty=Coalesce(Sum("quantity"), Value(0), output_field=DecimalField()),
+            returned_qty=Coalesce(Sum("returned_quantity"), Value(0), output_field=DecimalField()),
             revenue_sum=Coalesce(
                 Sum(ExpressionWrapper(
                     F("unit_price") * (F("quantity") - F("returned_quantity")),
@@ -821,7 +909,7 @@ def _build_stock_leftovers(params, store_id):
     if as_of is None:
         agg = qs.aggregate(
             n=Count("id"),
-            qty=Coalesce(Sum("quantity"), Value(0), output_field=IntegerField()),
+            qty=Coalesce(Sum("quantity"), Value(0), output_field=DecimalField()),
             value=Coalesce(
                 Sum(ExpressionWrapper(
                     F("quantity") * F("purchase_price"), output_field=DecimalField(),
@@ -1046,7 +1134,11 @@ REPORTS = {
         "filters": lambda: [
             _f_daterange(), _f_store(), _f_supplier(), _f_category(),
             _f_select("top", "Nechta (TOP)", [("10", "Top 10"), ("20", "Top 20"), ("50", "Top 50"), ("100", "Top 100")]),
-            _f_select("sort_by", "Saralash", [("revenue", "Daromad bo'yicha"), ("quantity", "Miqdor bo'yicha")]),
+            _f_select("sort_by", "Saralash", [
+                ("revenue", "Daromad bo'yicha"),
+                ("quantity", "Miqdor bo'yicha"),
+                ("profit", "Sof foyda bo'yicha"),
+            ]),
         ],
     },
     "products": {

@@ -43,12 +43,14 @@ def _session_items_payload(session: PurchaseSession) -> list[dict]:
     payload = []
     for item in (session.items or []):
         try:
-            quantity = int(Decimal(str(item.get("quantity") or 0)))
+            # int() EMAS: juft mahsulotda 0.5 (yarim juft) kirim joiz — kasr saqlanadi,
+            # qadam validatsiyasi StockEntryItemSerializer'da (is_pair bo'yicha) bajariladi
+            quantity = Decimal(str(item.get("quantity") or 0))
         except (InvalidOperation, TypeError, ValueError):
-            quantity = 0
+            quantity = Decimal("0")
         payload.append({
             "product": item.get("product"),
-            "quantity": quantity,
+            "quantity": str(quantity),
             "purchase_price": str(item.get("purchase_price") or 0),
             "selling_price": str(item.get("selling_price") or 0),
             "wholesale_price": str(item.get("wholesale_price") or 0),

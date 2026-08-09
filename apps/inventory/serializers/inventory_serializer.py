@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.inventory.models import InventoryMovement, InventorySession
 
 
@@ -16,14 +17,14 @@ class InventoryDetailSerializer(serializers.Serializer):
     product_name = serializers.CharField(source="product.name")
     barcode = serializers.CharField()
 
-    declared = serializers.IntegerField(source="expected_quantity")
-    scanned = serializers.IntegerField(source="counted")
+    declared = QuantityField(source="expected_quantity")
+    scanned = QuantityField(source="counted")
 
-    sold_out = serializers.IntegerField()
-    returned = serializers.IntegerField()
-    transfer_out = serializers.IntegerField()
-    transfer_in = serializers.IntegerField()
-    entry = serializers.IntegerField()
+    sold_out = QuantityField()
+    returned = QuantityField()
+    transfer_out = QuantityField()
+    transfer_in = QuantityField()
+    entry = QuantityField()
 
     status = serializers.CharField()
     is_check = serializers.BooleanField()
@@ -62,7 +63,9 @@ class InventoryStartSerializer(serializers.Serializer):
 class InventoryCountSerializer(serializers.Serializer):
     session_id = serializers.IntegerField()
     product_id = serializers.IntegerField()
-    quantity = serializers.IntegerField(min_value=0)
+    # 0.5 qadam (yarim juft) qabul qilinadi; mahsulotga bog'liq butun-son
+    # talabi InventoryService.set_count/scan_product ichida tekshiriladi
+    quantity = QuantityField(min_value=0)
 
 
 class InventoryFinalizeSerializer(serializers.Serializer):
@@ -80,6 +83,7 @@ class InventoryMovementListSerializer(serializers.ModelSerializer):
     # ✅ YECHIM:
     # product_name = serializers.CharField(source="product.name", read_only=True)
     product_name = serializers.SerializerMethodField()
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = InventoryMovement

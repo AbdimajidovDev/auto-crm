@@ -1,12 +1,23 @@
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField, validate_quantity_step
 from apps.contract.models import StockEntryItem, StockEntryReturn, StockEntryReturnItem
 
 
 class StockEntryReturnItemInputSerializer(serializers.Serializer):
     """Bitta qaytariladigan satr: kirim satri + miqdor."""
-    entry_item = serializers.PrimaryKeyRelatedField(queryset=StockEntryItem.objects.all())
-    quantity = serializers.IntegerField(min_value=1)
+    entry_item = serializers.PrimaryKeyRelatedField(
+        queryset=StockEntryItem.objects.select_related("product")
+    )
+    quantity = QuantityField()
+
+    def validate(self, data):
+        # Juft mahsulotda 0.5 qadam, oddiyda faqat butun son
+        product = data["entry_item"].product
+        data["quantity"] = validate_quantity_step(
+            data["quantity"], is_pair=product.is_pair, product_name=product.name
+        )
+        return data
 
 
 class StockEntryReturnCreateSerializer(serializers.Serializer):
@@ -27,6 +38,7 @@ class StockEntryReturnItemListSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True, default="")
     sku = serializers.CharField(source="product.sku", read_only=True, default=None)
     barcode = serializers.CharField(source="product.barcode", read_only=True, default=None)
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = StockEntryReturnItem

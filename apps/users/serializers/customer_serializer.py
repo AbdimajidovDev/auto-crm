@@ -1,3 +1,4 @@
+from apps.common.quantity import QuantityField
 from apps.debts.models import CustomerDebt
 from apps.products.models import Product
 from apps.users.models.customers import Customer
@@ -76,6 +77,8 @@ def _debt_subquery(outer_ref: str = "pk") -> Coalesce: # Subquery
 class SaleItemSerializer(serializers.ModelSerializer):
     # product.name → select_related("product") sales queryset darajasida hal qilinadi.
     product_name = serializers.CharField(source="product.name", read_only=True)
+    # JSON'da raqam sifatida (string emas) — 0.5 (yarim juft) qiymatlar uchun
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = SaleItem

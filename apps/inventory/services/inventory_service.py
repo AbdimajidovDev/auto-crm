@@ -4,13 +4,24 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from apps.common.quantity import validate_quantity_step
 from apps.inventory.models import (
     InventorySession,
     InventorySnapshot,
     InventoryCount,
     InventoryMovement,
 )
-from apps.products.models import ProductBatch
+from apps.products.models import Product, ProductBatch
+
+
+def _validate_counted_quantity(product_id, quantity):
+    """Sanoq miqdorini mahsulot turiga (is_pair) qarab tekshiradi. 0 joiz."""
+    product = Product.objects.filter(id=product_id).only("name", "is_pair").first()
+    if product is None:
+        raise ValidationError("Mahsulot topilmadi")
+    return validate_quantity_step(
+        quantity, is_pair=product.is_pair, product_name=product.name, allow_zero=True
+    )
 
 
 class InventoryService:
@@ -79,6 +90,9 @@ class InventoryService:
         if session.status != InventorySession.Status.ACTIVE:
             raise ValidationError("Session yopilgan")
 
+        # Qadam: juft mahsulotda 0.5, oddiyda faqat butun son
+        quantity = _validate_counted_quantity(product_id, quantity)
+
         obj, _ = InventoryCount.objects.get_or_create(
             session=session,
             product_id=product_id,
@@ -99,6 +113,9 @@ class InventoryService:
 
         if session.status != "active":
             raise ValidationError("Session yopilgan")
+
+        # Qadam: juft mahsulotda 0.5, oddiyda faqat butun son
+        quantity = _validate_counted_quantity(product_id, quantity)
 
         # Sessiya boshlangandan keyin do'konga kirim qilingan mahsulotning
         # count/snapshot qatori bo'lmaydi — `get()` bunda 500 berardi.

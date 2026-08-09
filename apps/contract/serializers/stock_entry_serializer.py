@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from rest_framework import serializers
+from apps.common.quantity import QuantityField, validate_quantity_step
 from apps.store.models import Store
 from apps.contract.models import Supplier, StockEntry, StockEntryItem, StockEntryPayment
 from apps.products.models import Product
@@ -11,7 +12,8 @@ class StockEntryItemSerializer(serializers.Serializer):
     product = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE)
     )
-    quantity = serializers.IntegerField()
+    # 0.5 qadam (yarim juft) — faqat is_pair mahsulotlar uchun (validate() da tekshiriladi)
+    quantity = QuantityField()
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     selling_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     wholesale_price = serializers.DecimalField(
@@ -19,8 +21,12 @@ class StockEntryItemSerializer(serializers.Serializer):
     )
 
     def validate(self, data):
-        if data["quantity"] <= 0:
-            raise serializers.ValidationError("Quantity > 0 bo'lishi kerak")
+        # >0 va qadam (juft mahsulotda 0.5, oddiyda butun son) birgalikda tekshiriladi
+        data["quantity"] = validate_quantity_step(
+            data["quantity"],
+            is_pair=data["product"].is_pair,
+            product_name=data["product"].name,
+        )
         if data["purchase_price"] <= 0:
             raise serializers.ValidationError("Purchase price noto'g'ri")
         if data["selling_price"] <= 0:
@@ -160,6 +166,7 @@ class StockEntryItemListSerializer(serializers.ModelSerializer):
     shtrix_code = serializers.SerializerMethodField()
     sku = serializers.SerializerMethodField()
     product_name = serializers.SerializerMethodField()
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = StockEntryItem

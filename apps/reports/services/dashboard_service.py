@@ -255,7 +255,8 @@ class TopPartsService:
             qs
             .values("product_id", "product__name")
             .annotate(
-                sold=Coalesce(Sum("quantity"),   Value(0), output_field=IntegerField()),
+                # DecimalField: quantity kasr bo'lishi mumkin (juft mahsulotda 0.5 qadam)
+                sold=Coalesce(Sum("quantity"),   Value(0), output_field=DecimalField()),
                 rev =Coalesce(Sum("total_price"), Value(Decimal("0")), output_field=DecimalField()),
             )
             .order_by("-sold")

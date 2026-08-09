@@ -36,6 +36,7 @@ from apps.contract.models import (
     SupplierTransaction,
 )
 from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
+from apps.sales.profit import sum_item_profit
 from apps.store.models import Store
 from ...debts.models import CustomerDebt
 
@@ -195,32 +196,17 @@ class SummaryService:
             ),
         )
 
-        # Foyda: (unit_price - purchase_price) * quantity
-        # purchase_price NULL bo'lsa Coalesce(0) bilan xavfsiz hisoblash
+        # Sof foyda — apps.sales.profit dagi YAGONA formula:
+        # (sotuv narxi - tannarx) × (miqdor - qaytarilgan) - chekdagi chegirma ulushi.
+        # Barcha hisobot/statistika sahifalarida aynan shu hisob ishlatiladi.
         start, end = _dt_bounds(date_from, date_to)
         items_qs = (
             SaleItem.objects
-            .filter(
-                sale__created_at__gte=start,
-                sale__created_at__lt=end,
-                sale__status__in=[Sale.Status.PAID, Sale.Status.PARTIAL],
-            )
+            .filter(sale__created_at__gte=start, sale__created_at__lt=end)
+            .exclude(sale__status=Sale.Status.RETURNED)
             .filter(_store_q(store_id, "sale__store_id"))
         )
-        total_profit = items_qs.aggregate(
-            profit=Coalesce(
-                Sum(
-                    ExpressionWrapper(
-                        (F("unit_price") - Coalesce(
-                            F("purchase_price"),
-                            Value(Decimal("0"), output_field=DecimalField()),
-                        )) * F("quantity"),
-                        output_field=DecimalField(),
-                    )
-                ),
-                Value(Decimal("0")), output_field=DecimalField(),
-            )
-        )["profit"]
+        total_profit = items_qs.aggregate(profit=sum_item_profit())["profit"]
 
         revenue = agg["total_revenue"]
         orders  = agg["total_orders"] or 0
@@ -328,7 +314,8 @@ class TopProductsService:
             .filter(_store_q(store_id, "sale__store_id"))
             .values("product_id", "product__name", "product__category__name")
             .annotate(
-                totalSold=Coalesce(Sum("quantity"), Value(0)),
+                # output_field majburiy: quantity endi Decimal (0.5 qadam), 0 esa butun son
+                totalSold=Coalesce(Sum("quantity"), Value(0), output_field=DecimalField()),
                 totalRevenue=Coalesce(
                     Sum("total_price"),
                     Value(Decimal("0")), output_field=DecimalField(),

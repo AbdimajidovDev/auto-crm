@@ -83,7 +83,8 @@ class WriteOffItem(models.Model):
         on_delete=models.PROTECT,
     )
 
-    quantity = models.PositiveIntegerField()
+    # Decimal: juft mahsulot yarim (0.5) qadam bilan hisobdan chiqarilishi mumkin
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
 
     # Hisobdan chiqarilgan paytdagi narxlar (batchdan olinadi) — tarix uchun saqlanadi.
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)

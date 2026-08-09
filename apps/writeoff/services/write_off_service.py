@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import F
 from rest_framework.exceptions import ValidationError
 
+from apps.common.quantity import validate_quantity_step
 from apps.products.models import ProductBatch
 from apps.writeoff.models import WriteOff, WriteOffItem
 
@@ -34,13 +35,14 @@ class WriteOffService:
             raise ValidationError("Hech bo'lmaganda bitta mahsulot kerak.")
 
         # 1. Mahsulot satrlarini birlashtiramiz (bitta mahsulot ikki marta kelsa — yig'amiz)
+        # Qadam: juft mahsulotda (is_pair) 0.5, oddiyda faqat butun son
         merged = {}
         for it in items:
             product = it["product"]
-            qty = it["quantity"]
-            if qty <= 0:
-                raise ValidationError(f"{product.name}: miqdor 0 dan katta bo'lishi kerak.")
-            merged[product.id] = merged.get(product.id, 0) + qty
+            qty = validate_quantity_step(
+                it["quantity"], is_pair=product.is_pair, product_name=product.name
+            )
+            merged[product.id] = merged.get(product.id, Decimal("0")) + qty
 
         product_ids = list(merged.keys())
 

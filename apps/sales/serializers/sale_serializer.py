@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
+from apps.common.quantity import QuantityField
 from apps.sales.models import (
     BankCard,
     Sale,
@@ -36,11 +37,16 @@ class SaleItemSerializer(serializers.ModelSerializer):
     # ✅ YAXSHI: `SerializerMethodField` o'rniga `source="product.name"` ishlatilgan.
     product_name = serializers.CharField(source="product.name", read_only=True)
     sku = serializers.CharField(source="product.sku", read_only=True, default=None)
+    # Juft mahsulot (0.5 qadam) — qaytarish UI shu flag bo'yicha qadam tanlaydi
+    is_pair = serializers.BooleanField(source="product.is_pair", read_only=True)
+    # JSON'da raqam sifatida chiqadi (string emas) — client arifmetikasi uchun
+    quantity = QuantityField(read_only=True)
+    returned_quantity = QuantityField(read_only=True)
 
     class Meta:
         model = SaleItem
         fields = (
-            "id", "product", "product_name", "sku",
+            "id", "product", "product_name", "sku", "is_pair",
             "quantity", "unit_price", "total_price",
             "returned_quantity",
         )
@@ -156,7 +162,9 @@ class SaleListSerializer(serializers.ModelSerializer):
 
 class SaleItemInputSerializer(serializers.Serializer):
     product = serializers.IntegerField()
-    quantity = serializers.IntegerField()
+    # 0.5 qadam (yarim juft) qabul qilinadi; mahsulot juft emasligi
+    # tekshiruvi SaleService.create_sale ichida (Product.is_pair bo'yicha)
+    quantity = QuantityField()
     price = serializers.DecimalField(max_digits=12, decimal_places=2)
 
     def validate(self, data):

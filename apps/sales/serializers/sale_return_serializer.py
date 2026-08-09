@@ -1,12 +1,15 @@
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.sales.models import Payment, SaleReturn, SaleReturnItem
 from apps.sales.serializers.sale_serializer import PaymentInputSerializer, PaymentSerializer
 
 
 class SaleReturnItemInputSerializer(serializers.Serializer):
     sale_item = serializers.IntegerField()
-    quantity = serializers.IntegerField()
+    # 0.5 qadam (yarim juft) qabul qilinadi; mahsulotga bog'liq tekshiruv
+    # SaleReturnService ichida (sale_item.product.is_pair bo'yicha)
+    quantity = QuantityField()
 
 
 class SaleReturnCreateSerializer(serializers.Serializer):
@@ -28,6 +31,7 @@ class SaleReturnItemSerializer(serializers.ModelSerializer):
     # ✅ YECHIM:
     # product_name = serializers.CharField(source="product.name", read_only=True)
     product_name = serializers.SerializerMethodField()
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = SaleReturnItem

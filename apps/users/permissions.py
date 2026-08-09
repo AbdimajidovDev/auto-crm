@@ -22,21 +22,32 @@ ACTION_LABELS = {
     "edit": "Tahrirlash",
     "delete": "O'chirish",
     "archive": "Arxivlash",
+    # Maxsus (CRUD'dan tashqari) amallar — har biri rolda alohida boshqariladi
+    "import": "Excel import",
+    "return": "Qaytim",
+    "approve": "Tasdiqlash / rad etish",
+    "adjust": "Miqdor to'g'irlash",
+    "finalize": "Yakunlash",
+    "cancel": "Bekor qilish",
+    "pay": "To'lov",
 }
 
 # Modul -> ruxsat etiladigan amallar. Frontend menyulari va API prefikslari
 # shu modullarga bog'lanadi (core/middleware/rbac.py dagi PATH_MODULE_MAP).
 PERMISSION_CATALOG = [
     {"module": "dashboard",  "label": "Boshqaruv paneli",     "actions": ["view"]},
-    {"module": "products",   "label": "Mahsulotlar",          "actions": ["view", "create", "edit", "delete", "archive"]},
+    {"module": "products",   "label": "Mahsulotlar",          "actions": ["view", "create", "edit", "delete", "archive", "import"]},
     {"module": "categories", "label": "Kategoriyalar",        "actions": ["view", "create", "edit", "delete"]},
-    {"module": "sales",      "label": "Sotuvlar",             "actions": ["view", "create", "edit", "delete"]},
-    {"module": "inventory",  "label": "Inventarizatsiya",     "actions": ["view", "create", "edit"]},
-    {"module": "stockentry", "label": "Xarid (kirim)",        "actions": ["view", "create", "edit", "delete"]},
-    {"module": "transfers",  "label": "Transferlar",          "actions": ["view", "create", "edit", "delete"]},
+    {"module": "sales",      "label": "Sotuvlar",             "actions": ["view", "create", "edit", "delete", "return", "archive"]},
+    {"module": "inventory",  "label": "Inventarizatsiya",     "actions": ["view", "create", "edit", "adjust", "finalize", "cancel"]},
+    {"module": "stockentry", "label": "Xarid (kirim)",        "actions": ["view", "create", "edit", "delete", "import", "return", "pay"]},
+    {"module": "transfers",  "label": "Transferlar",          "actions": ["view", "create", "edit", "delete", "approve"]},
     {"module": "writeoff",   "label": "Spisaniye",            "actions": ["view", "create", "edit", "delete"]},
     {"module": "customers",  "label": "Mijozlar",             "actions": ["view", "create", "edit", "delete"]},
-    {"module": "debts",      "label": "Qarzlar",              "actions": ["view", "create", "edit", "delete"]},
+    # Qarzlar moduli endpointlari faqat to'lov qabul qilish + ro'yxatlar —
+    # shuning uchun amallar view/pay (eski create/edit/delete kodlari
+    # 0009 migratsiyasida pay ga ko'chirilgan)
+    {"module": "debts",      "label": "Qarzlar",              "actions": ["view", "pay"]},
     {"module": "suppliers",  "label": "Yetkazib beruvchilar", "actions": ["view", "create", "edit", "delete"]},
     {"module": "stores",     "label": "Do'konlar",            "actions": ["view", "create", "edit", "delete"]},
     {"module": "reports",    "label": "Hisobotlar",           "actions": ["view"]},

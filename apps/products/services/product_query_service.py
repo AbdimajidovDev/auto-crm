@@ -7,6 +7,7 @@ natija bilan eksport qilingan fayl doim bir xil bo'lishi kafolatlanadi.
 
 from django.db.models import (
     Case,
+    DecimalField,
     Exists,
     IntegerField,
     OuterRef,
@@ -105,6 +106,8 @@ def annotate_stock_qty(queryset, store_id=None, only_in_store=True):
             store_id=int(store_id),
             is_active=True,
         )
+        # output_field majburiy: quantity endi Decimal (juft mahsulotda 0.5 qadam),
+        # 0 esa butun son — aralash tiplarda Django FieldError beradi
         annotated = queryset.annotate(
             stock_qty=Coalesce(
                 Subquery(
@@ -114,6 +117,7 @@ def annotate_stock_qty(queryset, store_id=None, only_in_store=True):
                     .values("total")[:1]
                 ),
                 0,
+                output_field=DecimalField(max_digits=12, decimal_places=2),
             )
         )
         if only_in_store:
@@ -133,6 +137,7 @@ def annotate_stock_qty(queryset, store_id=None, only_in_store=True):
                 .values("total")[:1]
             ),
             0,
+            output_field=DecimalField(max_digits=12, decimal_places=2),
         )
     )
 

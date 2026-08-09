@@ -189,7 +189,8 @@ class StockEntryItem(models.Model):
         "products.Product",
         on_delete=models.PROTECT
     )
-    quantity = models.PositiveIntegerField()
+    # Decimal: juft mahsulot yarim (0.5) qadam bilan kirim qilinishi mumkin
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
     wholesale_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
@@ -261,7 +262,8 @@ class StockEntryReturnItem(models.Model):
         "products.Product",
         on_delete=models.PROTECT,
     )
-    quantity = models.PositiveIntegerField()
+    # Decimal: yarim juft (0.5) ta'minotchiga qaytarilishi mumkin
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     # Kirimdagi olish narxi (qaytim shu narxda hisoblanadi)
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     amount = models.DecimalField(max_digits=15, decimal_places=2)

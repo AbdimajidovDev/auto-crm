@@ -191,11 +191,12 @@ class SaleItem(models.Model):
     # sotilgan mahsulot avval arxivlanadi, butunlay o'chirish esa bloklanadi
     product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
 
-    quantity = models.PositiveIntegerField()
+    # Decimal: juft mahsulot (is_pair) yarim juft (0.5) qadam bilan sotiladi
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     purchase_price = models.DecimalField(max_digits=20, decimal_places=2, null=True, blank=True)
     unit_price = models.DecimalField(max_digits=20, decimal_places=2)
     total_price = models.DecimalField(max_digits=20, decimal_places=2)
-    returned_quantity = models.PositiveIntegerField(default=0)
+    returned_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
 
 
@@ -323,7 +324,8 @@ class SaleReturnItem(models.Model):
 
     product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
 
-    quantity = models.PositiveIntegerField()
+    # Decimal: yarim juft (0.5) qaytarilishi mumkin
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     unit_price = models.DecimalField(max_digits=20, decimal_places=2)
     total_price = models.DecimalField(max_digits=20, decimal_places=2)
 

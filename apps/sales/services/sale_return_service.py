@@ -4,6 +4,7 @@ from django.db import transaction
 from django.db.models import F, Sum
 from rest_framework.exceptions import NotFound, ValidationError
 
+from apps.common.quantity import validate_quantity_step
 from apps.common.store_scope import ensure_store_access
 from apps.debts.services import DebtService
 from apps.inventory.models import InventorySession, InventoryMovement
@@ -24,7 +25,9 @@ class SaleReturnService:
             sale = (
                 Sale.objects
                 .select_for_update()
-                .prefetch_related("items")
+                # items__product: qadam validatsiyasi (is_pair) va batch yangilash
+                # product obyektiga muhtoj — N+1 bo'lmasin
+                .prefetch_related("items__product")
                 .get(id=data["sale"])
             )
         except Sale.DoesNotExist:
@@ -56,7 +59,17 @@ class SaleReturnService:
         merged_items = {}
         for raw in data["items"]:
             item_id = raw["sale_item"]
-            merged_items[item_id] = merged_items.get(item_id, 0) + raw["quantity"]
+            merged_items[item_id] = merged_items.get(item_id, Decimal("0")) + Decimal(str(raw["quantity"]))
+
+        # Miqdor qadami: juft mahsulotda 0.5, oddiyda faqat butun son
+        for item_id, qty in merged_items.items():
+            sale_item = sale_items_map.get(item_id)
+            if sale_item is not None:
+                merged_items[item_id] = validate_quantity_step(
+                    qty,
+                    is_pair=sale_item.product.is_pair,
+                    product_name=sale_item.product.name,
+                )
 
         # Sotuv darajasidagi chegirma har bir qatorga proportsional taqsimlanadi:
         # mijoz chegirma bilan to'lagan, demak qaytarim ham chegirmali bo'lishi kerak.

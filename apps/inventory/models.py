@@ -40,7 +40,8 @@ class InventorySnapshot(TimestampMixin):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     store = models.ForeignKey(Store, on_delete=models.CASCADE)
 
-    expected_quantity = models.IntegerField()  # startdagi stock
+    # Decimal: juft mahsulot qoldig'i kasr (0.5 qadam) bo'lishi mumkin
+    expected_quantity = models.DecimalField(max_digits=12, decimal_places=2)  # startdagi stock
 
     class Meta:
         db_table = "inventory_snapshot"
@@ -61,7 +62,7 @@ class InventoryCount(TimestampMixin):
     session = models.ForeignKey("InventorySession", on_delete=models.CASCADE, related_name="counts")
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
 
-    counted_quantity = models.IntegerField(default=0)
+    counted_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     is_check = models.BooleanField(default=False)
     # Javon AYNAN qachon sanalgani. finalize() faqat shu vaqtdan KEYINGI
@@ -86,7 +87,7 @@ class InventoryMovement(TimestampMixin):
     session = models.ForeignKey(InventorySession, on_delete=models.CASCADE, related_name="movements")
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
 
     type = models.CharField(max_length=20, choices=Type.choices)
 
@@ -106,13 +107,69 @@ class InventoryAdjustment(TimestampMixin):
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
 
-    difference = models.IntegerField()
+    difference = models.DecimalField(max_digits=12, decimal_places=2)
 
     class Meta:
         db_table = "inventory_adjustment"
         indexes = [
             models.Index(fields=["session"]),
         ]
+
+
+class StockAdjustment(TimestampMixin):
+    """
+    Bitta mahsulot qoldig'ini TO'LIQ inventarizatsiyasiz to'g'irlash yozuvi.
+
+    Inventarizatsiya sessiyasidan farqi: butun do'kon emas, faqat bitta
+    (do'kon, mahsulot) juftligi uchun qoldiq yangi qiymatga o'rnatiladi.
+    Stock (ProductBatch.quantity) StockAdjustmentService ichida o'zgartiriladi;
+    bu model — kim, qachon, nechadan nechaga va nima sababdan o'zgartirgani
+    haqidagi o'chmas tarix/audit yozuvi.
+    """
+
+    class Reason(models.TextChoices):
+        RECOUNT = "recount", "Qayta sanash"
+        DATA_ERROR = "data_error", "Xato kiritilgan ma'lumot"
+        DAMAGED = "damaged", "Buzilgan / yaroqsiz"
+        FOUND = "found", "Topilgan tovar"
+        OTHER = "other", "Boshqa"
+
+    store = models.ForeignKey(
+        Store, on_delete=models.PROTECT, related_name="stock_adjustments"
+    )
+    product = models.ForeignKey(
+        Product, on_delete=models.PROTECT, related_name="stock_adjustments"
+    )
+
+    # Decimal: juft mahsulot qoldig'i kasr (0.5 qadam) bo'lishi mumkin
+    old_quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    new_quantity = models.DecimalField(max_digits=12, decimal_places=2)
+    # new_quantity - old_quantity (musbat — qoldiq oshgan, manfiy — kamaygan)
+    difference = models.DecimalField(max_digits=12, decimal_places=2)
+
+    reason = models.CharField(
+        max_length=20, choices=Reason.choices, default=Reason.RECOUNT, db_index=True
+    )
+    comment = models.TextField(blank=True, default="")
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="stock_adjustments",
+    )
+
+    class Meta:
+        db_table = "stock_adjustment"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["store", "product"]),
+            models.Index(fields=["-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Adjustment {self.store_id}/{self.product_id}: {self.old_quantity} -> {self.new_quantity}"
 
 
 class LowStockItem(TimestampMixin):
@@ -138,7 +195,7 @@ class LowStockItem(TimestampMixin):
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="low_stock_items")
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="low_stock_items")
 
-    current_quantity = models.IntegerField()
+    current_quantity = models.DecimalField(max_digits=12, decimal_places=2)
     min_stock = models.PositiveIntegerField()
 
     action_type = models.CharField(max_length=10, choices=ActionType.choices)

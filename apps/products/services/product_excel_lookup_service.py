@@ -59,11 +59,14 @@ def _cell_text(value) -> str:
     return str(value).strip()
 
 
-def _parse_qty(value) -> int:
+def _parse_qty(value) -> float:
+    """Miqdor: kasr qabul qilinadi va 0.5 qadamga yaxlitlanadi (yarim juft).
+    int() bilan kesilmaydi — juft mahsulotda 2.5 juft yozilgan bo'lishi mumkin."""
     try:
-        qty = int(float(str(value).replace(",", ".").strip()))
+        qty = float(str(value).replace(",", ".").strip())
     except (TypeError, ValueError):
         return 0
+    qty = round(qty * 2) / 2
     return max(qty, 0)
 
 

@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from rest_framework.generics import get_object_or_404
 
+from apps.common.quantity import validate_items_quantity_steps
 from apps.inventory.services.inventory_hooks_service import handle_sale_item
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.sales.services.payment_service import SalePaymentService
@@ -72,16 +73,24 @@ class SaleService:
         # Arxivlangan (status!='a') mahsulot sotilmaydi — POS keshi eskirgan
         # bo'lsa ham server darajasida bloklanadi
         sale_product_ids = [item["product"] for item in items_data]
-        archived_names = list(
-            Product.objects
-            .filter(id__in=sale_product_ids)
-            .exclude(status=Product.ProductStatus.ACTIVE)
-            .values_list("name", flat=True)
-        )
+        sale_products = {
+            p.id: p
+            for p in Product.objects.filter(id__in=sale_product_ids).only(
+                "id", "name", "status", "is_pair"
+            )
+        }
+        archived_names = [
+            p.name for p in sale_products.values()
+            if p.status != Product.ProductStatus.ACTIVE
+        ]
         if archived_names:
             raise ValidationError(
                 f"Arxivlangan mahsulotni sotib bo'lmaydi: {', '.join(archived_names)}"
             )
+
+        # Miqdor qadami: juft mahsulotda (is_pair) 0.5, oddiyda faqat butun son.
+        # Qiymatlar Decimal ga normallashtiriladi (0.5 × narx aniq hisoblanadi).
+        validate_items_quantity_steps(items_data, sale_products)
 
         sale = Sale.objects.create(
             store=store,

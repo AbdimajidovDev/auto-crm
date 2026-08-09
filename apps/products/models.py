@@ -73,6 +73,11 @@ class Product(TimestampMixin):
     # PositiveIntegerField => DB-level non-negative guarantee (CHECK constraint).
     min_stock = models.PositiveIntegerField(default=0)
 
+    # Juft mahsulot (masalan fara: 2 dona = 1 juft). True bo'lsa miqdor 0.5
+    # qadam bilan kiritiladi/sotiladi (0.5 = yarim juft, narxi ham shunga
+    # proportsional). Qoidalar apps.common.quantity da markazlashgan.
+    is_pair = models.BooleanField(default=False)
+
     def get_category_prefix(self):
         if not self.category:
             return "PRD"
@@ -155,7 +160,9 @@ class ProductBatch(TimestampMixin):
     location = models.ForeignKey("ProductLocation", on_delete=models.PROTECT, blank=True, null=True)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='batches')
     store = models.ForeignKey(Store, on_delete=models.CASCADE)
-    quantity = models.IntegerField()
+    # Decimal: juft mahsulotlar yarim (0.5) qadam bilan sotilishi mumkin,
+    # shuning uchun qoldiq kasr bo'lishi mumkin (masalan 9.5 juft)
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
     wholesale_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)

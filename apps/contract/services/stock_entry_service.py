@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db.models import F
+from apps.common.quantity import validate_items_quantity_steps
 from apps.inventory.services.inventory_hooks_service import handle_stock_entry
 from apps.products.models import ProductBatch
 from apps.contract.models import StockEntry, StockEntryItem, StockEntryPayment, SupplierTransaction
@@ -38,6 +39,11 @@ class StockEntryService:
     @transaction.atomic
     def create_entry(*, supplier, store, items, user, payments=None,
                      cash_amount=0, card_amount=0, bank_card=None, note=""):
+        # Miqdor qadami: juft mahsulotda (is_pair) 0.5, oddiyda faqat butun son.
+        # Serializer oqimi buni allaqachon tekshirgan, lekin Excel import va boshqa
+        # to'g'ridan-to'g'ri chaqiruvlar ham shu yerdan o'tadi — markaziy nazorat.
+        validate_items_quantity_steps(items, {})
+
         total_entry_amount = sum(
             item["purchase_price"] * item["quantity"] for item in items
         )

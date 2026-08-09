@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.products.models import ProductBatch, ProductUnitMeasurement, ProductLocation, Product
 
 
@@ -8,6 +9,9 @@ class ProductBatchSearchSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name")
     category_name = serializers.CharField(source="product.category.name")
     store_name = serializers.CharField(source="store.name")
+    # POS yarim juft sotishga ruxsatni shu flag orqali biladi
+    is_pair = serializers.BooleanField(source="product.is_pair", read_only=True)
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = ProductBatch
@@ -21,7 +25,8 @@ class ProductBatchSearchSerializer(serializers.ModelSerializer):
             "quantity",
             "selling_price",
             "barcode",
-            "location"
+            "location",
+            "is_pair",
         )
 
 
@@ -66,7 +71,7 @@ from rest_framework import serializers
 class StoreQuantitySerializer(serializers.Serializer):
     store_id = serializers.IntegerField()
     store_name = serializers.CharField()
-    quantity = serializers.IntegerField()
+    quantity = QuantityField()
 
 
 class ProductBatchListSerializer(serializers.ModelSerializer):
@@ -89,6 +94,7 @@ class ProductBatchListSerializer(serializers.ModelSerializer):
             "name",
             "unit_measurement",
             "description",
+            "is_pair",
             # "selling_price",
             "my_quantity",
             "other_stores",

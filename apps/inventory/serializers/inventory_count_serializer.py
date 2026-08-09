@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.inventory.models import InventoryCount
 
 # ═══════════════════════════════════════════════
@@ -27,8 +28,9 @@ class InventoryCountSerializer(serializers.ModelSerializer):
                                              default=None)
 
     # Annotate dan keladigan maydonlar
-    system_quantity = serializers.IntegerField(read_only=True)
-    diff = serializers.IntegerField(read_only=True)
+    system_quantity = QuantityField(read_only=True)
+    diff = QuantityField(read_only=True)
+    counted_quantity = QuantityField(read_only=True)
 
     class Meta:
         model = InventoryCount

@@ -1,6 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
 from apps.products.utils.barcode_utility import normalize_barcode, generate_barcode_image
 
@@ -106,7 +107,7 @@ class ProductBatchListSerializer(serializers.Serializer):
     store_name     = serializers.CharField()
     location       = serializers.IntegerField(allow_null=True)
     location_name  = serializers.CharField(allow_null=True)
-    quantity       = serializers.IntegerField()
+    quantity       = QuantityField()
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     selling_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     wholesale_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
@@ -138,6 +139,7 @@ class ProductListSerializer(serializers.ModelSerializer):
             "unit_measurement", "unit_measurement_name",
             "description",
             "min_stock",
+            "is_pair",
             "status",
             "created_at",
             "images",
@@ -288,6 +290,7 @@ class ProductCreateSerializer(serializers.ModelSerializer):
             'description_uz',
             'description_uz_cyrl',
             'min_stock',
+            'is_pair',
             'barcode',
             'sku',
             'images'
@@ -408,6 +411,7 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "min_stock",
+            "is_pair",
             "barcode",
             "sku",
             "status",

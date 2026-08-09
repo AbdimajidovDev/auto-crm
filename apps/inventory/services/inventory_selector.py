@@ -1,6 +1,6 @@
 from django.shortcuts import get_object_or_404
 
-from django.db.models import Sum, Q, Exists, OuterRef, F
+from django.db.models import DecimalField, Sum, Q, Exists, OuterRef, F
 from django.db.models.functions import Coalesce
 
 from apps.inventory.models import (
@@ -136,6 +136,9 @@ class InventorySelector:
         }
 
         # 1 query: InventoryMovement conditional aggregation (5 subquery o'rniga bitta GROUP BY)
+        # output_field majburiy: quantity endi Decimal (0.5 qadam), 0 esa butun son —
+        # aralash tiplarda Django FieldError beradi
+        qty_field = DecimalField(max_digits=12, decimal_places=2)
         T = InventoryMovement.Type
         move_map = {
             m["product_id"]: m
@@ -143,11 +146,11 @@ class InventorySelector:
             .filter(session_id=session_id, product_id__in=product_ids)
             .values("product_id")
             .annotate(
-                sold_out=Coalesce(Sum("quantity", filter=Q(type=T.SALE)), 0),
-                returned=Coalesce(Sum("quantity", filter=Q(type=T.RETURN)), 0),
-                transfer_out=Coalesce(Sum("quantity", filter=Q(type=T.TRANSFER_OUT)), 0),
-                transfer_in=Coalesce(Sum("quantity", filter=Q(type=T.TRANSFER_IN)), 0),
-                entry=Coalesce(Sum("quantity", filter=Q(type=T.ENTRY)), 0),
+                sold_out=Coalesce(Sum("quantity", filter=Q(type=T.SALE)), 0, output_field=qty_field),
+                returned=Coalesce(Sum("quantity", filter=Q(type=T.RETURN)), 0, output_field=qty_field),
+                transfer_out=Coalesce(Sum("quantity", filter=Q(type=T.TRANSFER_OUT)), 0, output_field=qty_field),
+                transfer_in=Coalesce(Sum("quantity", filter=Q(type=T.TRANSFER_IN)), 0, output_field=qty_field),
+                entry=Coalesce(Sum("quantity", filter=Q(type=T.ENTRY)), 0, output_field=qty_field),
             )
         }
 

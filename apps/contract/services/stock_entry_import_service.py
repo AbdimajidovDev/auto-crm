@@ -279,7 +279,7 @@ class StockEntryImportService:
                 skipped.append({"row": row_num, "reason": "mahsulot identifikatori yo'q (barcode/sku/nom)"})
                 continue
 
-            quantity, err = cls._parse_int(cls._cell(row, col["quantity"]))
+            quantity, err = cls._parse_quantity(cls._cell(row, col["quantity"]))
             if err:
                 skipped.append({"row": row_num, "reason": f"miqdor: {err}"})
                 continue
@@ -535,15 +535,19 @@ class StockEntryImportService:
         return all(StockEntryImportService._cell(row, idx) == "" for idx in col.values())
 
     @staticmethod
-    def _parse_int(value: str):
+    def _parse_quantity(value: str):
+        """Miqdor: kasr (0.5 qadam — yarim juft) qabul qilinadi; int() bilan KESILMAYDI.
+        Mahsulot juft emasligi (butun son talabi) StockEntryService.create_entry da tekshiriladi."""
         if value == "":
             return None, "bo'sh"
         try:
-            parsed = int(float(value))
-        except (ValueError, TypeError):
+            parsed = Decimal(str(value).replace(" ", "").replace(",", "."))
+        except (InvalidOperation, ValueError, TypeError):
             return None, "raqam emas"
         if parsed <= 0:
             return None, "0 dan katta bo'lishi kerak"
+        if (parsed * 2) % 1 != 0:
+            return None, "0.5 ga karrali bo'lishi kerak"
         return parsed, None
 
     @staticmethod

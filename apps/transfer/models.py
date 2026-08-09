@@ -43,7 +43,8 @@ class StockTransferItem(models.Model):
     stock_transfer = models.ForeignKey("StockTransfer", on_delete=models.CASCADE,related_name="items")
     # PROTECT: mahsulot o'chirilganda transfer tarixi qatorlari yo'qolmasin
     product = models.ForeignKey("products.Product", on_delete=models.PROTECT)
-    quantity = models.PositiveIntegerField()
+    # Decimal: juft mahsulot yarim (0.5) qadam bilan ko'chirilishi mumkin
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
     created_at = models.DateTimeField(auto_now_add=True)

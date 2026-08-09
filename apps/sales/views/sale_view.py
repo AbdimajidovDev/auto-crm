@@ -16,6 +16,7 @@ from apps.common.i18n import tr
 from apps.common.paginations import StandardPagination
 from apps.debts.models import CustomerDebt
 from apps.sales.models import Sale, SaleItem, Payment, SaleReturn, SaleReturnItem
+from apps.sales.profit import partial_cost_filter, sum_item_profit
 from apps.sales.serializers import SaleCreateSerializer, SaleListSerializer, CustomerDebtListSerializer
 from apps.sales.services import SaleService
 from django.db.models import Q
@@ -258,6 +259,15 @@ class SaleStatisticsAPIView(APIView):
             total_paid=Coalesce(Sum("paid_amount"), Value(0, output_field=DecimalField())),
         )
 
+        # Sof foyda — apps.sales.profit dagi yagona formula (hisobotlar bilan bir xil):
+        # (sotuv narxi - tannarx) × (miqdor - qaytarilgan) - chegirma ulushi
+        profit_items = SaleItem.objects.filter(sale__in=qs.values("id")).exclude(
+            sale__status=Sale.Status.RETURNED
+        )
+        total_profit = profit_items.aggregate(profit=sum_item_profit())["profit"]
+        # Tannarxi yozilmagan qatorlar bo'lsa foyda oshiq ko'rinadi — UI ogohlantiradi
+        profit_partial = profit_items.filter(partial_cost_filter()).exists()
+
         # Qarz — ledger bo'yicha (kirim 'i' minus to'lov 'd'), xuddi ro'yxatdagi kabi
         debt = CustomerDebt.objects.filter(sale__in=qs.values("id")).aggregate(
             total=Coalesce(
@@ -412,6 +422,9 @@ class SaleStatisticsAPIView(APIView):
                 # NET to'langan (qaytarib berilgan pul ayirilgan) — breakdown bilan mos
                 "total_paid": str(total_paid_net),
                 "total_debt": str(debt["total"]),
+                # Sof foyda (davr + do'kon filtri bo'yicha) va u to'liqmi
+                "total_profit": str(total_profit),
+                "profit_partial": profit_partial,
                 "total_returned": str(returned["total"]),
                 "total_returned_all": str(returned_all["total"]),
                 "paid_breakdown": paid_breakdown,

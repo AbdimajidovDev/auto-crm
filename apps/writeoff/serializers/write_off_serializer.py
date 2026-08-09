@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 
+from apps.common.quantity import QuantityField
 from apps.products.models import Product
 from apps.store.models import Store
 from apps.writeoff.models import WriteOff, WriteOffItem
@@ -13,7 +16,9 @@ class WriteOffItemCreateSerializer(serializers.Serializer):
     product = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE)
     )
-    quantity = serializers.IntegerField(min_value=1)
+    # 0.5 qadam (yarim juft) qabul qilinadi; mahsulotga bog'liq butun-son
+    # talabi WriteOffService.create_write_off ichida tekshiriladi
+    quantity = QuantityField(min_value=Decimal("0.5"))
 
 
 class WriteOffCreateSerializer(serializers.Serializer):
@@ -45,6 +50,7 @@ class WriteOffItemSerializer(serializers.ModelSerializer):
     product_name = serializers.CharField(source="product.name", read_only=True)
     product_sku = serializers.CharField(source="product.sku", read_only=True)
     product_barcode = serializers.CharField(source="product.barcode", read_only=True)
+    quantity = QuantityField(read_only=True)
 
     class Meta:
         model = WriteOffItem

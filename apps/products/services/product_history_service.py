@@ -55,7 +55,9 @@ def _amount(qty_field: str, price_field: str):
 
 
 def _qty(field: str = "quantity"):
-    return Coalesce(Sum(field), 0)
+    # output_field majburiy: quantity endi Decimal (juft mahsulotda 0.5 qadam),
+    # 0 esa butun son — aralash tiplarda Django FieldError beradi
+    return Coalesce(Sum(field), 0, output_field=DecimalField(max_digits=12, decimal_places=2))
 
 
 def parse_date_param(value: str | None, *, end_of_day: bool = False):
@@ -334,7 +336,8 @@ class ProductHistoryService:
                 Sum(F("quantity") * F("purchase_price"), output_field=MONEY), ZERO, output_field=MONEY
             ),
             costed_qty=Coalesce(
-                Sum("quantity", filter=Q(purchase_price__isnull=False)), 0
+                Sum("quantity", filter=Q(purchase_price__isnull=False)), 0,
+                output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
             sale_count=Count("id"),
         )

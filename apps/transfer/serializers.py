@@ -2,6 +2,7 @@ from apps.products.models import Product
 
 
 from rest_framework import serializers
+from apps.common.quantity import QuantityField, validate_quantity_step
 from apps.store.models import Store
 from apps.transfer.models import (
     StockTransfer,
@@ -57,7 +58,8 @@ class TransferSessionSerializer(serializers.ModelSerializer):
 
 class TransferItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE))
-    quantity = serializers.IntegerField(min_value=1)
+    # 0.5 qadam (yarim juft) — faqat is_pair mahsulotlar uchun (validate() da tekshiriladi)
+    quantity = QuantityField()
     product_name = serializers.CharField(source="product.name", read_only=True)
     # product_name = serializers.SerializerMethodField()
     sku = serializers.CharField(source="product.sku", read_only=True)
@@ -68,6 +70,15 @@ class TransferItemSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_name', 'sku', 'quantity', 'purchase_price', 'selling_price',
         )
         read_only_fields = ('id','product_name', 'purchase_price', 'selling_price',)
+
+    def validate(self, data):
+        # Create oqimida product ham keladi; list (read) oqimida validate ishlamaydi
+        product = data.get("product")
+        if product is not None and "quantity" in data:
+            data["quantity"] = validate_quantity_step(
+                data["quantity"], is_pair=product.is_pair, product_name=product.name
+            )
+        return data
 
     # def get_product_name(self, obj):
     #     return obj.product.name if obj.product else ""
