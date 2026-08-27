@@ -55,14 +55,20 @@ class ProductLocationSerializer(serializers.ModelSerializer):
 
 
 class ProductUnitMeasurementGetSerializer(serializers.ModelSerializer):
+    step = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    is_pair = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = ProductUnitMeasurement
-        fields = ('id', 'measurement')
+        fields = ('id', 'measurement', 'quantity_type', 'step', 'is_pair')
 
 class ProductUnitMeasurementSerializer(serializers.ModelSerializer):
+    step = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    is_pair = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = ProductUnitMeasurement
-        fields = ('id', 'measurement_uz', 'measurement_uz_cyrl')
+        fields = ('id', 'measurement_uz', 'measurement_uz_cyrl', 'quantity_type', 'step', 'is_pair')
 
 
 

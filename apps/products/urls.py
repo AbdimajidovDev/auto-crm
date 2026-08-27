@@ -10,6 +10,7 @@ from apps.products.views.product_crud_view import (
     ProductCreateAPIView,
     ProductListAPIView,
     ProductDetailAPIView,
+    ProductUpdateStocksAPIView,
     ProductBatchListAPIView,
 )
 from apps.products.views.product_batch_view import (
@@ -44,6 +45,7 @@ urlpatterns = [
     path("bulk-status/", ProductBulkStatusAPIView.as_view()),
     path("bulk-delete/", ProductBulkDeleteAPIView.as_view()),
     path("<int:pk>/", ProductDetailAPIView.as_view()),
+    path("<int:pk>/update-stocks/", ProductUpdateStocksAPIView.as_view(), name="product-update-stocks"),
     # Mahsulot tarixi: kirim / o'tkazma / sotuv / qaytim / spisaniye statistikasi
     path("<int:pk>/history/", ProductHistoryAPIView.as_view()),
 

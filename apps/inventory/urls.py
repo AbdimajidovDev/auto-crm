@@ -4,6 +4,7 @@ from .views.low_stock_view import LowStockListAPIView, LowStockHistoryAPIView
 from .views.stock_adjustment_view import (
     StockAdjustmentCreateAPIView,
     StockAdjustmentListAPIView,
+    StockAdjustmentCancelAPIView,
 )
 from .views.export_view import InventoryExportAPIView, LowStockExportAPIView
 from .views.inventory_count_view import InventoryOverCountView, InventoryShortCountView
@@ -31,9 +32,10 @@ urlpatterns = [
     path('finalize/', InventoryFinalizeAPIView.as_view()),
     path('cancel/', InventoryCancelAPIView.as_view()),
 
-    # Bitta mahsulot qoldig'ini to'liq inventarizatsiyasiz to'g'irlash
+    # Bitta mahsulot qoldig'ini to'liq inventarizatsiyasiz to'g'irlash / Import / Write-off
     path('adjust/', StockAdjustmentCreateAPIView.as_view(), name="stock-adjustment-create"),
     path('adjustments/', StockAdjustmentListAPIView.as_view(), name="stock-adjustment-list"),
+    path('adjustments/<int:pk>/cancel/', StockAdjustmentCancelAPIView.as_view(), name="stock-adjustment-cancel"),
 
     path("sessions/<int:session_id>/over/", InventoryOverCountView.as_view(), name="inventory-over-count"),
     path("sessions/<int:session_id>/short/", InventoryShortCountView.as_view(), name="inventory-short-count"),

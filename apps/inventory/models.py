@@ -118,21 +118,41 @@ class InventoryAdjustment(TimestampMixin):
 
 class StockAdjustment(TimestampMixin):
     """
-    Bitta mahsulot qoldig'ini TO'LIQ inventarizatsiyasiz to'g'irlash yozuvi.
+    Qo'lda qilingan qoldiq o'zgarishlari (Import va Hisobdan chiqarish) audit jurnali.
 
-    Inventarizatsiya sessiyasidan farqi: butun do'kon emas, faqat bitta
-    (do'kon, mahsulot) juftligi uchun qoldiq yangi qiymatga o'rnatiladi.
-    Stock (ProductBatch.quantity) StockAdjustmentService ichida o'zgartiriladi;
-    bu model — kim, qachon, nechadan nechaga va nima sababdan o'zgartirgani
-    haqidagi o'chmas tarix/audit yozuvi.
+    Qoidalar:
+      - IMPORT: Mahsulot qoldig'i qo'lda oshirilganda (+);
+      - WRITE_OFF: Mahsulot qoldig'i qo'lda kamaytirilganda (-);
+      - RECOUNT: Qoldiq to'g'ridan-to'g'ri yangi qiymatga o'rnatilganda (legacy/inventarizatsiyasiz).
+      - Snapshot narxlar: operatsiya vaqtidagi purchase_price va sale_price saqlanadi.
+      - Bekor qilish: o'chirilmaydi, status=CANCELLED, cancelled_by, cancelled_at yoziladi va stock teskari o'zgartiriladi.
     """
 
+    class Type(models.TextChoices):
+        IMPORT = "import", "Import"
+        WRITE_OFF = "write_off", "Hisobdan chiqarish"
+        RECOUNT = "recount", "Qayta sanash"
+
     class Reason(models.TextChoices):
+        MANUAL_IMPORT = "manual_import", "Qo'lda kirim / Import"
         RECOUNT = "recount", "Qayta sanash"
         DATA_ERROR = "data_error", "Xato kiritilgan ma'lumot"
         DAMAGED = "damaged", "Buzilgan / yaroqsiz"
+        EXPIRED = "expired", "Muddati o'tgan"
+        LOST = "lost", "Yo'qolgan / o'g'irlangan"
         FOUND = "found", "Topilgan tovar"
         OTHER = "other", "Boshqa"
+
+    class Status(models.TextChoices):
+        ACTIVE = "active", "Faol"
+        CANCELLED = "cancelled", "Bekor qilingan"
+
+    type = models.CharField(
+        max_length=20, choices=Type.choices, default=Type.IMPORT, db_index=True
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.ACTIVE, db_index=True
+    )
 
     store = models.ForeignKey(
         Store, on_delete=models.PROTECT, related_name="stock_adjustments"
@@ -141,14 +161,21 @@ class StockAdjustment(TimestampMixin):
         Product, on_delete=models.PROTECT, related_name="stock_adjustments"
     )
 
-    # Decimal: juft mahsulot qoldig'i kasr (0.5 qadam) bo'lishi mumkin
-    old_quantity = models.DecimalField(max_digits=12, decimal_places=2)
-    new_quantity = models.DecimalField(max_digits=12, decimal_places=2)
-    # new_quantity - old_quantity (musbat — qoldiq oshgan, manfiy — kamaygan)
-    difference = models.DecimalField(max_digits=12, decimal_places=2)
+    # Qo'shilgan yoki ayrilgan sof miqdor
+    quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Qoldiq o'zgarishi
+    old_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    new_quantity = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    difference = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+
+    # Operatsiya vaqtidagi narxlar snapshot'i
+    purchase_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    sale_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    total_amount = models.DecimalField(max_digits=15, decimal_places=2, default=0)
 
     reason = models.CharField(
-        max_length=20, choices=Reason.choices, default=Reason.RECOUNT, db_index=True
+        max_length=20, choices=Reason.choices, default=Reason.MANUAL_IMPORT, db_index=True
     )
     comment = models.TextField(blank=True, default="")
 
@@ -160,16 +187,26 @@ class StockAdjustment(TimestampMixin):
         related_name="stock_adjustments",
     )
 
+    cancelled_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancelled_stock_adjustments",
+    )
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         db_table = "stock_adjustment"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["store", "product"]),
+            models.Index(fields=["type", "status"]),
             models.Index(fields=["-created_at"]),
         ]
 
     def __str__(self):
-        return f"Adjustment {self.store_id}/{self.product_id}: {self.old_quantity} -> {self.new_quantity}"
+        return f"Adjustment #{self.id} [{self.type}/{self.status}] {self.product_id}: qty={self.quantity}"
 
 
 class LowStockItem(TimestampMixin):
@@ -196,7 +233,7 @@ class LowStockItem(TimestampMixin):
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="low_stock_items")
 
     current_quantity = models.DecimalField(max_digits=12, decimal_places=2)
-    min_stock = models.PositiveIntegerField()
+    min_stock = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
     action_type = models.CharField(max_length=10, choices=ActionType.choices)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.OPEN)

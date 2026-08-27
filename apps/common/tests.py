@@ -14,7 +14,7 @@ from apps.contract.models import StockEntry, StockEntryItem, Supplier
 from apps.contract.services.stock_entry_service import StockEntryService
 from apps.inventory.models import InventorySession
 from apps.inventory.services.inventory_service import InventoryService
-from apps.products.models import Product, ProductBatch
+from apps.products.models import Product, ProductBatch, ProductUnitMeasurement
 from apps.sales.models import Sale, SaleItem
 from apps.sales.services import SaleService
 from apps.sales.services.sale_return_service import SaleReturnService
@@ -296,3 +296,92 @@ class BusinessFlowQuantityTests(TestCase):
                     "wholesale_price": Decimal("4500"),
                 }],
             )
+
+
+class ProductUnitArchitectureTests(TestCase):
+    """O'lchov birligi (ProductUnitMeasurement) orqali boshqariladigan qadam testlari."""
+
+    def setUp(self):
+        self.store = Store.objects.create(name="Asosiy do'kon", is_active=True)
+        self.user = User.objects.create(
+            phone_number="+998909998877",
+            full_name="Admin Test",
+            is_superuser=True,
+            is_staff=True,
+        )
+        StoreUser.objects.create(user=self.user, store=self.store)
+
+        self.unit_dona = ProductUnitMeasurement.objects.create(
+            measurement="dona",
+            quantity_type=ProductUnitMeasurement.QuantityType.WHOLE,
+        )
+        self.unit_juft = ProductUnitMeasurement.objects.create(
+            measurement="пара",
+            quantity_type=ProductUnitMeasurement.QuantityType.QUARTER,
+        )
+
+        self.product_fara = Product.objects.create(
+            name="Old fara juft",
+            sku="FARA-J01",
+            unit_measurement=self.unit_juft,
+            status=Product.ProductStatus.ACTIVE,
+        )
+        self.product_filtr = Product.objects.create(
+            name="Moy filtr",
+            sku="FILTR-D01",
+            unit_measurement=self.unit_dona,
+            status=Product.ProductStatus.ACTIVE,
+        )
+
+        ProductBatch.objects.create(
+            store=self.store,
+            product=self.product_fara,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("80000"),
+            selling_price=Decimal("100000"),
+            wholesale_price=Decimal("90000"),
+        )
+        ProductBatch.objects.create(
+            store=self.store,
+            product=self.product_filtr,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("40000"),
+            selling_price=Decimal("50000"),
+            wholesale_price=Decimal("45000"),
+        )
+
+    def test_unit_properties(self):
+        self.assertEqual(self.unit_dona.step, Decimal("1"))
+        self.assertFalse(self.unit_dona.is_pair)
+        self.assertEqual(self.unit_juft.step, Decimal("0.25"))
+        self.assertTrue(self.unit_juft.is_pair)
+
+    def test_product_is_pair_effective(self):
+        self.assertTrue(self.product_fara.is_pair_effective)
+        self.assertEqual(self.product_fara.quantity_step, Decimal("0.25"))
+        self.assertFalse(self.product_filtr.is_pair_effective)
+        self.assertEqual(self.product_filtr.quantity_step, Decimal("1"))
+
+    def test_unit_based_sale(self):
+        # 0.25 fara sotish: 100 000 × 0.25 = 25 000
+        sale = SaleService.create_sale(
+            user=self.user,
+            data={
+                "store": self.store.id,
+                "items": [{"product": self.product_fara.id, "quantity": Decimal("0.25"), "price": Decimal("100000")}],
+                "payments": [{"type": "cash", "amount": Decimal("25000")}],
+            },
+        )
+        self.assertEqual(sale.total_amount, Decimal("25000"))
+
+        # Dona filtrni 0.25 yoki 0.5 sotish rad etiladi
+        with self.assertRaises(ValidationError):
+            SaleService.create_sale(
+                user=self.user,
+                data={
+                    "store": self.store.id,
+                    "items": [{"product": self.product_filtr.id, "quantity": Decimal("0.25"), "price": Decimal("50000")}],
+                    "payments": [{"type": "cash", "amount": Decimal("12500")}],
+                },
+            )
+

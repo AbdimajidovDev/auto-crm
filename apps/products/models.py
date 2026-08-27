@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.utils.text import slugify
 
@@ -70,13 +71,21 @@ class Product(TimestampMixin):
         default=ProductStatus.ACTIVE
     )
     # 0 => threshold monitoring disabled for this product.
-    # PositiveIntegerField => DB-level non-negative guarantee (CHECK constraint).
-    min_stock = models.PositiveIntegerField(default=0)
+    min_stock = models.DecimalField(max_digits=12, decimal_places=2, default=0)
 
-    # Juft mahsulot (masalan fara: 2 dona = 1 juft). True bo'lsa miqdor 0.5
-    # qadam bilan kiritiladi/sotiladi (0.5 = yarim juft, narxi ham shunga
-    # proportsional). Qoidalar apps.common.quantity da markazlashgan.
+    # Juft/dona xususiyati endi unit_measurement (o'lchov birligi) orqali boshqariladi.
+    # is_pair maydoni esa backward-compatibility uchun sinxron holda saqlanadi.
     is_pair = models.BooleanField(default=False)
+
+    @property
+    def is_pair_effective(self) -> bool:
+        if self.unit_measurement_id and self.unit_measurement:
+            return self.unit_measurement.quantity_type == ProductUnitMeasurement.QuantityType.QUARTER
+        return self.is_pair
+
+    @property
+    def quantity_step(self) -> Decimal:
+        return Decimal("0.25") if self.is_pair_effective else Decimal("1")
 
     def get_category_prefix(self):
         if not self.category:
@@ -100,6 +109,8 @@ class Product(TimestampMixin):
         return f"{prefix}-{self.id:06d}"
 
     def save(self, *args, **kwargs):
+        if self.unit_measurement_id and self.unit_measurement:
+            self.is_pair = (self.unit_measurement.quantity_type == ProductUnitMeasurement.QuantityType.QUARTER)
         is_new = self.pk is None
         super().save(*args, **kwargs)
         if is_new:
@@ -166,6 +177,7 @@ class ProductBatch(TimestampMixin):
     purchase_price = models.DecimalField(max_digits=12, decimal_places=2)
     selling_price = models.DecimalField(max_digits=12, decimal_places=2)
     wholesale_price = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    min_stock = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
 
     class Meta:
@@ -200,10 +212,28 @@ class ProductLocation(TimestampMixin):
 
 
 class ProductUnitMeasurement(TimestampMixin):
+    class QuantityType(models.TextChoices):
+        WHOLE = "WHOLE", "Dona"
+        QUARTER = "QUARTER", "Juft"
+
     measurement = models.CharField(max_length=50)
+    quantity_type = models.CharField(
+        max_length=20,
+        choices=QuantityType.choices,
+        default=QuantityType.WHOLE,
+        db_index=True,
+    )
 
     class Meta:
         db_table = 'product_unit_measurement'
 
     def __str__(self):
         return self.measurement
+
+    @property
+    def step(self) -> Decimal:
+        return Decimal("0.25") if self.quantity_type == self.QuantityType.QUARTER else Decimal("1")
+
+    @property
+    def is_pair(self) -> bool:
+        return self.quantity_type == self.QuantityType.QUARTER

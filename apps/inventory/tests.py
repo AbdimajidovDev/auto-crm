@@ -1,12 +1,15 @@
+from decimal import Decimal
 from unittest import mock
 
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from rest_framework.exceptions import ValidationError
 
-from apps.inventory.models import InventoryMovement, LowStockItem
+from apps.inventory.models import InventoryMovement, LowStockItem, StockAdjustment
 from apps.inventory.services import LowStockService
 from apps.inventory.services.inventory_service import InventoryService
-from apps.products.models import Product, ProductBatch
+from apps.inventory.services.stock_adjustment_service import StockAdjustmentService
+from apps.products.models import Product, ProductBatch, ProductUnitMeasurement
 from apps.products.utils.barcode_utility import normalize_barcode
 from apps.store.models import Store, StoreUser
 from apps.transfer.models import Notification
@@ -317,3 +320,257 @@ class InventoryFinalizeTests(LowStockTestBase):
 
         batch = ProductBatch.objects.get(store=self.store, product=product)
         self.assertEqual(batch.quantity, 7)
+
+
+class StockAdjustmentComprehensiveTests(TestCase):
+    """Import va Hisobdan chiqarish (StockAdjustment) to'liq biznes-mantiq testlari."""
+
+    def setUp(self):
+        self.store = Store.objects.create(name="Chilonzor filiali", is_active=True)
+        self.user = User.objects.create(
+            phone_number="+998901112233",
+            full_name="Omborchi Admin",
+            is_superuser=True,
+            is_staff=True,
+        )
+        StoreUser.objects.create(user=self.user, store=self.store)
+
+        self.unit_dona = ProductUnitMeasurement.objects.create(
+            measurement="dona",
+            quantity_type=ProductUnitMeasurement.QuantityType.WHOLE,
+        )
+        self.unit_juft = ProductUnitMeasurement.objects.create(
+            measurement="пара",
+            quantity_type=ProductUnitMeasurement.QuantityType.QUARTER,
+        )
+
+        self.prod_dona = Product.objects.create(
+            name="Moy filtr",
+            sku="FILTR-01",
+            unit_measurement=self.unit_dona,
+            status=Product.ProductStatus.ACTIVE,
+        )
+        self.prod_juft = Product.objects.create(
+            name="Old fara",
+            sku="FARA-01",
+            unit_measurement=self.unit_juft,
+            status=Product.ProductStatus.ACTIVE,
+        )
+
+        self.batch_dona = ProductBatch.objects.create(
+            store=self.store,
+            product=self.prod_dona,
+            quantity=Decimal("100.00"),
+            purchase_price=Decimal("50000"),
+            selling_price=Decimal("70000"),
+            wholesale_price=Decimal("60000"),
+        )
+        self.batch_juft = ProductBatch.objects.create(
+            store=self.store,
+            product=self.prod_juft,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("120000"),
+            selling_price=Decimal("150000"),
+            wholesale_price=Decimal("135000"),
+        )
+
+    def test_import_dona_step_validation(self):
+        # Dona +5 -> OK (100 + 5 = 105)
+        adj = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_dona.id,
+            quantity=Decimal("5"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("105"))
+        self.assertEqual(adj.old_quantity, Decimal("100"))
+        self.assertEqual(adj.new_quantity, Decimal("105"))
+        self.assertEqual(adj.difference, Decimal("5"))
+        self.assertEqual(adj.status, StockAdjustment.Status.ACTIVE)
+
+        # Dona +0.5 -> ERROR
+        with self.assertRaises(ValidationError):
+            StockAdjustmentService.create_adjustment(
+                store_id=self.store.id,
+                product_id=self.prod_dona.id,
+                quantity=Decimal("0.5"),
+                type=StockAdjustment.Type.IMPORT,
+                user=self.user,
+            )
+
+        # Dona +0.25 -> ERROR
+        with self.assertRaises(ValidationError):
+            StockAdjustmentService.create_adjustment(
+                store_id=self.store.id,
+                product_id=self.prod_dona.id,
+                quantity=Decimal("0.25"),
+                type=StockAdjustment.Type.IMPORT,
+                user=self.user,
+            )
+
+    def test_import_juft_step_validation(self):
+        # Juft +0.25 -> OK (10 + 0.25 = 10.25)
+        adj = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_juft.id,
+            quantity=Decimal("0.25"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        self.batch_juft.refresh_from_db()
+        self.assertEqual(self.batch_juft.quantity, Decimal("10.25"))
+
+        # Juft +0.5 -> OK (10.25 + 0.5 = 10.75)
+        adj2 = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_juft.id,
+            quantity=Decimal("0.5"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        self.batch_juft.refresh_from_db()
+        self.assertEqual(self.batch_juft.quantity, Decimal("10.75"))
+
+        # Juft +0.3 -> ERROR
+        with self.assertRaises(ValidationError):
+            StockAdjustmentService.create_adjustment(
+                store_id=self.store.id,
+                product_id=self.prod_juft.id,
+                quantity=Decimal("0.3"),
+                type=StockAdjustment.Type.IMPORT,
+                user=self.user,
+            )
+
+    def test_write_off_step_and_stock_validation(self):
+        # Write-off -3 dona -> OK (100 -> 97)
+        adj = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_dona.id,
+            quantity=Decimal("3"),
+            type=StockAdjustment.Type.WRITE_OFF,
+            user=self.user,
+        )
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("97"))
+        self.assertEqual(adj.difference, Decimal("-3"))
+
+        # Write-off 200 dona (qoldiqdan ko'p) -> ERROR
+        with self.assertRaises(ValidationError) as ctx:
+            StockAdjustmentService.create_adjustment(
+                store_id=self.store.id,
+                product_id=self.prod_dona.id,
+                quantity=Decimal("200"),
+                type=StockAdjustment.Type.WRITE_OFF,
+                user=self.user,
+            )
+        self.assertIn("Qoldiq yetarli emas", str(ctx.exception))
+
+    def test_price_snapshots_and_total_calculation(self):
+        # Juft +0.25 x 120 000 = 30 000
+        adj = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_juft.id,
+            quantity=Decimal("0.25"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        self.assertEqual(adj.purchase_price, Decimal("120000"))
+        self.assertEqual(adj.sale_price, Decimal("150000"))
+        self.assertEqual(adj.total_amount, Decimal("30000"))
+
+        # Keyinchalik mahsulot narxi o'zgarsa ham adjustment snapshot'i o'zgarmasligi kerak
+        self.batch_juft.purchase_price = Decimal("180000")
+        self.batch_juft.sale_price = Decimal("220000")
+        self.batch_juft.save()
+
+        adj.refresh_from_db()
+        self.assertEqual(adj.purchase_price, Decimal("120000"))
+        self.assertEqual(adj.total_amount, Decimal("30000"))
+
+    def test_cancellation_and_reversal(self):
+        # 1. Import cancellation
+        # 100 -> Import +5 -> 105 -> Cancel -> 100
+        adj_import = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_dona.id,
+            quantity=Decimal("5"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("105"))
+
+        cancelled_import = StockAdjustmentService.cancel_adjustment(
+            adjustment_id=adj_import.id,
+            user=self.user,
+        )
+        self.assertEqual(cancelled_import.status, StockAdjustment.Status.CANCELLED)
+        self.assertEqual(cancelled_import.cancelled_by, self.user)
+        self.assertIsNotNone(cancelled_import.cancelled_at)
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("100"))
+
+        # 2. Write-off cancellation
+        # 100 -> Write-off -5 -> 95 -> Cancel -> 100
+        adj_wo = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=self.prod_dona.id,
+            quantity=Decimal("5"),
+            type=StockAdjustment.Type.WRITE_OFF,
+            user=self.user,
+        )
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("95"))
+
+        cancelled_wo = StockAdjustmentService.cancel_adjustment(
+            adjustment_id=adj_wo.id,
+            user=self.user,
+        )
+        self.assertEqual(cancelled_wo.status, StockAdjustment.Status.CANCELLED)
+        self.batch_dona.refresh_from_db()
+        self.assertEqual(self.batch_dona.quantity, Decimal("100"))
+
+    def test_cancellation_safety_check_when_insufficient_stock(self):
+        # Mahsulot qoldig'i 0 bo'lgan yangi partiya
+        prod_empty = Product.objects.create(
+            name="Noyob tovar",
+            sku="NOYOB-01",
+            unit_measurement=self.unit_dona,
+            status=Product.ProductStatus.ACTIVE,
+        )
+        ProductBatch.objects.create(
+            store=self.store,
+            product=prod_empty,
+            quantity=Decimal("0"),
+            purchase_price=Decimal("10000"),
+            selling_price=Decimal("15000"),
+        )
+
+        # Import +5 -> qoldiq 5 bo'ladi
+        adj = StockAdjustmentService.create_adjustment(
+            store_id=self.store.id,
+            product_id=prod_empty.id,
+            quantity=Decimal("5"),
+            type=StockAdjustment.Type.IMPORT,
+            user=self.user,
+        )
+        b = ProductBatch.objects.get(store=self.store, product=prod_empty)
+        self.assertEqual(b.quantity, Decimal("5"))
+
+        # Tovardan 4 ta sotildi yoki kamaydi -> qoldiq 1 qoldi
+        b.quantity = Decimal("1")
+        b.save(update_fields=["quantity"])
+
+        # Endi 5 ta lik importni bekor qilishga uringanda xato berishi shart
+        with self.assertRaises(ValidationError) as ctx:
+            StockAdjustmentService.cancel_adjustment(
+                adjustment_id=adj.id,
+                user=self.user,
+            )
+        self.assertIn("omborda yetarli qoldiq yo'q", str(ctx.exception))
+        # Qoldiq buzilmagan (1 ligicha qolgan)
+        b.refresh_from_db()
+        self.assertEqual(b.quantity, Decimal("1"))
+

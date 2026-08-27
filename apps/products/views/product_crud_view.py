@@ -1,6 +1,6 @@
 from django.db.models import ProtectedError
 from drf_spectacular.utils import extend_schema
-from rest_framework import permissions
+from rest_framework import permissions, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.generics import get_object_or_404
 from rest_framework.response import Response
@@ -17,6 +17,7 @@ from apps.products.serializers.product_crud_serializer import (
     ProductListSerializer,
     # ProductBatchSerializer,
     ProductUpdateSerializer,
+    ProductUpdateStocksSerializer,
 )
 from apps.products.services.product_crud_service import ProductService
 from apps.inventory.services import LowStockService
@@ -470,6 +471,123 @@ class ProductDetailAPIView(APIView):
             LowStockService.reevaluate_product(product)
 
         return Response('Product successfully updated!', status=200)
+
+
+class ProductUpdateStocksAPIView(APIView):
+    """
+    POST /api/products/<int:pk>/update-stocks/
+    Product Edit sahifasida barcha do'konlar bo'yicha qoldiq va MinStock'ni atomik yangilash.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    @extend_schema(
+        tags=["Product"],
+        summary="Mahsulotning barcha do'konlar bo'yicha qoldiq va MinStock'larini yangilash (Import/Write-off)",
+        request=ProductUpdateStocksSerializer,
+        responses={200: ProductDetailSerializer},
+    )
+    def post(self, request, pk):
+        product = get_object_or_404(
+            Product.objects.select_related("unit_measurement"),
+            pk=pk
+        )
+        serializer = ProductUpdateStocksSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        stores_data = serializer.validated_data["stores"]
+
+        from decimal import Decimal
+        from django.db import transaction
+        from apps.common.quantity import validate_quantity_step
+        from apps.common.store_scope import ensure_store_access
+        from apps.inventory.services.stock_adjustment_service import StockAdjustmentService
+        from apps.inventory.models import StockAdjustment
+        from apps.inventory.services.low_stock_service import LowStockService
+
+        with transaction.atomic():
+            min_stock_changed = False
+            for item in stores_data:
+                store_id = item["store_id"]
+                ensure_store_access(request.user, store_id)
+
+                batch = ProductBatch.objects.select_for_update().filter(
+                    product=product, store_id=store_id
+                ).first()
+
+                current_qty = batch.quantity if batch else Decimal("0")
+
+                # 1. Quantity o'zgarishi
+                if "new_quantity" in item and item["new_quantity"] is not None:
+                    new_qty = validate_quantity_step(item["new_quantity"], product=product)
+                    if new_qty < Decimal("0"):
+                        raise ValidationError(f"Do'kon #{store_id} uchun miqdor manfiy bo'lishi mumkin emas.")
+
+                    if new_qty > current_qty:
+                        diff = new_qty - current_qty
+                        StockAdjustmentService.create_adjustment(
+                            store_id=store_id,
+                            product_id=product.id,
+                            quantity=diff,
+                            type=StockAdjustment.Type.IMPORT,
+                            reason=StockAdjustment.Reason.MANUAL_IMPORT,
+                            comment="Mahsulot tahrirlash oynasidan qoldiq oshirildi",
+                            user=request.user,
+                        )
+                    elif new_qty < current_qty:
+                        diff = current_qty - new_qty
+                        StockAdjustmentService.create_adjustment(
+                            store_id=store_id,
+                            product_id=product.id,
+                            quantity=diff,
+                            type=StockAdjustment.Type.WRITE_OFF,
+                            reason=StockAdjustment.Reason.DATA_ERROR,
+                            comment="Mahsulot tahrirlash oynasidan hisobdan chiqarildi",
+                            user=request.user,
+                        )
+
+                # 2. MinStock o'zgarishi
+                if "min_stock" in item and item["min_stock"] is not None:
+                    min_stock_val = validate_quantity_step(item["min_stock"], product=product)
+                    if min_stock_val < Decimal("0"):
+                        raise ValidationError(f"Do'kon #{store_id} uchun MinStock manfiy bo'lishi mumkin emas.")
+
+                    # Batch min_stock
+                    batch = ProductBatch.objects.select_for_update().filter(
+                        product=product, store_id=store_id
+                    ).first()
+                    if batch:
+                        if batch.min_stock != min_stock_val:
+                            batch.min_stock = min_stock_val
+                            batch.save(update_fields=["min_stock"])
+                            min_stock_changed = True
+                    else:
+                        other_batch = ProductBatch.objects.filter(product=product).first()
+                        p_price = other_batch.purchase_price if other_batch else Decimal("0")
+                        s_price = other_batch.selling_price if other_batch else Decimal("0")
+                        w_price = other_batch.wholesale_price if other_batch else Decimal("0")
+                        ProductBatch.objects.create(
+                            store_id=store_id,
+                            product=product,
+                            quantity=Decimal("0"),
+                            min_stock=min_stock_val,
+                            purchase_price=p_price,
+                            selling_price=s_price,
+                            wholesale_price=w_price,
+                        )
+                        min_stock_changed = True
+
+            if min_stock_changed:
+                LowStockService.reevaluate_product(product)
+
+        all_stores = list(Store.objects.filter(is_active=True).order_by("name"))
+        product_detail = Product.objects.select_related(
+            "category", "brand", "unit_measurement"
+        ).prefetch_related("images", "batches__store", "batches__location").get(pk=product.pk)
+
+        return Response(
+            ProductDetailSerializer(product_detail, context={"request": request, "all_stores": all_stores}).data,
+            status=status.HTTP_200_OK,
+        )
+
 
 
     @extend_schema(

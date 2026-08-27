@@ -108,6 +108,7 @@ class ProductBatchListSerializer(serializers.Serializer):
     location       = serializers.IntegerField(allow_null=True)
     location_name  = serializers.CharField(allow_null=True)
     quantity       = QuantityField()
+    min_stock      = QuantityField(allow_null=True)
     purchase_price = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     selling_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
     wholesale_price  = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
@@ -167,6 +168,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                     "location":        batch.location_id,
                     "location_name":   getattr(batch.location, "location", None),
                     "quantity":        batch.quantity,
+                    "min_stock":       batch.min_stock if batch.min_stock > 0 else product.min_stock,
                     "purchase_price":  batch.purchase_price,
                     "selling_price":   batch.selling_price,
                     "wholesale_price": batch.wholesale_price,
@@ -181,6 +183,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                     "location":       None,
                     "location_name":  None,
                     "quantity":       0,
+                    "min_stock":      product.min_stock,
                     "purchase_price": None,
                     "selling_price":  None,
                     "wholesale_price": None,
@@ -225,6 +228,7 @@ class ProductDetailSerializer(ProductListSerializer):
                 "location": batch.location_id,
                 "location_name": getattr(batch.location, "location", None),
                 "quantity": batch.quantity,
+                "min_stock": batch.min_stock if batch.min_stock > 0 else product.min_stock,
                 "purchase_price": batch.purchase_price,
                 "selling_price": batch.selling_price,
                 "wholesale_price": batch.wholesale_price,
@@ -527,6 +531,20 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         ])
 
         return instance
+
+
+class StoreStockUpdateItemSerializer(serializers.Serializer):
+    store_id = serializers.IntegerField()
+    new_quantity = QuantityField(required=False, allow_null=True)
+    min_stock = QuantityField(required=False, allow_null=True)
+
+
+class ProductUpdateStocksSerializer(serializers.Serializer):
+    stores = serializers.ListField(
+        child=StoreStockUpdateItemSerializer(),
+        allow_empty=False
+    )
+
 
 
 # ═══════════════════════════════
