@@ -27,14 +27,17 @@ def _scoped_meta(request) -> dict:
     Meta — foydalanuvchiga faqat ruxsat berilgan hisobotlar va
     o'z do'kon(lar)i variantlari beriladi.
     """
-    meta = ReportBuilderService.meta()
     user = request.user
+    if not user_has_perm(user, "reports.view"):
+        return {"reports": []}
+
+    meta = ReportBuilderService.meta()
     allowed_stores = allowed_store_ids(user)
 
     filtered_reports = []
     for report in meta["reports"]:
         rep_key = report["key"]
-        if not (user_has_perm(user, f"reports.{rep_key}.view") or user_has_perm(user, "reports.view")):
+        if not user_has_perm(user, f"reports.{rep_key}.view"):
             continue
 
         if allowed_stores is not None:
@@ -69,8 +72,14 @@ class ReportBuilderGenerateAPIView(APIView):
         if not report_type:
             return Response({"report_type": "Hisobot turi ko'rsatilmadi"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not user_has_perm(request.user, "reports.view"):
+            return Response(
+                {"detail": "Sizda hisobotlar moduliga kirish huquqi yo'q.", "permission": "reports.view"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         req_perm = f"reports.{report_type}.view"
-        if not (user_has_perm(request.user, req_perm) or user_has_perm(request.user, "reports.view")):
+        if not user_has_perm(request.user, req_perm):
             return Response(
                 {
                     "detail": f"Sizda «{report_type}» hisobotini ko'rish huquqi yo'q.",
@@ -100,8 +109,14 @@ class ReportBuilderExportAPIView(APIView):
         if not report_type:
             return Response({"report_type": "Hisobot turi ko'rsatilmadi"}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not user_has_perm(request.user, "reports.view"):
+            return Response(
+                {"detail": "Sizda hisobotlar moduliga kirish huquqi yo'q.", "permission": "reports.view"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         req_perm = f"reports.{report_type}.export"
-        if not (user_has_perm(request.user, req_perm) or user_has_perm(request.user, "reports.export")):
+        if not user_has_perm(request.user, req_perm):
             return Response(
                 {
                     "detail": f"Sizda «{report_type}» hisobotini eksport qilish (yuklab olish) huquqi yo'q.",

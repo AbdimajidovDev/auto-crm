@@ -314,6 +314,13 @@ PERMISSION_HIERARCHY = [
         "label": "Hisobotlar",
         "features": [
             {
+                "feature": "access",
+                "label": "Modulga kirish",
+                "actions": [
+                    {"code": "reports.view", "action": "view", "label": "Hisobotlar modulini ko'rish"},
+                ],
+            },
+            {
                 "feature": "sales_report",
                 "label": "Sotuvlar hisoboti",
                 "actions": [
@@ -467,6 +474,7 @@ LEGACY_PERMISSION_MAP = {
     "debts.create": ["debts.pay"],
     "products.import": ["products.import.view", "products.import.create"],
     "reports.view": [
+        "reports.view",
         "reports.sales.view",
         "reports.sales.export",
         "reports.top_products.view",
@@ -563,6 +571,11 @@ def user_has_perm(user, code: str) -> bool:
     perms = user_permissions(user)
     if perms is None:
         return True  # superuser
+    # Hisobotlar ierarxiyasi: aniq hisobotni ko'rish yoki eksport qilish uchun
+    # avval "reports.view" (modulga kirish) bo'lishi shart
+    if code.startswith("reports.") and code != "reports.view":
+        if "reports.view" not in perms:
+            return False
     return code in perms
 
 

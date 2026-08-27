@@ -248,38 +248,39 @@ class RBACMiddleware:
         if perms is None:
             return None
 
+        # 1. Hisobotlar moduliga umumiy kirish huquqi (reports.view) tekshiruvi
+        if "reports.view" not in perms:
+            return JsonResponse(
+                {"detail": "Sizda hisobotlar moduliga kirish uchun ruxsat yo'q.", "permission": "reports.view"},
+                status=403,
+            )
+
         report_type = request.GET.get("report_type")
         path = request.path
 
+        # 2. Eksport endpointlari (reports.<type>.export)
         if path.startswith("/api/reports/builder/export/") or path.startswith("/api/reports/export/"):
-            if not report_type:
-                return None
-            code = f"reports.{report_type}.export"
-            if code not in perms:
-                return JsonResponse(
-                    {"detail": denial_message(code), "permission": code},
-                    status=403,
-                )
+            if report_type:
+                code = f"reports.{report_type}.export"
+                if code not in perms:
+                    return JsonResponse(
+                        {"detail": denial_message(code), "permission": code},
+                        status=403,
+                    )
             return None
 
+        # 3. Hisobot yaratish / ko'rish endpointlari (reports.<type>.view)
         if path.startswith("/api/reports/builder/") or path.startswith("/api/reports/generate/"):
-            if not report_type:
-                return None
-            code = f"reports.{report_type}.view"
-            if code not in perms:
-                return JsonResponse(
-                    {"detail": denial_message(code), "permission": code},
-                    status=403,
-                )
+            if not path.startswith("/api/reports/builder/meta/"):
+                if report_type:
+                    code = f"reports.{report_type}.view"
+                    if code not in perms:
+                        return JsonResponse(
+                            {"detail": denial_message(code), "permission": code},
+                            status=403,
+                        )
             return None
 
-        # /api/reports/builder/meta/ yoki /api/reports/ uchun: kamida bitta hisobotga huquq bo'lishi kerak
-        has_any_report = any(p.startswith("reports.") for p in perms)
-        if not has_any_report:
-            return JsonResponse(
-                {"detail": "Sizda hisobotlarni ko'rish uchun ruxsat yo'q.", "permission": "reports.view"},
-                status=403,
-            )
         return None
 
     def _check_inventory_adjust_permission(self, request):

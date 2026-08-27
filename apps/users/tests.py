@@ -62,7 +62,7 @@ class GranularRBACAndSecurityTests(TestCase):
         # Maxsus rollar
         self.sales_reporter_role = Role.objects.create(
             name="Faqat Sotuv Hisoboti Ko'ruvchi",
-            permissions=["reports.sales.view", "dashboard.view"],
+            permissions=["reports.view", "reports.sales.view", "dashboard.view"],
         )
         self.sales_reporter_user = User.objects.create(
             phone_number="+998903333333",
@@ -74,7 +74,7 @@ class GranularRBACAndSecurityTests(TestCase):
 
         self.sales_exporter_role = Role.objects.create(
             name="Sotuv Hisoboti Export Qiluvchi",
-            permissions=["reports.sales.view", "reports.sales.export", "dashboard.view"],
+            permissions=["reports.view", "reports.sales.view", "reports.sales.export", "dashboard.view"],
         )
         self.sales_exporter_user = User.objects.create(
             phone_number="+998904444444",
@@ -98,6 +98,7 @@ class GranularRBACAndSecurityTests(TestCase):
     def test_superuser_bypass(self):
         """Superuser barcha huquqlarga ega (user_permissions=None, user_has_perm=True)."""
         self.assertIsNone(user_permissions(self.superuser))
+        self.assertTrue(user_has_perm(self.superuser, "reports.view"))
         self.assertTrue(user_has_perm(self.superuser, "reports.payments.view"))
         self.assertTrue(user_has_perm(self.superuser, "products.stock.adjust"))
         self.assertTrue(user_has_perm(self.superuser, "anything.arbitrary"))
@@ -108,6 +109,32 @@ class GranularRBACAndSecurityTests(TestCase):
         self.assertEqual(perms, frozenset())
         self.assertFalse(user_has_perm(self.roleless_user, "dashboard.view"))
         self.assertFalse(user_has_perm(self.roleless_user, "products.view"))
+        self.assertFalse(user_has_perm(self.roleless_user, "reports.view"))
+
+    def test_reports_module_view_required_hierarchy(self):
+        """reports.view (modulga kirish) bo'lmasa, hatto child report huquqi bo'lsa ham 403 qaytaradi."""
+        no_module_role = Role.objects.create(
+            name="No Module Reports",
+            permissions=["reports.sales.view"],
+        )
+        user = User.objects.create(
+            phone_number="+998909999999",
+            full_name="No Module User",
+            role=no_module_role,
+        )
+        StoreUser.objects.create(user=user, store=self.store_a)
+
+        self.client.force_authenticate(user=user)
+        resp = self.client.get("/api/reports/builder/?report_type=sales")
+        self.assertEqual(resp.status_code, 403)
+        self.assertEqual(resp.json().get("permission"), "reports.view")
+
+        # reports.view qo'shilgach, sales hisoboti 200 OK qaytaradi
+        no_module_role.permissions.append("reports.view")
+        no_module_role.save()
+
+        resp_ok = self.client.get("/api/reports/builder/?report_type=sales")
+        self.assertEqual(resp_ok.status_code, 200)
 
     def test_granular_report_permissions(self):
         """Foydalanuvchida faqat reports.sales.view bo'lsa, sales ko'rinadi, payments 403 bo'ladi."""
