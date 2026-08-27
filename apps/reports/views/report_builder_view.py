@@ -19,25 +19,34 @@ from rest_framework.exceptions import ValidationError
 from apps.reports.permissions import scope_report_params
 from apps.reports.services.report_builder import ReportBuilderService
 from apps.contract.permissions import allowed_store_ids
+from apps.users.permissions import user_has_perm
 
 
 def _scoped_meta(request) -> dict:
     """
-    Meta — do'kon adminiga do'kon filtri variantlari o'z do'kon(lar)i bilan
-    cheklab beriladi (superadmin hammasini ko'radi).
+    Meta — foydalanuvchiga faqat ruxsat berilgan hisobotlar va
+    o'z do'kon(lar)i variantlari beriladi.
     """
     meta = ReportBuilderService.meta()
-    allowed = allowed_store_ids(request.user)
-    if allowed is None:
-        return meta
+    user = request.user
+    allowed_stores = allowed_store_ids(user)
+
+    filtered_reports = []
     for report in meta["reports"]:
-        for f in report["filters"]:
-            if f["param"] == "store_id":
-                f["options"] = [
-                    o for o in f["options"]
-                    if o["value"] != "all" and o["value"].isdigit() and int(o["value"]) in allowed
-                ]
-    return meta
+        rep_key = report["key"]
+        if not (user_has_perm(user, f"reports.{rep_key}.view") or user_has_perm(user, "reports.view")):
+            continue
+
+        if allowed_stores is not None:
+            for f in report["filters"]:
+                if f["param"] == "store_id":
+                    f["options"] = [
+                        o for o in f["options"]
+                        if o["value"] != "all" and o["value"].isdigit() and int(o["value"]) in allowed_stores
+                    ]
+        filtered_reports.append(report)
+
+    return {"reports": filtered_reports}
 
 
 @extend_schema(tags=["Reports"], summary="Hisobot turlari va dinamik filtrlar (meta)")
@@ -56,6 +65,20 @@ class ReportBuilderGenerateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        report_type = request.query_params.get("report_type")
+        if not report_type:
+            return Response({"report_type": "Hisobot turi ko'rsatilmadi"}, status=status.HTTP_400_BAD_REQUEST)
+
+        req_perm = f"reports.{report_type}.view"
+        if not (user_has_perm(request.user, req_perm) or user_has_perm(request.user, "reports.view")):
+            return Response(
+                {
+                    "detail": f"Sizda «{report_type}» hisobotini ko'rish huquqi yo'q.",
+                    "permission": req_perm,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         try:
             # Do'kon admini faqat o'z do'koni bo'yicha (superadmin — istalgan/umumiy)
             data = ReportBuilderService.generate(scope_report_params(request), request.user)
@@ -73,6 +96,20 @@ class ReportBuilderExportAPIView(APIView):
 
     def get(self, request):
         params = scope_report_params(request)
+        report_type = params.get("report_type")
+        if not report_type:
+            return Response({"report_type": "Hisobot turi ko'rsatilmadi"}, status=status.HTTP_400_BAD_REQUEST)
+
+        req_perm = f"reports.{report_type}.export"
+        if not (user_has_perm(request.user, req_perm) or user_has_perm(request.user, "reports.export")):
+            return Response(
+                {
+                    "detail": f"Sizda «{report_type}» hisobotini eksport qilish (yuklab olish) huquqi yo'q.",
+                    "permission": req_perm,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         try:
             label, columns, rows, summary, info = ReportBuilderService.export_rows(params, request.user)
         except ValidationError as e:
