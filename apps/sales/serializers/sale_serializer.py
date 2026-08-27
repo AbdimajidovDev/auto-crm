@@ -37,7 +37,7 @@ class SaleItemSerializer(serializers.ModelSerializer):
     # ✅ YAXSHI: `SerializerMethodField` o'rniga `source="product.name"` ishlatilgan.
     product_name = serializers.CharField(source="product.name", read_only=True)
     sku = serializers.CharField(source="product.sku", read_only=True, default=None)
-    # Juft mahsulot (0.5 qadam) — qaytarish UI shu flag bo'yicha qadam tanlaydi
+    # Juft mahsulot (0.25 qadam) — qaytarish UI shu flag bo'yicha qadam tanlaydi
     is_pair = serializers.BooleanField(source="product.is_pair", read_only=True)
     # JSON'da raqam sifatida chiqadi (string emas) — client arifmetikasi uchun
     quantity = QuantityField(read_only=True)

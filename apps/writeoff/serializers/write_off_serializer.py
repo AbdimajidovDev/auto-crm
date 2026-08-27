@@ -16,9 +16,9 @@ class WriteOffItemCreateSerializer(serializers.Serializer):
     product = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.filter(status=Product.ProductStatus.ACTIVE)
     )
-    # 0.5 qadam (yarim juft) qabul qilinadi; mahsulotga bog'liq butun-son
+    # 0.25 qadam (juft mahsulot) qabul qilinadi; mahsulotga bog'liq butun-son
     # talabi WriteOffService.create_write_off ichida tekshiriladi
-    quantity = QuantityField(min_value=Decimal("0.5"))
+    quantity = QuantityField(min_value=Decimal("0.25"))
 
 
 class WriteOffCreateSerializer(serializers.Serializer):

@@ -536,8 +536,8 @@ class StockEntryImportService:
 
     @staticmethod
     def _parse_quantity(value: str):
-        """Miqdor: kasr (0.5 qadam — yarim juft) qabul qilinadi; int() bilan KESILMAYDI.
-        Mahsulot juft emasligi (butun son talabi) StockEntryService.create_entry da tekshiriladi."""
+        """Miqdor: kasr (0.25 qadam — juft mahsulot) qabul qilinadi; int() bilan KESILMAYDI.
+        Mahsulot juft emasligi (butun son talabi) StockEntryService.create_stock_entry da tekshiriladi."""
         if value == "":
             return None, "bo'sh"
         try:
@@ -546,8 +546,8 @@ class StockEntryImportService:
             return None, "raqam emas"
         if parsed <= 0:
             return None, "0 dan katta bo'lishi kerak"
-        if (parsed * 2) % 1 != 0:
-            return None, "0.5 ga karrali bo'lishi kerak"
+        if (parsed * 4) % 1 != 0:
+            return None, "0.25 ga karrali bo'lishi kerak"
         return parsed, None
 
     @staticmethod

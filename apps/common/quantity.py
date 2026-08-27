@@ -1,14 +1,14 @@
 """
 Mahsulot miqdori (quantity) uchun markaziy qoidalar.
 
-Juft mahsulot (Product.is_pair=True, masalan fara — 2 dona = 1 juft) YARIM
-(0.5) qadam bilan sotilishi/qaytarilishi/ko'chirilishi mumkin. Oddiy mahsulotda
-miqdor faqat BUTUN son bo'ladi. Barcha kirish nuqtalari (sotuv, qaytarish,
-kirim, transfer, spisaniye, inventarizatsiya) AYNAN shu moduldagi
-validatsiyani chaqiradi — qoida boshqa joyda takrorlanmaydi.
+Juft mahsulot (Product.is_pair=True, masalan fara — 2 dona = 1 juft, 1 dona = 0.5 juft, 0.5 dona = 0.25 juft)
+0.25 qadam bilan sotilishi/qaytarilishi/ko'chirilishi/kirim qilinishi mumkin.
+Oddiy mahsulotda (Product.is_pair=False) miqdor faqat BUTUN son bo'ladi.
+Barcha kirish nuqtalari (sotuv, qaytarish, kirim, transfer, spisaniye, inventarizatsiya)
+AYNAN shu moduldagi validatsiyani chaqiradi — qoida boshqa joyda takrorlanmaydi.
 
 Saqlash: barcha quantity ustunlari DecimalField(max_digits=12, decimal_places=2),
-lekin qiymat har doim 0.5 ga karrali (validate_quantity_step kafolatlaydi).
+lekin qiymat juft mahsulotda 0.25 ga, oddiy mahsulotda 1 ga karrali (validate_quantity_step kafolatlaydi).
 """
 
 from decimal import Decimal, InvalidOperation
@@ -20,7 +20,9 @@ from rest_framework.exceptions import ValidationError
 QUANTITY_MAX_DIGITS = 12
 QUANTITY_DECIMAL_PLACES = 2
 
-HALF_STEP = Decimal("0.5")
+PAIR_STEP = Decimal("0.25")
+SINGLE_STEP = Decimal("1")
+HALF_STEP = Decimal("0.5")  # backward compatibility alias
 
 
 def as_quantity(value) -> Decimal:
@@ -35,8 +37,8 @@ def validate_quantity_step(quantity, *, is_pair: bool, product_name: str = "", a
     """
     Miqdor qadamini tekshiradi va normallashtirilgan Decimal qaytaradi.
 
-      is_pair=True  → 0.5 ga karrali bo'lishi kerak (0.5 = yarim juft)
-      is_pair=False → faqat butun son
+      is_pair=True  → 0.25 ga karrali bo'lishi kerak (0.25, 0.50, 0.75, 1.00, ...)
+      is_pair=False → faqat butun son (1, 2, 3, 4, ...)
 
     allow_zero=True — inventarizatsiya sanog'i kabi 0 qiymat joiz bo'lgan joylar uchun.
     """
@@ -46,15 +48,16 @@ def validate_quantity_step(quantity, *, is_pair: bool, product_name: str = "", a
     if qty < 0 or (qty == 0 and not allow_zero):
         raise ValidationError(f"{name}miqdor 0 dan katta bo'lishi kerak")
 
-    if (qty * 2) % 1 != 0:
-        raise ValidationError(
-            f"{name}miqdor 0.5 ga karrali bo'lishi kerak (yarim juft = 0.5)"
-        )
-
-    if not is_pair and qty % 1 != 0:
-        raise ValidationError(
-            f"{name}bu mahsulot juft mahsulot emas — miqdor butun son bo'lishi kerak"
-        )
+    if is_pair:
+        if (qty * 4) % 1 != 0:
+            raise ValidationError(
+                f"{name}miqdor 0.25 ga karrali bo'lishi kerak (0.25, 0.5, 0.75, 1.0 ...)"
+            )
+    else:
+        if qty % 1 != 0:
+            raise ValidationError(
+                f"{name}bu mahsulot juft mahsulot emas — miqdor butun son bo'lishi kerak"
+            )
 
     return qty
 
@@ -82,7 +85,7 @@ class QuantityField(serializers.DecimalField):
     Quantity uchun standart DRF maydoni:
       - JSON'da raqam sifatida chiqadi (coerce_to_string=False) — client
         arifmetikasi stringga yiqilmasligi uchun;
-      - 0.5 ga karralilikni maydon darajasida tekshiradi (mahsulotga bog'liq
+      - 0.25 ga karralilikni maydon darajasida tekshiradi (mahsulotga bog'liq
         butun-son talabi esa servis/serializer validate'ida, chunki u Product.is_pair ni bilishi kerak).
     """
 
@@ -94,8 +97,8 @@ class QuantityField(serializers.DecimalField):
 
     def to_internal_value(self, data):
         value = super().to_internal_value(data)
-        if (value * 2) % 1 != 0:
+        if (value * 4) % 1 != 0:
             raise serializers.ValidationError(
-                "Miqdor 0.5 ga karrali bo'lishi kerak (yarim juft = 0.5)"
+                "Miqdor 0.25 ga karrali bo'lishi kerak (0.25, 0.5, 0.75, 1.0 ...)"
             )
         return value
