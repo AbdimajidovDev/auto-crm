@@ -511,6 +511,9 @@ def normalize_permission_codes(codes: list[str]) -> list[str]:
             for new_code in LEGACY_PERMISSION_MAP[code]:
                 if new_code in ALL_PERMISSION_CODES:
                     result.add(new_code)
+    # Agar rolda biron-bir reports.* bo'lsa, "reports.view" (modulga kirish) ham avtomatik kiritiladi
+    if any(c.startswith("reports.") for c in result):
+        result.add("reports.view")
     return sorted(list(result))
 
 
