@@ -26,19 +26,17 @@ from apps.products.services.product_history_service import (
 )
 
 EVENT_TYPES = {
-    "entry",
-    "entry_return",
-    "transfer",
-    "sale",
-    "sale_return",
+    "field_change",
+    "import",
     "writeoff",
+    "adjustment",
     "inventory",
 }
 
 
 @extend_schema(
     tags=["Product"],
-    summary="Mahsulot tarixi: kirim / o'tkazma / sotuv / qaytim / spisaniye statistikasi",
+    summary="Mahsulot tarixi: master-data o'zgarishlari, import, hisobdan chiqarish, tuzatishlar",
     parameters=[
         OpenApiParameter("date_from", OpenApiTypes.DATE, description="Boshlanish sanasi"),
         OpenApiParameter("date_to", OpenApiTypes.DATE, description="Tugash sanasi"),
@@ -46,7 +44,7 @@ EVENT_TYPES = {
         OpenApiParameter(
             "type",
             OpenApiTypes.STR,
-            description="Hodisa turi: entry, entry_return, transfer, sale, sale_return, writeoff, inventory",
+            description="Hodisa turi: field_change, import, writeoff, adjustment, inventory",
         ),
         OpenApiParameter("page", OpenApiTypes.INT, description="Hodisalar sahifasi"),
         OpenApiParameter("limit", OpenApiTypes.INT, description="Sahifadagi hodisalar (max 200)"),

@@ -29,10 +29,8 @@ from rest_framework.exceptions import ValidationError
 from apps.contract.models import StockEntryItem, Supplier, SupplierTransaction
 from apps.debts.models import CustomerDebt
 from apps.products.models import Category, Product, ProductBatch
-from apps.products.services.product_history_service import (
-    ProductHistoryService,
-    parse_date_param,
-)
+from apps.products.services.product_history_service import parse_date_param
+from apps.reports.services.product_movement_report_service import ProductMovementReportService
 from apps.products.services.product_query_service import (
     LOW_STOCK_THRESHOLD,
     annotate_stock_qty,
@@ -1011,7 +1009,7 @@ def _build_product_history(params, store_id, user):
     if event_type not in PRODUCT_EVENT_LABELS:
         event_type = None
 
-    service = ProductHistoryService(
+    service = ProductMovementReportService(
         product,
         user,
         date_from=parse_date_param(d_from.isoformat() if d_from else None),

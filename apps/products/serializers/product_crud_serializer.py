@@ -2,7 +2,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from apps.common.quantity import QuantityField
-from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation
+from apps.products.models import Product, ProductImage, ProductBatch, ProductLocation, ProductFieldHistory
 from apps.products.utils.barcode_utility import normalize_barcode, generate_barcode_image
 
 
@@ -487,6 +487,29 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
         barcode_value = validated_data.pop("barcode", None)
         sku_value = validated_data.pop("sku", None)
 
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        user_display = (
+            getattr(user, "full_name", "")
+            or getattr(user, "phone_number", "")
+            or "Tizim"
+        ) if user and user.is_authenticated else "Tizim"
+
+        # Old snapshot
+        old_snapshot = {
+            "name": instance.name,
+            "name_cyrl": getattr(instance, "name_cyrl", ""),
+            "description": instance.description,
+            "category": str(instance.category.name) if instance.category else "",
+            "brand": str(instance.brand.name) if instance.brand else "",
+            "unit_measurement": str(instance.unit_measurement.measurement) if instance.unit_measurement else "",
+            "sku": instance.sku or "",
+            "barcode": instance.barcode or "",
+            "min_stock": str(instance.min_stock),
+            "status": instance.get_status_display() if hasattr(instance, "get_status_display") else instance.status,
+            "is_pair": "Juft (0.25)" if instance.is_pair_effective else "Dona (1)",
+        }
+
         # product fields update
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -505,6 +528,54 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
             instance.sku = sku_value
 
         instance.save()
+
+        # Check differences and record in ProductFieldHistory
+        field_labels = {
+            "name": "Mahsulot nomi",
+            "name_cyrl": "Mahsulot nomi (Kirill)",
+            "description": "Tavsif",
+            "category": "Kategoriya",
+            "brand": "Brend",
+            "unit_measurement": "O‘lchov birligi",
+            "sku": "SKU",
+            "barcode": "Shtrixkod",
+            "min_stock": "Minimal qoldiq",
+            "status": "Holati (Faollik)",
+            "is_pair": "Dona / Juft",
+        }
+
+        new_snapshot = {
+            "name": instance.name,
+            "name_cyrl": getattr(instance, "name_cyrl", ""),
+            "description": instance.description,
+            "category": str(instance.category.name) if instance.category else "",
+            "brand": str(instance.brand.name) if instance.brand else "",
+            "unit_measurement": str(instance.unit_measurement.measurement) if instance.unit_measurement else "",
+            "sku": instance.sku or "",
+            "barcode": instance.barcode or "",
+            "min_stock": str(instance.min_stock),
+            "status": instance.get_status_display() if hasattr(instance, "get_status_display") else instance.status,
+            "is_pair": "Juft (0.25)" if instance.is_pair_effective else "Dona (1)",
+        }
+
+        field_history_entries = []
+        for field, old_val in old_snapshot.items():
+            new_val = new_snapshot.get(field, "")
+            if str(old_val or "").strip() != str(new_val or "").strip():
+                field_history_entries.append(
+                    ProductFieldHistory(
+                        product=instance,
+                        field_name=field,
+                        field_label=field_labels.get(field, field),
+                        old_value=str(old_val or ""),
+                        new_value=str(new_val or ""),
+                        user=user if user and user.is_authenticated else None,
+                        user_display=user_display,
+                    )
+                )
+
+        if field_history_entries:
+            ProductFieldHistory.objects.bulk_create(field_history_entries)
 
         # DELETE IMAGES
         images_to_delete = list(

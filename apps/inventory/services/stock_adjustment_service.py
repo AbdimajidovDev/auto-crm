@@ -170,7 +170,12 @@ class StockAdjustmentService:
         elif adjustment.type == StockAdjustment.Type.WRITE_OFF:
             batch.quantity = batch.quantity + qty
         elif adjustment.type == StockAdjustment.Type.RECOUNT:
-            batch.quantity = adjustment.old_quantity
+            if adjustment.difference > Decimal("0") and batch.quantity < adjustment.difference:
+                raise ValidationError(
+                    f"Ushbu operatsiyadan keyin mahsulot bilan boshqa amallar bajarilgan va "
+                    f"omborda yetarli qoldiq yo'q. Bekor qilib bo'lmaydi."
+                )
+            batch.quantity = batch.quantity - adjustment.difference
         else:
             raise ValidationError(f"Noma'lum adjustment turi: {adjustment.type}")
 

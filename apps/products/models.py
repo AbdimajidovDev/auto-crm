@@ -237,3 +237,24 @@ class ProductUnitMeasurement(TimestampMixin):
     @property
     def is_pair(self) -> bool:
         return self.quantity_type == self.QuantityType.QUARTER
+
+
+class ProductFieldHistory(TimestampMixin):
+    """Mahsulot master-data ma'lumotlari (nomi, narxi, birligi, SKU, barcode, min_stock va h.k.) o'zgarishlari tarixi."""
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="field_histories")
+    field_name = models.CharField(max_length=64, db_index=True)
+    field_label = models.CharField(max_length=128)
+    old_value = models.TextField(blank=True, default="")
+    new_value = models.TextField(blank=True, default="")
+    user = models.ForeignKey("users.User", on_delete=models.SET_NULL, null=True, blank=True)
+    user_display = models.CharField(max_length=160, blank=True, default="")
+
+    class Meta:
+        db_table = "product_field_history"
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["product", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name} — {self.field_label}: {self.old_value} -> {self.new_value}"
