@@ -456,6 +456,56 @@ ALL_PERMISSION_CODES = frozenset(
     for action in feat["actions"]
 )
 
+# Eski (legacy) permission kodlari -> yangi granular kodlar xaritasi
+LEGACY_PERMISSION_MAP = {
+    "sales.return": ["sales.return.view", "sales.return.create"],
+    "sales.archive": ["sales.archive.view", "sales.archive.restore"],
+    "stockentry.import": ["stockentry.import.view", "stockentry.import.create"],
+    "stockentry.return": ["stockentry.return.view", "stockentry.return.create"],
+    "stockentry.pay": ["stockentry.pay.view", "stockentry.pay.create"],
+    "inventory.adjust": ["products.stock.adjust", "import.create", "writeoff.create", "import.view", "writeoff.view"],
+    "debts.create": ["debts.pay"],
+    "products.import": ["products.import.view", "products.import.create"],
+    "reports.view": [
+        "reports.sales.view",
+        "reports.sales.export",
+        "reports.top_products.view",
+        "reports.top_products.export",
+        "reports.products.view",
+        "reports.products.export",
+        "reports.low_stock.view",
+        "reports.low_stock.export",
+        "reports.product_history.view",
+        "reports.product_history.export",
+        "reports.customers.view",
+        "reports.customers.export",
+        "reports.suppliers.view",
+        "reports.suppliers.export",
+        "reports.supplier_sales.view",
+        "reports.supplier_sales.export",
+        "reports.stock_leftovers.view",
+        "reports.stock_leftovers.export",
+        "reports.payments.view",
+        "reports.payments.export",
+        "reports.expenses.view",
+        "reports.expenses.export",
+    ],
+}
+
+
+def normalize_permission_codes(codes: list[str]) -> list[str]:
+    """Eski/legacy permission kodlarini granular zamonaviy kodlarga o'giradi va faqat katalogda borlarini qoldiradi."""
+    result: set[str] = set()
+    for code in codes:
+        if code in ALL_PERMISSION_CODES:
+            result.add(code)
+        elif code in LEGACY_PERMISSION_MAP:
+            for new_code in LEGACY_PERMISSION_MAP[code]:
+                if new_code in ALL_PERMISSION_CODES:
+                    result.add(new_code)
+    return sorted(list(result))
+
+
 # Har bir permission kodi uchun to'liq tushunarli label
 PERMISSION_LABELS = {
     action["code"]: f"{mod['label']} → {feat['label']} → {action['label']}"

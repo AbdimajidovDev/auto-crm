@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from apps.users.models import Role
-from apps.users.permissions import ALL_PERMISSION_CODES
+from apps.users.permissions import ALL_PERMISSION_CODES, normalize_permission_codes
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -32,11 +32,6 @@ class RoleSerializer(serializers.ModelSerializer):
         return value
 
     def validate_permissions(self, value):
-        # Dublikatlarni olib tashlaymiz, katalogda yo'q kodlarni rad etamiz
-        unique = list(dict.fromkeys(value))
-        unknown = [code for code in unique if code not in ALL_PERMISSION_CODES]
-        if unknown:
-            raise serializers.ValidationError(
-                f"Noma'lum permission kodlari: {', '.join(unknown)}"
-            )
-        return unique
+        # Eski legacy kodlarni (masalan sales.return -> sales.return.view + create) avtomatik normalizatsiya qilamiz
+        normalized = normalize_permission_codes(value)
+        return normalized
