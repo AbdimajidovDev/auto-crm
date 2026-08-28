@@ -566,7 +566,11 @@ def user_permissions(user) -> frozenset[str] | None:
         return None
     if getattr(user, "role_id", None) is None:
         return frozenset()
-    return frozenset(user.role.permissions or [])
+    role_perms = set(user.role.permissions or [])
+    # Agar rolda biron-bir reports.* huquqi bo'lsa, reports.view (modulga kirish) avtomatik ta'minlanadi
+    if any(p.startswith("reports.") for p in role_perms):
+        role_perms.add("reports.view")
+    return frozenset(role_perms)
 
 
 def user_has_perm(user, code: str) -> bool:
@@ -574,11 +578,8 @@ def user_has_perm(user, code: str) -> bool:
     perms = user_permissions(user)
     if perms is None:
         return True  # superuser
-    # Hisobotlar ierarxiyasi: aniq hisobotni ko'rish yoki eksport qilish uchun
-    # avval "reports.view" (modulga kirish) bo'lishi shart
-    if code.startswith("reports.") and code != "reports.view":
-        if "reports.view" not in perms:
-            return False
+    if code == "reports.view":
+        return "reports.view" in perms or any(p.startswith("reports.") for p in perms)
     return code in perms
 
 

@@ -112,10 +112,10 @@ class GranularRBACAndSecurityTests(TestCase):
         self.assertFalse(user_has_perm(self.roleless_user, "reports.view"))
 
     def test_reports_module_view_required_hierarchy(self):
-        """reports.view (modulga kirish) bo'lmasa, hatto child report huquqi bo'lsa ham 403 qaytaradi."""
+        """reports.* (hisobot huquqi) bo'lmagan foydalanuvchiga reports endpointlari 403 qaytaradi."""
         no_module_role = Role.objects.create(
             name="No Module Reports",
-            permissions=["reports.sales.view"],
+            permissions=["sales.view", "dashboard.view"],
         )
         user = User.objects.create(
             phone_number="+998909999999",
@@ -129,8 +129,11 @@ class GranularRBACAndSecurityTests(TestCase):
         self.assertEqual(resp.status_code, 403)
         self.assertEqual(resp.json().get("permission"), "reports.view")
 
-        # reports.view qo'shilgach, sales hisoboti 200 OK qaytaradi
-        no_module_role.permissions.append("reports.view")
+        resp_meta = self.client.get("/api/reports/builder/meta/")
+        self.assertEqual(resp_meta.status_code, 403)
+
+        # reports.sales.view qo'shilgach, hisobotlar moduli va sales hisoboti 200 OK qaytaradi
+        no_module_role.permissions.append("reports.sales.view")
         no_module_role.save()
 
         resp_ok = self.client.get("/api/reports/builder/?report_type=sales")

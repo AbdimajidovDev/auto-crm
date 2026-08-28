@@ -249,7 +249,7 @@ class RBACMiddleware:
             return None
 
         # 1. Hisobotlar moduliga umumiy kirish huquqi (reports.view) tekshiruvi
-        if "reports.view" not in perms:
+        if "reports.view" not in perms and not any(p.startswith("reports.") for p in perms):
             return JsonResponse(
                 {"detail": "Sizda hisobotlar moduliga kirish uchun ruxsat yo'q.", "permission": "reports.view"},
                 status=403,
