@@ -2,7 +2,7 @@ from django.contrib import admin
 from modeltranslation.admin import TranslationAdmin
 
 from apps.products.models import Product, ProductImage, ProductBatch, Category, ProductLocation, ProductUnitMeasurement, \
-    Brand
+    Brand, BarcodeTemplate
 
 
 # Register your models here.
@@ -57,3 +57,10 @@ class ProductUnitMeasurementAdmin(TranslationAdmin):
 @admin.register(Brand)
 class BrandAdmin(TranslationAdmin):
     list_display = ('id', 'name')
+
+
+@admin.register(BarcodeTemplate)
+class BarcodeTemplateAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'width_mm', 'height_mm', 'is_default', 'is_active', 'created_at')
+    list_filter = ('is_default', 'is_active')
+    search_fields = ('name', 'description')

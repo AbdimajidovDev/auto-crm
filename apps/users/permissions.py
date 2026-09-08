@@ -102,6 +102,16 @@ PERMISSION_HIERARCHY = [
                     {"code": "locations.delete", "action": "delete", "label": "Joylashuvni o'chirish"},
                 ],
             },
+            {
+                "feature": "barcode_templates",
+                "label": "Shtrix-kod shablonlari",
+                "actions": [
+                    {"code": "barcode_templates.view", "action": "view", "label": "Shablonlarni ko'rish va chop etish"},
+                    {"code": "barcode_templates.create", "action": "create", "label": "Yangi shablon yaratish"},
+                    {"code": "barcode_templates.edit", "action": "edit", "label": "Shablonlarni tahrirlash"},
+                    {"code": "barcode_templates.delete", "action": "delete", "label": "Shablonlarni o'chirish"},
+                ],
+            },
         ],
     },
     {

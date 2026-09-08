@@ -9,6 +9,7 @@ class BrandSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "name",
+            "logo",
         )
         read_only_fields = ("id",)
 

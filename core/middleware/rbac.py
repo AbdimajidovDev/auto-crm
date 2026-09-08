@@ -53,6 +53,8 @@ EXACT_PATH_PERMISSIONS = [
     ("/api/products/bulk-delete/", "POST", "products.delete"),
     ("/api/products/products/import/template/", "GET", "products.import.view"),
     ("/api/products/products/import/", "POST", "products.import.create"),
+    ("/api/products/barcode-labels/preview/", "POST", "barcode_templates.view"),
+    ("/api/products/barcode-labels/print/", "POST", "barcode_templates.view"),
 
     # ── Savdo & Eksport ──
     ("/api/sales/export/", "GET", "sales.export"),
@@ -116,6 +118,7 @@ MODULE_PREFIX_MAP = [
     ("/api/products/brand/", "brands"),
     ("/api/products/measurements/", "units"),
     ("/api/products/store-product/locations/", "locations"),
+    ("/api/products/barcode-templates/", "barcode_templates"),
     ("/api/products/", "products"),
     ("/api/store/", "stores"),
     ("/api/contract/supplier/", "suppliers"),
@@ -132,7 +135,7 @@ MODULE_PREFIX_MAP = [
 PATH_MODULE_MAP = MODULE_PREFIX_MAP
 
 # Maxfiy / xavfsiz ma'lumotlar — bu modullarda GET so'rovi ham permission talab qiladi
-STRICT_VIEW_MODULES = {"users", "roles", "audit", "reports"}
+STRICT_VIEW_MODULES = {"users", "roles", "audit", "reports", "barcode_templates"}
 
 METHOD_ACTION_MAP = {
     "POST": "create",

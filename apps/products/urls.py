@@ -1,5 +1,7 @@
 from django.urls import path
 
+from rest_framework.routers import DefaultRouter
+
 from apps.products.views.brand_view import BrandRetrieveUpdateDestroyAPIView, BrandListCreateAPIView
 from apps.products.views.category_crud_view import (
     CategoryCreateAPIView,
@@ -29,8 +31,20 @@ from apps.products.views.product_excel_view import (
 from apps.products.views.export_views import ProductExportAPIView, CategoryExportAPIView
 from apps.products.views.product_history_view import ProductHistoryAPIView
 from apps.products.views.product_bulk_view import ProductBulkStatusAPIView, ProductBulkDeleteAPIView
+from apps.products.views.barcode_label_view import (
+    BarcodeTemplateViewSet,
+    BarcodeLabelPreviewAPIView,
+    BarcodeLabelPrintAPIView,
+)
+
+router = DefaultRouter()
+router.register(r"barcode-templates", BarcodeTemplateViewSet, basename="barcode-template")
 
 urlpatterns = [
+    # Barcode Label Designer & Printing
+    path("barcode-labels/preview/", BarcodeLabelPreviewAPIView.as_view(), name="barcode-label-preview"),
+    path("barcode-labels/print/", BarcodeLabelPrintAPIView.as_view(), name="barcode-label-print"),
+
 
     # Category
     path("categories/", CategoryListAPIView.as_view()),
@@ -70,4 +84,5 @@ urlpatterns = [
     # Sotuv cheki uchun: Excel'dan mahsulotlarni topish (import emas — faqat o'qish)
     path("products/import/lookup/",   ProductExcelLookupAPIView.as_view()),
 
-]
+] + router.urls
+

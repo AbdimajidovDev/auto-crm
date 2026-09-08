@@ -1,4 +1,5 @@
 from decimal import Decimal
+from django.core.validators import MinValueValidator, MaxValueValidator
 from django.db import models
 from django.utils.text import slugify
 
@@ -37,6 +38,7 @@ class Brand(models.Model):
             unique=True,
             db_index=True,
         )
+        logo = models.ImageField(upload_to="brands/logos/", null=True, blank=True)
 
         def __str__(self):
             return f"{self.name}"
@@ -258,3 +260,53 @@ class ProductFieldHistory(TimestampMixin):
 
     def __str__(self):
         return f"{self.product.name} — {self.field_label}: {self.old_value} -> {self.new_value}"
+
+
+class BarcodeTemplate(TimestampMixin):
+    class BarcodeFormat(models.TextChoices):
+        EAN13 = "EAN13", "EAN-13"
+
+    name = models.CharField(max_length=120, unique=True, db_index=True)
+    description = models.TextField(blank=True, default="")
+
+    # SINGLE SOURCE OF TRUTH: yorliq jismoniy o'lchamlari (mm)
+    width_mm = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        validators=[MinValueValidator(Decimal("15.00")), MaxValueValidator(Decimal("150.00"))]
+    )
+    height_mm = models.DecimalField(
+        max_digits=5, decimal_places=2,
+        validators=[MinValueValidator(Decimal("10.00")), MaxValueValidator(Decimal("150.00"))]
+    )
+
+    barcode_format = models.CharField(
+        max_length=20, choices=BarcodeFormat.choices, default=BarcodeFormat.EAN13
+    )
+
+    # Faqat elementlar konfiguratsiyasi (width_mm va height_mm model ustunlarida saqlanadi)
+    layout = models.JSONField(default=dict)
+
+    is_default = models.BooleanField(default=False, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+
+    created_by = models.ForeignKey(
+        "users.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="created_barcode_templates"
+    )
+
+    class Meta:
+        db_table = "barcode_template"
+        ordering = ["-is_default", "name"]
+        indexes = [
+            models.Index(fields=["is_default", "is_active"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["is_default"],
+                condition=models.Q(is_default=True, is_active=True),
+                name="uniq_active_default_barcode_template",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.name} ({self.width_mm}x{self.height_mm} mm)"
