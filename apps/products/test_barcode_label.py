@@ -504,6 +504,19 @@ class BarcodeLabelDeviceImageUploadTests(TestCase):
         self.assertIn("file_path", data)
         self._track_file(data["file_path"])
 
+    def test_1b_upload_image_via_barcode_templates_action(self):
+        image_file = self._create_image("test_action.png", "PNG")
+        response = self.client.post(
+            "/api/products/barcode-templates/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertIn("url", data)
+        self.assertIn("file_path", data)
+        self._track_file(data["file_path"])
+
     def test_2_unauthenticated_upload_rejected(self):
         anon_client = APIClient()
         image_file = self._create_image("test_anon.png", "PNG")

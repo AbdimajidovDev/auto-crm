@@ -53,6 +53,7 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
             "partial_update": "barcode_templates.edit",
             "set_default": "barcode_templates.edit",
             "destroy": "barcode_templates.delete",
+            "upload_image": "barcode_templates.create",
         }
         required_code = action_perm_map.get(self.action, "barcode_templates.view")
         return [IsAuthenticated(), RequirePermission(required_code)]
@@ -121,6 +122,16 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
             instance.save(update_fields=["is_default"])
         serializer = BarcodeTemplateDetailSerializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="upload-image",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def upload_image(self, request):
+        view = BarcodeLabelImageUploadAPIView()
+        return view.post(request)
 
 
 class BarcodeLabelPreviewAPIView(APIView):
