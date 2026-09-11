@@ -1,0 +1,560 @@
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+import io
+
+from django.test import TestCase
+from django.utils import timezone
+from rest_framework.test import APIRequestFactory, force_authenticate
+
+from apps.contract.models import Supplier
+from apps.contract.services.stock_entry_service import StockEntryService
+from apps.inventory.models import StockAllocation, StockLot
+from apps.products.models import Brand, Category, Product, ProductBatch
+from apps.reports.services.report_builder import ReportBuilderService
+from apps.reports.services.supplier_sales_report_service import SupplierSalesReportService
+from apps.reports.views.report_builder_view import (
+    ReportBuilderExportAPIView,
+    ReportBuilderGenerateAPIView,
+)
+from apps.sales.models import Sale, SaleItem
+from apps.sales.services.sale_return_service import SaleReturnService
+from apps.sales.services.sales_services import SaleService
+from apps.store.models import Store, StoreUser
+from apps.users.models.customers import Customer
+from apps.users.models.role import Role
+from apps.users.models.user import User
+
+
+class SupplierSalesReportTests(TestCase):
+    """
+    Focused tests for Phase 1.8 Step 5: Supplier Sales Report.
+    Validates all 25 core business correctness cases.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Stores
+        cls.store1 = Store.objects.create(name="Store Alpha", address="Alpha Address", phone_number="+998901111111")
+        cls.store2 = Store.objects.create(name="Store Beta", address="Beta Address", phone_number="+998902222222")
+
+        # Roles
+        cls.role_viewer = Role.objects.create(name="Supplier Viewer", permissions=["reports.view", "reports.supplier_sales.view"])
+        cls.role_exporter = Role.objects.create(name="Supplier Exporter", permissions=["reports.view", "reports.supplier_sales.view", "reports.supplier_sales.export"])
+        cls.role_no_view = Role.objects.create(name="No View Role", permissions=["reports.view"])
+        cls.role_no_reports = Role.objects.create(name="No Reports Role", permissions=[])
+
+        # Users
+        cls.admin = User.objects.create(phone_number="+998900000001", full_name="Super Admin", is_superuser=True, is_staff=True)
+        cls.seller_user = User.objects.create(phone_number="+998900000002", full_name="Seller Sam", is_superuser=False)
+        cls.store1_mgr = User.objects.create(phone_number="+998900000003", full_name="Store 1 Mgr", role=cls.role_viewer, is_superuser=False)
+        cls.store2_mgr = User.objects.create(phone_number="+998900000004", full_name="Store 2 Mgr", role=cls.role_viewer, is_superuser=False)
+        cls.export_user = User.objects.create(phone_number="+998900000005", full_name="Export User", role=cls.role_exporter, is_superuser=False)
+        cls.no_perm_user = User.objects.create(phone_number="+998900000006", full_name="No Perm User", role=cls.role_no_view, is_superuser=False)
+
+        StoreUser.objects.create(user=cls.store1_mgr, store=cls.store1, is_active=True)
+        StoreUser.objects.create(user=cls.store2_mgr, store=cls.store2, is_active=True)
+        StoreUser.objects.create(user=cls.export_user, store=cls.store1, is_active=True)
+        StoreUser.objects.create(user=cls.seller_user, store=cls.store1, is_active=True)
+        StoreUser.objects.create(user=cls.admin, store=cls.store1, is_active=True)
+        StoreUser.objects.create(user=cls.admin, store=cls.store2, is_active=True)
+
+        # Categories & Brands
+        cls.cat_brakes = Category.objects.create(name="Brakes")
+        cls.cat_filters = Category.objects.create(name="Filters")
+        cls.brand_bosch = Brand.objects.create(name="Bosch")
+        cls.brand_brembo = Brand.objects.create(name="Brembo")
+
+        # Products
+        cls.product1 = Product.objects.create(
+            name="Brake Pads Front",
+            barcode="4781001000018",
+            sku="BP-001",
+            category=cls.cat_brakes,
+            brand=cls.brand_bosch,
+            status=Product.ProductStatus.ACTIVE,
+        )
+        cls.product2 = Product.objects.create(
+            name="Oil Filter Pro",
+            barcode="4781001000025",
+            sku="OF-002",
+            category=cls.cat_filters,
+            brand=cls.brand_brembo,
+            status=Product.ProductStatus.ACTIVE,
+        )
+
+        # Suppliers & Customer
+        cls.supplier1 = Supplier.objects.create(name="Global Auto Supply")
+        cls.supplier2 = Supplier.objects.create(name="Premium Parts Co")
+        cls.customer = Customer.objects.create(full_name="Akmal Saidov", phone_number="+998901234567")
+
+        cls.factory = APIRequestFactory()
+
+    # 1. Single supplier sale
+    def test_01_single_supplier_sale(self):
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1000.00"),
+        )
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]},
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["supplier"], self.supplier1.name)
+        self.assertEqual(row["product"], self.product1.name)
+        self.assertEqual(row["sold_qty"], Decimal("5.00"))
+        self.assertEqual(row["returned_qty"], Decimal("0.00"))
+        self.assertEqual(row["net_sold_qty"], Decimal("5.00"))
+        self.assertEqual(Decimal(row["revenue"]), Decimal("750.00"))
+
+    # 2. Multiple suppliers for same product
+    def test_02_multiple_suppliers_for_same_product(self):
+        # Supplier 1: 5 units
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("500.00"),
+        )
+        # Supplier 2: 5 units
+        StockEntryService.create_entry(
+            supplier=self.supplier2, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("110.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("550.00"),
+        )
+        # Sale 1: 5 units (takes supplier 1)
+        SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]},
+        )
+        # Sale 2: 2 units (takes supplier 2)
+        SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]},
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        # Must produce 2 rows: one for supplier1 (5 sold), one for supplier2 (2 sold)
+        self.assertEqual(len(rows), 2)
+        smap = {r["supplier"]: r for r in rows}
+        self.assertIn(self.supplier1.name, smap)
+        self.assertIn(self.supplier2.name, smap)
+        self.assertEqual(smap[self.supplier1.name]["sold_qty"], Decimal("5.00"))
+        self.assertEqual(smap[self.supplier2.name]["sold_qty"], Decimal("2.00"))
+
+    # 3. Multi-lot SaleItem
+    def test_03_multi_lot_sale_item(self):
+        # Entry 1 (Supplier 1): 4 units
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("4.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("400.00"),
+        )
+        # Entry 2 (Supplier 2): 6 units
+        StockEntryService.create_entry(
+            supplier=self.supplier2, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("6.00"), "purchase_price": Decimal("110.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("660.00"),
+        )
+        # Single SaleItem for 7 units (consumes 4 from supplier1 and 3 from supplier2)
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("7.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("1050.00")}]},
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        self.assertEqual(len(rows), 2)
+        smap = {r["supplier"]: r for r in rows}
+        self.assertEqual(smap[self.supplier1.name]["sold_qty"], Decimal("4.00"))
+        self.assertEqual(smap[self.supplier1.name]["revenue"], "600.00")
+        self.assertEqual(smap[self.supplier2.name]["sold_qty"], Decimal("3.00"))
+        self.assertEqual(smap[self.supplier2.name]["revenue"], "450.00")
+
+    # 4. FIFO supplier attribution
+    def test_04_fifo_supplier_attribution(self):
+        # Entry 1 (Supplier 1) created first
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1000.00"),
+        )
+        # Entry 2 (Supplier 2) created second
+        StockEntryService.create_entry(
+            supplier=self.supplier2, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("110.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1100.00"),
+        )
+        # Sale 6 units -> MUST strictly allocate from Supplier 1
+        SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("6.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("900.00")}]},
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supplier"], self.supplier1.name)
+        self.assertEqual(rows[0]["sold_qty"], Decimal("6.00"))
+
+    # 5. Return to original supplier / lot
+    def test_05_return_to_original_supplier_lot(self):
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1000.00"),
+        )
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]},
+        )
+        item = sale.items.first()
+        SaleReturnService.create_return(
+            user=self.admin,
+            data={
+                "sale": sale.id,
+                "comment": "Changed mind",
+                "items": [{"sale_item": item.id, "quantity": Decimal("2.00")}],
+            },
+        )
+
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["supplier"], self.supplier1.name)
+        self.assertEqual(row["sold_qty"], Decimal("5.00"))
+        self.assertEqual(row["returned_qty"], Decimal("2.00"))
+        self.assertEqual(row["net_sold_qty"], Decimal("3.00"))
+        self.assertEqual(Decimal(row["revenue"]), Decimal("450.00"))
+
+    # 6. Cross-period return
+    def test_06_cross_period_return(self):
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1000.00"),
+        )
+        # Past sale: July 15
+        past_sale_dt = timezone.make_aware(datetime(2026, 7, 15, 12, 0, 0))
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]},
+        )
+        # Set past timestamp on sale and allocations
+        Sale.objects.filter(pk=sale.pk).update(created_at=past_sale_dt)
+        StockAllocation.objects.filter(sale_item__sale=sale).update(created_at=past_sale_dt)
+
+        # Return made on August 10
+        ret = SaleReturnService.create_return(
+            user=self.admin,
+            data={
+                "sale": sale.id,
+                "comment": "Defect",
+                "items": [{"sale_item": sale.items.first().id, "quantity": Decimal("2.00")}],
+            },
+        )
+        aug_return_dt = timezone.make_aware(datetime(2026, 8, 10, 14, 0, 0))
+        StockAllocation.objects.filter(movement_type=StockAllocation.MovementType.SALE_RETURN).update(created_at=aug_return_dt)
+
+        # Report for August 2026: sale is excluded, return is captured and attributed to supplier1
+        params = {"report_type": "supplier_sales", "from": "2026-08-01", "to": "2026-08-31", "store_id": self.store1.id, "group_mode": "period"}
+        cols, rows, _, summary = SupplierSalesReportService.build_report(params)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["supplier"], self.supplier1.name)
+        self.assertEqual(row["sold_qty"], Decimal("0.00"))
+        self.assertEqual(row["returned_qty"], Decimal("2.00"))
+        self.assertEqual(row["net_sold_qty"], Decimal("-2.00"))
+        self.assertEqual(Decimal(row["revenue"]), Decimal("-300.00"))
+
+    # 7. Partial return
+    def test_07_partial_return(self):
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("1000.00"),
+        )
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("10.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("1500.00")}]},
+        )
+        SaleReturnService.create_return(
+            user=self.admin,
+            data={
+                "sale": sale.id,
+                "comment": "Partial",
+                "items": [{"sale_item": sale.items.first().id, "quantity": Decimal("3.00")}],
+            },
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        self.assertEqual(rows[0]["sold_qty"], Decimal("10.00"))
+        self.assertEqual(rows[0]["returned_qty"], Decimal("3.00"))
+        self.assertEqual(rows[0]["net_sold_qty"], Decimal("7.00"))
+        self.assertEqual(Decimal(rows[0]["revenue"]), Decimal("1050.00"))
+
+    # 8. Full return
+    def test_08_full_return(self):
+        StockEntryService.create_entry(
+            supplier=self.supplier1, store=self.store1, user=self.admin,
+            items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}],
+            cash_amount=Decimal("500.00"),
+        )
+        sale = SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]},
+        )
+        SaleReturnService.create_return(
+            user=self.admin,
+            data={
+                "sale": sale.id,
+                "comment": "Full Return",
+                "items": [{"sale_item": sale.items.first().id, "quantity": Decimal("5.00")}],
+            },
+        )
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        self.assertEqual(rows[0]["sold_qty"], Decimal("5.00"))
+        self.assertEqual(rows[0]["returned_qty"], Decimal("5.00"))
+        self.assertEqual(rows[0]["net_sold_qty"], Decimal("0.00"))
+        self.assertEqual(Decimal(rows[0]["revenue"]), Decimal("0.00"))
+
+    # 9. Supplier filter
+    def test_09_supplier_filter(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("500.00"))
+        StockEntryService.create_entry(supplier=self.supplier2, store=self.store1, user=self.admin, items=[{"product": self.product2, "quantity": Decimal("5.00"), "purchase_price": Decimal("50.00"), "selling_price": Decimal("80.00"), "wholesale_price": Decimal("70.00")}], cash_amount=Decimal("250.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product2.id, "quantity": Decimal("3.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("240.00")}]})
+
+        cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "supplier_id": str(self.supplier1.id)})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supplier"], self.supplier1.name)
+
+    # 10. Store isolation
+    def test_10_store_isolation(self):
+        # Store 1 sale
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("500.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        # Store 2 sale
+        StockEntryService.create_entry(supplier=self.supplier2, store=self.store2, user=self.admin, items=[{"product": self.product2, "quantity": Decimal("5.00"), "purchase_price": Decimal("50.00"), "selling_price": Decimal("80.00"), "wholesale_price": Decimal("70.00")}], cash_amount=Decimal("250.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store2.id, "customer": self.customer.id, "items": [{"product": self.product2.id, "quantity": Decimal("3.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("240.00")}]})
+
+        # When store1_mgr queries: Store 2 rows are NEVER visible
+        cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales"}, user=self.store1_mgr)
+        self.assertTrue(all(r["store"] == self.store1.name for r in rows))
+        self.assertFalse(any(r["store"] == self.store2.name for r in rows))
+
+    # 11. Category, brand, product, SKU, barcode filters
+    def test_11_category_brand_product_sku_barcode_filters(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("500.00"))
+        StockEntryService.create_entry(supplier=self.supplier2, store=self.store1, user=self.admin, items=[{"product": self.product2, "quantity": Decimal("5.00"), "purchase_price": Decimal("50.00"), "selling_price": Decimal("80.00"), "wholesale_price": Decimal("70.00")}], cash_amount=Decimal("250.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("1.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("150.00")}]})
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product2.id, "quantity": Decimal("1.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("80.00")}]})
+
+        # By category
+        _, rows_cat, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "category_id": str(self.cat_brakes.id)})
+        self.assertEqual(len(rows_cat), 1)
+        self.assertEqual(rows_cat[0]["product"], self.product1.name)
+
+        # By brand
+        _, rows_brand, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "brand_id": str(self.brand_brembo.id)})
+        self.assertEqual(len(rows_brand), 1)
+        self.assertEqual(rows_brand[0]["product"], self.product2.name)
+
+        # By SKU
+        _, rows_sku, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "sku": "BP-001"})
+        self.assertEqual(len(rows_sku), 1)
+
+        # By Barcode
+        _, rows_bar, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "barcode": "4781001000025"})
+        self.assertEqual(len(rows_bar), 1)
+
+    # 12. Seller and Customer filters
+    def test_12_seller_customer_filters(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        # Sale by seller_user
+        SaleService.create_sale(user=self.seller_user, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+        # Sale by admin with no customer
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": None, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("450.00")}]})
+
+        # Filter by seller
+        _, rows_sel, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "seller_id": str(self.seller_user.id)})
+        self.assertEqual(len(rows_sel), 1)
+        self.assertEqual(rows_sel[0]["sold_qty"], Decimal("2.00"))
+
+        # Filter by customer
+        _, rows_cust, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "customer_id": str(self.customer.id)})
+        self.assertEqual(len(rows_cust), 1)
+        self.assertEqual(rows_cust[0]["sold_qty"], Decimal("2.00"))
+
+    # 13. Discount and revenue correctness
+    def test_13_discount_and_revenue_correctness(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        # 10 units @ 150 = 1500 subtotal, with 10% discount => total_amount = 1350
+        SaleService.create_sale(
+            user=self.admin,
+            data={
+                "store": self.store1.id, "customer": self.customer.id,
+                "items": [{"product": self.product1.id, "quantity": Decimal("10.00"), "price": Decimal("150.00")}],
+                "discount_type": "p", "discount_value": Decimal("10.00"),
+                "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("1350.00")}],
+            },
+        )
+        _, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(Decimal(rows[0]["revenue"]), Decimal("1350.00"))
+
+    # 14. Free price condition
+    def test_14_free_price(self):
+        # Catalog selling_price is 150.00
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        # Sold at custom free price of 165.00
+        SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("165.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("330.00")}]},
+        )
+        _, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(rows[0]["free_price"], "Ha")
+
+    # 15. Wholesale price condition
+    def test_15_wholesale_price(self):
+        # Catalog wholesale_price is 130.00
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        # Sold at wholesale price 130.00
+        SaleService.create_sale(
+            user=self.admin,
+            data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("4.00"), "price": Decimal("130.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("520.00")}]},
+        )
+        _, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(rows[0]["used_wholesale_price"], "130.00")
+        self.assertEqual(rows[0]["free_price"], "Yo'q")
+
+    # 16. Summary equals filtered rows
+    def test_16_summary_equals_filtered_rows(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        StockEntryService.create_entry(supplier=self.supplier2, store=self.store1, user=self.admin, items=[{"product": self.product2, "quantity": Decimal("20.00"), "purchase_price": Decimal("50.00"), "selling_price": Decimal("80.00"), "wholesale_price": Decimal("70.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("150.00")}, {"product": self.product2.id, "quantity": Decimal("5.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("850.00")}]})
+
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "group_mode": "period"})
+        sum_dict = {s["label"]: s["value"] for s in summary}
+        self.assertEqual(sum_dict["Qatorlar"], len(rows))
+        self.assertEqual(sum_dict["Jami sotilgan"], sum(r["sold_qty"] for r in rows))
+        self.assertEqual(Decimal(str(sum_dict["Jami tushum"])), sum(Decimal(r["revenue"]) for r in rows))
+
+    # 17. Excel filtered export
+    def test_17_excel_filtered_export(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        request = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "excel", "store_id": self.store1.id})
+        force_authenticate(request, user=self.export_user)
+        response = ReportBuilderExportAPIView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        self.assertTrue(len(response.content) > 100)
+
+    # 18. CSV filtered export
+    def test_18_csv_filtered_export(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        request = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "csv", "store_id": self.store1.id})
+        force_authenticate(request, user=self.export_user)
+        response = ReportBuilderExportAPIView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response["Content-Type"])
+        content = response.content.decode("utf-8-sig")
+        self.assertIn("Yetkazib beruvchi", content)
+        self.assertIn(self.supplier1.name, content)
+
+    # 19. PDF filtered export
+    def test_19_pdf_filtered_export(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        request = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "pdf", "store_id": self.store1.id})
+        force_authenticate(request, user=self.export_user)
+        response = ReportBuilderExportAPIView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(response.content.startswith(b"%PDF"))
+
+    # 20. RBAC view and export
+    def test_20_rbac_view_and_export(self):
+        # 1. User without view permission => 403 on generate
+        req1 = self.factory.get("/api/reports/builder/", {"report_type": "supplier_sales"})
+        force_authenticate(req1, user=self.no_perm_user)
+        res1 = ReportBuilderGenerateAPIView.as_view()(req1)
+        self.assertEqual(res1.status_code, 403)
+
+        # 2. User with view permission but without export permission => 403 on export
+        req2 = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "excel"})
+        force_authenticate(req2, user=self.store1_mgr)
+        res2 = ReportBuilderExportAPIView.as_view()(req2)
+        self.assertEqual(res2.status_code, 403)
+
+        # 3. User with export permission => 200 OK
+        req3 = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "excel"})
+        force_authenticate(req3, user=self.export_user)
+        res3 = ReportBuilderExportAPIView.as_view()(req3)
+        self.assertEqual(res3.status_code, 200)
+
+    # 21. No heuristic supplier attribution
+    def test_21_no_heuristic_supplier_attribution(self):
+        # First entry from Supplier 1
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        # Sale consumes Supplier 1
+        sale = SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("5.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("750.00")}]})
+        # Later a brand new entry is made from Supplier 2
+        StockEntryService.create_entry(supplier=self.supplier2, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("20.00"), "purchase_price": Decimal("105.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("2100.00"))
+
+        cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        # Must strictly attribute the sale to Supplier 1, NEVER to the latest Supplier 2!
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supplier"], self.supplier1.name)
+        self.assertNotEqual(rows[0]["supplier"], self.supplier2.name)
+
+    # 22. Historical unknown supplier handling
+    def test_22_historical_unknown_supplier_handling(self):
+        # Pre-create an OPENING_BALANCE lot with supplier=None (as created by cut-over migration)
+        ProductBatch.objects.create(store=self.store1, product=self.product1, quantity=Decimal("10.00"), purchase_price=Decimal("100.00"), selling_price=Decimal("150.00"))
+        StockLot.objects.create(
+            store=self.store1, product=self.product1, lot_type=StockLot.LotType.OPENING_BALANCE,
+            supplier=None, initial_quantity=Decimal("10.00"), remaining_quantity=Decimal("10.00"), purchase_price=Decimal("100.00"),
+        )
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("4.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("600.00")}]})
+
+        cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["supplier"], "Tarixiy (Aniqlanmagan)")
+        self.assertEqual(rows[0]["sold_qty"], Decimal("4.00"))
+
+    # 23. Query count bounded (No N+1)
+    def test_23_query_count_bounded(self):
+        # Create entries and multiple sales
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("20.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("2000.00"))
+        for _ in range(5):
+            SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("1.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("150.00")}]})
+
+        with self.assertNumQueries(4):
+            cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
+            self.assertEqual(len(rows), 1)
+
+    # 24. Multi-store same product
+    def test_24_multi_store_same_product(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store2, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("450.00")}]})
+        SaleService.create_sale(user=self.admin, data={"store": self.store2.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("4.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("600.00")}]})
+
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "group_mode": "period"})
+        # 2 distinct rows: one for Store Alpha, one for Store Beta
+        self.assertEqual(len(rows), 2)
+        store_map = {r["store"]: r for r in rows}
+        self.assertEqual(store_map[self.store1.name]["sold_qty"], Decimal("3.00"))
+        self.assertEqual(store_map[self.store2.name]["sold_qty"], Decimal("4.00"))
+
+    # 25. Zero result dataset
+    def test_25_zero_result_dataset(self):
+        cols, rows, _, summary = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "supplier_id": "999999"})
+        self.assertEqual(len(rows), 0)
+        self.assertEqual(len(cols), 13)
+        sum_dict = {s["label"]: s["value"] for s in summary}
+        self.assertEqual(sum_dict["Qatorlar"], 0)
+        self.assertEqual(sum_dict["Jami sotilgan"], Decimal("0.00"))
