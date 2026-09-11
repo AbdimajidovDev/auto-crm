@@ -97,6 +97,47 @@ class LabelDataResolver:
             return f"{price_val} so'm"
 
     @classmethod
+    def resolve_uploaded_image_path(cls, image_url: str | None) -> str | None:
+        """
+        Resolves a safe absolute local filesystem path for an uploaded image URL.
+        Enforces strict boundary within settings.MEDIA_ROOT and prevents path traversal.
+        """
+        if not image_url or not isinstance(image_url, str):
+            return None
+
+        # Disallow directory traversal characters and URI schemes
+        if ".." in image_url or "\\" in image_url:
+            return None
+        if "://" in image_url or image_url.startswith(("data:", "blob:", "file:")):
+            return None
+
+        from django.conf import settings
+        media_url = getattr(settings, "MEDIA_URL", "/media/")
+
+        clean_url = image_url.strip()
+        if clean_url.startswith(media_url):
+            rel_path = clean_url[len(media_url):]
+        elif clean_url.startswith("/media/"):
+            rel_path = clean_url[7:]
+        elif clean_url.startswith("media/"):
+            rel_path = clean_url[6:]
+        elif not clean_url.startswith("/"):
+            rel_path = clean_url
+        else:
+            return None
+
+        media_root = os.path.abspath(str(settings.MEDIA_ROOT))
+        full_path = os.path.abspath(os.path.join(media_root, rel_path.lstrip("/")))
+
+        # Boundary check: ensure full_path is strictly within media_root
+        if not full_path.startswith(media_root + os.sep) and full_path != media_root:
+            return None
+
+        if os.path.isfile(full_path):
+            return full_path
+        return None
+
+    @classmethod
     def _get_file_path(cls, file_field) -> str | None:
         """Helper to get safe local file path from ImageField/FileField."""
         if not file_field:

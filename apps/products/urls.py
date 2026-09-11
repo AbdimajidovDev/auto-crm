@@ -35,6 +35,7 @@ from apps.products.views.barcode_label_view import (
     BarcodeTemplateViewSet,
     BarcodeLabelPreviewAPIView,
     BarcodeLabelPrintAPIView,
+    BarcodeLabelImageUploadAPIView,
 )
 
 router = DefaultRouter()
@@ -42,6 +43,7 @@ router.register(r"barcode-templates", BarcodeTemplateViewSet, basename="barcode-
 
 urlpatterns = [
     # Barcode Label Designer & Printing
+    path("barcode-labels/upload-image/", BarcodeLabelImageUploadAPIView.as_view(), name="barcode-label-upload-image"),
     path("barcode-labels/preview/", BarcodeLabelPreviewAPIView.as_view(), name="barcode-label-preview"),
     path("barcode-labels/print/", BarcodeLabelPrintAPIView.as_view(), name="barcode-label-print"),
 

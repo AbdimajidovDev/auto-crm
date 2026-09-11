@@ -1,7 +1,10 @@
 import re
 from typing import Any
 from decimal import Decimal
+from PIL import Image
+
 from .exceptions import LabelValidationError
+from .resolver import LabelDataResolver
 
 
 HEX_COLOR_REGEX = re.compile(r"^#(?:[0-9a-fA-F]{3}){1,2}$")
@@ -162,20 +165,59 @@ class LabelTemplateValidator:
 
             # Type-specific validation & security
             if elem_type == "image":
-                # IMAGE SECURITY:
-                # 1. field must be in whitelist
-                # 2. static_value must be empty (arbitrary URL or path strictly prohibited)
-                if field not in ALLOWED_IMAGE_FIELDS:
+                source_type = elem.get("source_type", "field")
+                if source_type not in ("field", "uploaded"):
                     raise LabelValidationError(
-                        f"Element '{elem_id}': Rasm elementi uchun 'field' faqat quyidagilardan biri bo'lishi shart: "
-                        f"{sorted(list(ALLOWED_IMAGE_FIELDS))}. '{field}' qabul qilinmaydi."
+                        f"Element '{elem_id}': Noma'lum rasm manbasi turi (source_type): '{source_type}'. "
+                        "Faqat 'field' yoki 'uploaded' bo'lishi mumkin."
                     )
+
                 static_val = elem.get("static_value")
                 if static_val:
                     raise LabelValidationError(
                         f"Element '{elem_id}': Rasm elementiga static_value orqali ixtiyoriy URL yoki fayl yo'li "
                         "berish xavfsizlik nuqtai nazaridan taqiqlangan."
                     )
+
+                if source_type == "field":
+                    if not field or field not in ALLOWED_IMAGE_FIELDS:
+                        raise LabelValidationError(
+                            f"Element '{elem_id}': Rasm elementi uchun 'field' faqat quyidagilardan biri bo'lishi shart: "
+                            f"{sorted(list(ALLOWED_IMAGE_FIELDS))}. '{field}' qabul qilinmaydi."
+                        )
+                    cleaned_elem["source_type"] = "field"
+                    cleaned_elem["field"] = field
+                    cleaned_elem["image_url"] = None
+                else:  # source_type == "uploaded"
+                    image_url = elem.get("image_url")
+                    if not image_url or not isinstance(image_url, str) or not image_url.strip():
+                        raise LabelValidationError(
+                            f"Element '{elem_id}': Qurilmadan yuklangan rasm uchun 'image_url' berilishi shart."
+                        )
+                    image_url = image_url.strip()
+
+                    file_path = LabelDataResolver.resolve_uploaded_image_path(image_url)
+                    if not file_path:
+                        raise LabelValidationError(
+                            f"Element '{elem_id}': Ko'rsatilgan rasm serverda topilmadi yoki xavfsizlik talablariga javob bermaydi: {image_url}"
+                        )
+
+                    try:
+                        with Image.open(file_path) as test_img:
+                            if test_img.format not in {"JPEG", "PNG", "WEBP"}:
+                                raise LabelValidationError(
+                                    f"Element '{elem_id}': Rasm formati faqat JPG, PNG yoki WEBP bo'lishi kerak."
+                                )
+                            test_img.verify()
+                    except Exception as e:
+                        if isinstance(e, LabelValidationError):
+                            raise
+                        raise LabelValidationError(f"Element '{elem_id}': Rasm fayli buzilgan yoki ochib bo'lmadi.")
+
+                    cleaned_elem["source_type"] = "uploaded"
+                    cleaned_elem["field"] = None
+                    cleaned_elem["image_url"] = image_url
+
                 image_fit = elem.get("image_fit", "contain")
                 if image_fit not in ALLOWED_IMAGE_FITS:
                     image_fit = "contain"

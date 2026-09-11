@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageColor
 
 from django.conf import settings
 from .barcode_gen import BarcodeGeneratorService
+from .resolver import LabelDataResolver
 from .exceptions import LabelRenderingError
 
 
@@ -328,11 +329,16 @@ class PngLabelRenderer:
         w: int,
         h: int,
     ):
-        field = elem.get("field")
-        if not field:
-            return
+        source_type = elem.get("source_type", "field")
+        if source_type == "uploaded":
+            image_url = elem.get("image_url")
+            file_path = LabelDataResolver.resolve_uploaded_image_path(image_url)
+        else:
+            field = elem.get("field")
+            if not field:
+                return
+            file_path = context.get(field)
 
-        file_path = context.get(field)
         if not file_path or not isinstance(file_path, str) or not os.path.isfile(file_path):
             return
 

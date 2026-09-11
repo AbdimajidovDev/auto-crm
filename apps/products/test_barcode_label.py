@@ -1,6 +1,9 @@
 import io
+import os
 from decimal import Decimal
 from PIL import Image
+from django.conf import settings
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -441,3 +444,278 @@ class BarcodeTemplateAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response["Content-Type"], "application/pdf")
         self.assertTrue(response.content.startswith(b"%PDF"))
+
+
+class BarcodeLabelDeviceImageUploadTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create(
+            phone_number="+998901234567",
+            full_name="Label Manager",
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.store = Store.objects.create(name="Upload Test Store", is_active=True)
+        self.product = Product.objects.create(
+            name="Rasm Mahsuloti",
+            sku="IMG-SKU-001",
+            barcode="2000000011448",
+        )
+        ProductBatch.objects.create(
+            product=self.product,
+            store=self.store,
+            quantity=Decimal("10"),
+            purchase_price=Decimal("100000"),
+            selling_price=Decimal("120000"),
+        )
+        self.created_files = []
+
+    def tearDown(self):
+        for path in self.created_files:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+    def _track_file(self, file_path: str):
+        full = os.path.join(str(settings.MEDIA_ROOT), file_path.lstrip("/"))
+        self.created_files.append(full)
+
+    def _create_image(self, name: str, fmt: str = "PNG", size=(60, 60), color="red"):
+        buf = io.BytesIO()
+        img = Image.new("RGB", size, color=color)
+        img.save(buf, format=fmt)
+        buf.seek(0)
+        return SimpleUploadedFile(name, buf.getvalue(), content_type=f"image/{fmt.lower()}")
+
+    def test_1_authenticated_image_upload(self):
+        image_file = self._create_image("test_auth.png", "PNG")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertIn("url", data)
+        self.assertIn("file_path", data)
+        self._track_file(data["file_path"])
+
+    def test_2_unauthenticated_upload_rejected(self):
+        anon_client = APIClient()
+        image_file = self._create_image("test_anon.png", "PNG")
+        response = anon_client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_3_valid_jpg_upload(self):
+        image_file = self._create_image("test_valid.jpg", "JPEG", color="green")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertTrue(data["url"].endswith(".jpg"))
+        self._track_file(data["file_path"])
+
+    def test_4_valid_png_upload(self):
+        image_file = self._create_image("test_valid.png", "PNG", color="blue")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertTrue(data["url"].endswith(".png"))
+        self._track_file(data["file_path"])
+
+    def test_5_valid_webp_upload(self):
+        image_file = self._create_image("test_valid.webp", "WEBP", color="yellow")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertTrue(data["url"].endswith(".webp"))
+        self._track_file(data["file_path"])
+
+    def test_6_invalid_non_image_file_rejected(self):
+        fake_file = SimpleUploadedFile("fake.jpg", b"This is not a real image header", content_type="image/jpeg")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": fake_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("detail", response.json())
+
+    def test_7_oversized_file_rejected(self):
+        # 5 MB + 1024 bytes
+        large_content = b"X" * (5 * 1024 * 1024 + 1024)
+        large_file = SimpleUploadedFile("oversized.png", large_content, content_type="image/png")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": large_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("5 MB", response.json()["detail"])
+
+    def test_8_uploaded_image_url_returned_correctly(self):
+        image_file = self._create_image("test_url.png", "PNG")
+        response = self.client.post(
+            "/api/products/barcode-labels/upload-image/",
+            {"image": image_file},
+            format="multipart",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        data = response.json()
+        self.assertTrue(data["url"].startswith(settings.MEDIA_URL))
+        full_path = os.path.join(str(settings.MEDIA_ROOT), data["file_path"])
+        self._track_file(data["file_path"])
+        self.assertTrue(os.path.isfile(full_path))
+
+    def test_9_template_save_with_uploaded_source_passes_validator(self):
+        image_file = self._create_image("test_tmpl.png", "PNG")
+        res = self.client.post("/api/products/barcode-labels/upload-image/", {"image": image_file}, format="multipart")
+        data = res.json()
+        self._track_file(data["file_path"])
+
+        layout = {
+            "version": 1,
+            "background_color": "#FFFFFF",
+            "elements": [
+                {
+                    "id": "elem_uploaded_logo",
+                    "type": "image",
+                    "source_type": "uploaded",
+                    "image_url": data["url"],
+                    "x_mm": 2.0,
+                    "y_mm": 2.0,
+                    "width_mm": 10.0,
+                    "height_mm": 10.0,
+                    "image_fit": "contain",
+                    "z_index": 1,
+                    "visible": True,
+                }
+            ],
+        }
+
+        cleaned, warnings = LabelTemplateValidator.validate(layout, 30.0, 19.0)
+        self.assertEqual(len(cleaned["elements"]), 1)
+        el = cleaned["elements"][0]
+        self.assertEqual(el["source_type"], "uploaded")
+        self.assertEqual(el["image_url"], data["url"])
+        self.assertIsNone(el["field"])
+
+    def test_10_existing_company_logo_source_still_works(self):
+        layout = {
+            "version": 1,
+            "background_color": "#FFFFFF",
+            "elements": [
+                {
+                    "id": "elem_company_logo",
+                    "type": "image",
+                    "source_type": "field",
+                    "field": "company.logo",
+                    "x_mm": 1.0,
+                    "y_mm": 1.0,
+                    "width_mm": 8.0,
+                    "height_mm": 8.0,
+                    "image_fit": "contain",
+                    "z_index": 1,
+                    "visible": True,
+                }
+            ],
+        }
+        cleaned, _ = LabelTemplateValidator.validate(layout, 30.0, 19.0)
+        el = cleaned["elements"][0]
+        self.assertEqual(el["source_type"], "field")
+        self.assertEqual(el["field"], "company.logo")
+
+    def test_11_existing_product_image_source_still_works(self):
+        # Also test with omitted source_type (backward compatibility)
+        layout = {
+            "version": 1,
+            "background_color": "#FFFFFF",
+            "elements": [
+                {
+                    "id": "elem_prod_photo",
+                    "type": "image",
+                    "field": "product.image",
+                    "x_mm": 1.0,
+                    "y_mm": 1.0,
+                    "width_mm": 10.0,
+                    "height_mm": 10.0,
+                    "image_fit": "cover",
+                    "z_index": 1,
+                    "visible": True,
+                }
+            ],
+        }
+        cleaned, _ = LabelTemplateValidator.validate(layout, 30.0, 19.0)
+        el = cleaned["elements"][0]
+        self.assertEqual(el["source_type"], "field")
+        self.assertEqual(el["field"], "product.image")
+
+    def test_12_uploaded_image_renders_in_png_preview_and_pdf_print(self):
+        image_file = self._create_image("test_render.png", "PNG", size=(40, 40), color="purple")
+        res = self.client.post("/api/products/barcode-labels/upload-image/", {"image": image_file}, format="multipart")
+        data = res.json()
+        self._track_file(data["file_path"])
+
+        layout = {
+            "version": 1,
+            "background_color": "#FFFFFF",
+            "elements": [
+                {
+                    "id": "elem_img",
+                    "type": "image",
+                    "source_type": "uploaded",
+                    "image_url": data["url"],
+                    "x_mm": 2.0,
+                    "y_mm": 2.0,
+                    "width_mm": 10.0,
+                    "height_mm": 10.0,
+                    "image_fit": "contain",
+                    "z_index": 1,
+                    "visible": True,
+                }
+            ],
+        }
+
+        # 1. PngLabelRenderer
+        context = LabelDataResolver.resolve_context(self.product, self.store)
+        png_bytes = PngLabelRenderer.render_png(30.0, 19.0, layout, context)
+        self.assertTrue(len(png_bytes) > 0)
+        img = Image.open(io.BytesIO(png_bytes))
+        self.assertEqual(img.format, "PNG")
+
+        # 2. PdfLabelRenderer
+        pdf_bytes = PdfLabelRenderer.render_pdf(30.0, 19.0, layout, [(context, 2)])
+        self.assertTrue(len(pdf_bytes) > 0)
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+        # 3. BarcodeLabelPreviewAPIView endpoint with layout_override
+        preview_res = self.client.post(
+            "/api/products/barcode-labels/preview/",
+            {
+                "product_id": self.product.id,
+                "store_id": self.store.id,
+                "layout_override": layout,
+            },
+            format="json",
+        )
+        self.assertEqual(preview_res.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview_res["Content-Type"], "image/png")

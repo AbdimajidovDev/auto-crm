@@ -1,3 +1,9 @@
+import os
+import uuid
+from PIL import Image
+
+from django.conf import settings
+from django.core.files.storage import default_storage
 from django.db import transaction
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -6,8 +12,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.parsers import MultiPartParser, FormParser
 
-from apps.users.permissions import RequirePermission
+from apps.users.permissions import RequirePermission, RequireAnyPermission
 from apps.products.models import BarcodeTemplate, Product
 from apps.products.serializers.barcode_template_serializer import (
     BarcodeTemplateListSerializer,
@@ -228,3 +235,78 @@ class BarcodeLabelPrintAPIView(APIView):
         response = HttpResponse(pdf_bytes, content_type="application/pdf")
         response["Content-Disposition"] = 'inline; filename="barcode_labels.pdf"'
         return response
+
+
+class BarcodeLabelImageUploadAPIView(APIView):
+    """
+    Handles secure image upload from device for custom barcode label elements.
+    - Requires authentication and barcode template create/edit permission
+    - Validates file size (<= 5MB)
+    - Validates file extension and Pillow image integrity (JPEG, PNG, WEBP)
+    - Persists via default_storage to 'barcode_labels/images/'
+    - Returns public URL and storage relative path
+    """
+    permission_classes = [IsAuthenticated, RequireAnyPermission]
+    required_permissions = ("barcode_templates.create", "barcode_templates.edit")
+    parser_classes = [MultiPartParser, FormParser]
+
+    MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+    ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP"}
+
+    def post(self, request, *args, **kwargs):
+        uploaded_file = request.FILES.get("image") or request.FILES.get("file")
+        if not uploaded_file:
+            return Response(
+                {"detail": "Rasm fayli yuborilmadi ('image' yoki 'file' maydoni talab qilinadi)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if uploaded_file.size > self.MAX_FILE_SIZE:
+            return Response(
+                {"detail": "Fayl hajmi 5 MB dan oshmasligi kerak."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ext = os.path.splitext(uploaded_file.name)[1].lower()
+        if ext not in self.ALLOWED_EXTENSIONS:
+            return Response(
+                {"detail": f"Noto'g'ri fayl kengaytmasi ({ext}). Faqat JPG, JPEG, PNG, WEBP ruxsat etilgan."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Content validation with Pillow
+        try:
+            uploaded_file.seek(0)
+            with Image.open(uploaded_file) as img:
+                img_format = img.format
+                if img_format not in self.ALLOWED_FORMATS:
+                    return Response(
+                        {"detail": f"Fayl haqiqiy rasm emas yoki formati noto'g'ri ({img_format}). Faqat JPG, PNG, WEBP qabul qilinadi."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                img.verify()
+            uploaded_file.seek(0)
+        except Exception:
+            return Response(
+                {"detail": "Yaroqsiz yoki buzilgan rasm fayli."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        norm_ext = ".jpg" if ext == ".jpeg" else ext
+        unique_filename = f"{uuid.uuid4().hex}{norm_ext}"
+        storage_rel_path = f"barcode_labels/images/{unique_filename}"
+
+        saved_path = default_storage.save(storage_rel_path, uploaded_file)
+        media_url = getattr(settings, "MEDIA_URL", "/media/")
+        url = f"{media_url.rstrip('/')}/{saved_path.lstrip('/')}"
+
+        return Response(
+            {
+                "url": url,
+                "file_path": saved_path,
+                "name": uploaded_file.name,
+                "size": uploaded_file.size,
+            },
+            status=status.HTTP_201_CREATED,
+        )
