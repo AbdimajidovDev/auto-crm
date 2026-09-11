@@ -574,3 +574,8 @@ class StockAdjustmentComprehensiveTests(TestCase):
         b.refresh_from_db()
         self.assertEqual(b.quantity, Decimal("1"))
 
+
+# PHASE 1.8 Step 1 Tests
+from apps.inventory.test_stock_lot import StockLotModelTests, StockAllocationModelTests  # noqa: F401
+
+

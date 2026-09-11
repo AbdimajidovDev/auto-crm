@@ -16,6 +16,8 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import F, Sum
 
+from apps.inventory.exceptions import InsufficientStockError
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.products.models import ProductBatch
 from apps.contract.models import (
     StockEntry,
@@ -120,7 +122,7 @@ class StockEntryReturnService:
             created_by=user,
         )
 
-        StockEntryReturnItem.objects.bulk_create([
+        created_return_items = StockEntryReturnItem.objects.bulk_create([
             StockEntryReturnItem(
                 stock_return=stock_return,
                 entry_item=it["entry_item"],
@@ -132,13 +134,15 @@ class StockEntryReturnService:
             for it in items
         ])
 
-        # Ombordan chiqarish — F() bilan atomar kamaytirish
-        for it in items:
-            batch = batches[it["entry_item"].product_id]
-            batch.quantity = F("quantity") - it["quantity"]
-        ProductBatch.objects.bulk_update(
-            list(batches.values()), ["quantity"]
-        )
+        # Ombordan chiqarish — FIFO bo'yicha StockAllocation va ProductBatch sync
+        for ret_item in created_return_items:
+            try:
+                StockAllocationService.allocate_supplier_return(
+                    supplier_return_item=ret_item,
+                    supplier=entry.supplier,
+                )
+            except InsufficientStockError as e:
+                raise ValidationError(f"{ret_item.entry_item.product.name}: omborda yetarli qoldiq yo'q.") from e
 
         # Qarzdan kamaytirish — alohida 'ret' turi ('pay' emas: to'lov/chiqim
         # hisobotlariga aralashmaydi, get_total_debt/get_remaining_debt uni ayiradi)

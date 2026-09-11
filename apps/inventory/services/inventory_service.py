@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import transaction
 from django.db.models import Sum, F, Case, When, IntegerField
 from django.db.models.functions import Coalesce
@@ -11,6 +12,7 @@ from apps.inventory.models import (
     InventoryCount,
     InventoryMovement,
 )
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.products.models import Product, ProductBatch
 
 
@@ -232,7 +234,13 @@ class InventoryService:
             .values("product_id", "purchase_price", "selling_price")
         }
 
-        # Kam chiqqan (topilmagan) tovarlar — finalize oxirida avtomatik spisaniye qilinadi.
+        snapshot_pids = sorted(list(snapshots.keys()))
+        products_by_id = {
+            p.id: p
+            for p in Product.objects.filter(id__in=snapshot_pids)
+        }
+
+        # Kam chiqqan (topilmagan) tovarlar — finalize oxirida avtomatik spisaniye uchun yig'amiz.
         shortages = []
 
         # 🔥 SNAPSHOT BO‘YICHA YURAMIZ (MUHIM)
@@ -268,28 +276,34 @@ class InventoryService:
 
             diff = final - expected
 
-            # Kamomad (kam chiqqan) — keyin avtomatik spisaniye uchun yig'amiz.
             if diff < 0:
+                shortage_qty = -diff
                 p_price, s_price = price_map.get(product_id, (0, 0))
                 shortages.append({
                     "product_id": product_id,
-                    "quantity": -diff,
+                    "quantity": shortage_qty,
                     "purchase_price": p_price,
                     "selling_price": s_price,
                 })
 
-            if diff != 0: # diff
-                # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida har product uchun alohida UPDATE bajariladi.
-                # Sabab: o'zgaradigan batchlar oldindan yig'ilib `bulk_update` qilinmagan.
-                # Natija: productlar soni ko'p bo'lsa transaction uzoq lock ushlab turadi.
-                # ✅ YECHIM:
-                # updated_batches.append(ProductBatch(id=batch_id, quantity=final))
-                # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
-                ProductBatch.objects.select_for_update().filter(
-                    store=session.store,
-                    product_id=product_id
-                ).update(
-                    quantity= final
+                product_obj = products_by_id[product_id]
+                StockAllocationService.allocate_inventory_shortage(
+                    inventory_session=session,
+                    product=product_obj,
+                    quantity=Decimal(str(shortage_qty)),
+                    description=f"Inventarizatsiya #{session.id} kamomadi",
+                )
+            elif diff > 0:
+                excess_qty = diff
+                p_price, _ = price_map.get(product_id, (0, 0))
+                product_obj = products_by_id[product_id]
+
+                StockAllocationService.create_inventory_excess_lot(
+                    inventory_session=session,
+                    product=product_obj,
+                    quantity=Decimal(str(excess_qty)),
+                    purchase_price=Decimal(str(p_price)) if p_price else Decimal("0.00"),
+                    description=f"Inventarizatsiya #{session.id} ortiqchasi",
                 )
 
         # 🔻 KAMOMAD SPISANIYESI: inventarizatsiyada topilmagan tovarlar uchun

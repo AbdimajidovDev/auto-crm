@@ -61,6 +61,6 @@ class BrandAdmin(TranslationAdmin):
 
 @admin.register(BarcodeTemplate)
 class BarcodeTemplateAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'width_mm', 'height_mm', 'is_default', 'is_active', 'created_at')
-    list_filter = ('is_default', 'is_active')
+    list_display = ('id', 'name', 'width_mm', 'height_mm', 'is_default', 'created_at')
+    list_filter = ('is_default',)
     search_fields = ('name', 'description')

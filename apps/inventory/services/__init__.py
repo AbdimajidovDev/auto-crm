@@ -1,3 +1,6 @@
 from .inventory_service import *
 from .low_stock_service import LowStockService
 from .stock_adjustment_service import StockAdjustmentService
+from .stock_allocation_service import InventoryExcessResult, StockAllocationService
+from .stock_reconciliation_service import StockReconciliationReport, StockReconciliationService
+

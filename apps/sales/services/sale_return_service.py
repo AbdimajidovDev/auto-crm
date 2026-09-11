@@ -7,8 +7,10 @@ from rest_framework.exceptions import NotFound, ValidationError
 from apps.common.quantity import validate_quantity_step
 from apps.common.store_scope import ensure_store_access
 from apps.debts.services import DebtService
-from apps.inventory.models import InventorySession, InventoryMovement
+from apps.inventory.exceptions import InvalidReversalError
+from apps.inventory.models import InventorySession, InventoryMovement, StockAllocation
 from apps.inventory.services.inventory_hooks_service import handle_sale_return
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.products.models import Product, ProductBatch
 from apps.sales.models import Sale, SaleReturn, SaleReturnItem, Payment
 from apps.sales.services.payment_service import SalePaymentService
@@ -104,33 +106,13 @@ class SaleReturnService:
                 raise ValidationError("Miqdor oshib ketdi")
 
             # =========================
-            # 🔹 1. STOCK UPDATE
-            # =========================
-            ProductBatch.objects.filter(
-                store=store,
-                product=sale_item.product
-            ).update(
-                quantity=F("quantity") + quantity
-            )
-
-            # =========================
-            # 🔹 2. SALE ITEM UPDATE
+            # 🔹 1. SALE ITEM UPDATE
             # =========================
             sale_item.returned_quantity = F("returned_quantity") + quantity
             sale_item.save(update_fields=["returned_quantity"])
 
             # =========================
-            # 🔹 3. INVENTORY MOVEMENT (FAKT 1 MARTA)
-            # =========================
-            if session:
-                handle_sale_return(
-                    return_obj=return_obj,
-                    sale_item=sale_item,
-                    quantity=quantity
-                )
-
-            # =========================
-            # 🔹 4. RETURN ITEM
+            # 🔹 2. RETURN ITEM
             # =========================
             # Chegirma nisbati qo'llanadi (yuqoridagi refund_ratio izohiga qarang)
             refund_amount = (sale_item.unit_price * quantity * refund_ratio).quantize(
@@ -138,7 +120,7 @@ class SaleReturnService:
             )
             total_refund += refund_amount
 
-            SaleReturnItem.objects.create(
+            return_item = SaleReturnItem.objects.create(
                 sale_return=return_obj,
                 sale_item=sale_item,
                 product=sale_item.product,
@@ -146,6 +128,42 @@ class SaleReturnService:
                 unit_price=sale_item.unit_price,
                 total_price=refund_amount
             )
+
+            # =========================
+            # 🔹 3. STOCK RESTORATION (Reverse LIFO Ledger)
+            # =========================
+            has_allocations = StockAllocation.objects.filter(
+                sale_item=sale_item,
+                movement_type=StockAllocation.MovementType.SALE,
+                direction=StockAllocation.Direction.OUT,
+            ).exists()
+
+            if has_allocations:
+                try:
+                    StockAllocationService.reverse_sale_return(
+                        sale_return_item=return_item,
+                        quantity=quantity,
+                    )
+                except InvalidReversalError as e:
+                    raise ValidationError(f"Qaytarishda xatolik: {e}") from e
+            else:
+                # Tarixiy / unallocated sale (Step 4 dan oldingi operatsiya yoki fixture)
+                ProductBatch.objects.filter(
+                    store=store,
+                    product=sale_item.product
+                ).update(
+                    quantity=F("quantity") + quantity
+                )
+
+            # =========================
+            # 🔹 4. INVENTORY MOVEMENT (FAKT 1 MARTA)
+            # =========================
+            if session:
+                handle_sale_return(
+                    return_obj=return_obj,
+                    sale_item=sale_item,
+                    quantity=quantity
+                )
 
         # =========================
         # 🔄 REFRESH

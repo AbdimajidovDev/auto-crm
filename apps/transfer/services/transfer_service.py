@@ -7,7 +7,9 @@ from django.db import transaction
 from django.db.models import F
 from django.utils import timezone
 
+from apps.inventory.exceptions import InsufficientStockError
 from apps.inventory.services.inventory_hooks_service import handle_transfer_approved, handle_transfer_in
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.transfer.models import StockTransfer, StockTransferItem
 from apps.products.models import ProductBatch
 
@@ -132,50 +134,16 @@ class TransferService:
         if transfer.status != StockTransfer.Status.PENDING:
             raise ValidationError("Transfer yakunlangan")
 
-        for item in transfer.items.all():
-
-            # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida `get_or_create` va `save()` ko'p martalik DB write qiladi.
-            # Sabab: source/target batchlar itemlar bo'yicha bulk tarzda tayyorlanmagan.
-            # Natija: katta transferda lock va query soni ko'payadi, approve endpoint sekinlashadi.
-            # ✅ YECHIM:
-            # source_batches = ProductBatch.objects.select_for_update().filter(store=transfer.from_store, product_id__in=product_ids)
-            # target_batches = ProductBatch.objects.select_for_update().filter(store=transfer.to_store, product_id__in=product_ids)
-            # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
+        transfer_items = list(transfer.items.select_related("product").order_by("product_id"))
+        for item in transfer_items:
+            # 1. Jo'natuvchi ombordan FIFO bo'yicha chiqarish (TRANSFER_OUT)
             try:
-                source_batch = ProductBatch.objects.select_for_update().get(
-                    store=transfer.from_store,
-                    product=item.product
-                )
-            except ProductBatch.DoesNotExist:
-                raise ValidationError(f"{item.product.name} jo'natuvchi do'konda mavjud emas")
+                StockAllocationService.allocate_transfer_out(transfer_item=item)
+            except InsufficientStockError as e:
+                raise ValidationError(f"{item.product.name} yetishmayapti") from e
 
-            if source_batch.quantity < item.quantity:
-                raise ValidationError(f"{item.product.name} yetishmayapti")
-
-            # F() ifodasi bilan atomik kamaytirish — o'qib-yozish poygasi bo'lmasin
-            ProductBatch.objects.filter(pk=source_batch.pk).update(
-                quantity=F("quantity") - item.quantity
-            )
-
-            target_batch, created = ProductBatch.objects.get_or_create(
-                store=transfer.to_store,
-                product=item.product,
-                defaults={
-                    'purchase_price': item.purchase_price,
-                    'selling_price': item.selling_price,
-                    'quantity': item.quantity,
-                }
-            )
-
-            if not created:
-                # Diqqat: `get_or_create` qator qulfini olmaydi. Ilgari
-                # `target_batch.quantity += ...; save()` o'qib-yozish edi — bir
-                # do'konga parallel kelgan ikki transfer bir-birining natijasini
-                # yo'qotardi (ikkalasi 10 ni o'qib, ikkalasi 15 yozardi), ustiga
-                # `save()` update_fields'siz eskirgan narxlarni ham qayta yozardi.
-                ProductBatch.objects.filter(pk=target_batch.pk).update(
-                    quantity=F("quantity") + item.quantity
-                )
+            # 2. Qabul qiluvchi omborga kiritish (TRANSFER_IN lots with source_lot lineage)
+            StockAllocationService.allocate_transfer_in(transfer_item=item)
 
         transfer.status = StockTransfer.Status.APPROVED
         transfer.approved_by = user

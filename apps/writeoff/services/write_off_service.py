@@ -5,6 +5,8 @@ from django.db.models import F
 from rest_framework.exceptions import ValidationError
 
 from apps.common.quantity import validate_quantity_step
+from apps.inventory.exceptions import InsufficientStockError
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.products.models import ProductBatch
 from apps.writeoff.models import WriteOff, WriteOffItem
 
@@ -44,21 +46,20 @@ class WriteOffService:
             )
             merged[product.id] = merged.get(product.id, Decimal("0")) + qty
 
-        product_ids = list(merged.keys())
+        product_ids = sorted(list(merged.keys()))
 
-        # 2. Kerakli batchlarni BITTA query bilan olamiz + lock (race condition oldini olish)
+        # 2. Kerakli batchlarni BITTA query bilan olamiz + lock (deterministic ASC ordering)
         batches = {
             b.product_id: b
             for b in ProductBatch.objects.select_for_update().filter(
                 store=store,
                 product_id__in=product_ids,
-            )
+            ).order_by("product_id")
         }
 
         # 3. Validatsiya + tayyorlash
         product_map = {it["product"].id: it["product"] for it in items}
         total_amount = Decimal("0")
-        batches_to_update = []
         item_objs = []
 
         for product_id, qty in merged.items():
@@ -72,9 +73,6 @@ class WriteOffService:
                 raise ValidationError(
                     f"{product.name}: qoldiq yetarli emas (mavjud: {batch.quantity}, kerak: {qty})."
                 )
-
-            batch.quantity = F("quantity") - qty
-            batches_to_update.append(batch)
 
             total_amount += batch.purchase_price * qty
             item_objs.append(
@@ -99,9 +97,28 @@ class WriteOffService:
         for obj in item_objs:
             obj.write_off = write_off
 
-        # 5. Stockni kamaytiramiz va itemlarni yozamiz (bulk)
-        ProductBatch.objects.bulk_update(batches_to_update, ["quantity"])
-        WriteOffItem.objects.bulk_create(item_objs)
+        # 5. WriteOffItem larni yaratish va yangi FIFO ledger orqali stockni kamaytirish
+        created_items = WriteOffItem.objects.bulk_create(item_objs)
+
+        actual_total_amount = Decimal("0")
+        for item_obj in sorted(created_items, key=lambda x: x.product_id):
+            try:
+                allocations = StockAllocationService.allocate_write_off(write_off_item=item_obj)
+                if allocations:
+                    actual_cost_sum = sum(a.quantity * a.unit_cost for a in allocations)
+                    actual_cost = (actual_cost_sum / item_obj.quantity).quantize(Decimal("0.01"))
+                    if item_obj.purchase_price != actual_cost:
+                        item_obj.purchase_price = actual_cost
+                        item_obj.save(update_fields=["purchase_price"])
+                    actual_total_amount += actual_cost_sum
+                else:
+                    actual_total_amount += item_obj.purchase_price * item_obj.quantity
+            except InsufficientStockError as e:
+                raise ValidationError(f"{item_obj.product.name}: qoldiq yetarli emas.") from e
+
+        if actual_total_amount != write_off.total_amount:
+            write_off.total_amount = actual_total_amount
+            write_off.save(update_fields=["total_amount"])
 
         # 6. Low-stock baholash (sotuv kabi — qoldiq kamaydi)
         from apps.inventory.services import LowStockService

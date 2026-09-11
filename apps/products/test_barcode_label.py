@@ -262,7 +262,7 @@ class BarcodeTemplateAPITests(TestCase):
         self.client.force_authenticate(user=self.admin)
 
         # Get or create default template
-        self.default_template = BarcodeTemplate.objects.filter(is_default=True, is_active=True).first()
+        self.default_template = BarcodeTemplate.objects.filter(is_default=True).first()
         if not self.default_template:
             self.default_template = BarcodeTemplate.objects.create(
                 name="Avtoyon Standart 30x19",
@@ -270,7 +270,6 @@ class BarcodeTemplateAPITests(TestCase):
                 height_mm=Decimal("19.00"),
                 barcode_format="EAN13",
                 is_default=True,
-                is_active=True,
                 layout={"version": 1, "elements": []},
             )
 
@@ -289,15 +288,14 @@ class BarcodeTemplateAPITests(TestCase):
             is_active=True,
         )
 
-    def test_db_unique_constraint_on_active_default(self):
-        # Attempting to create a second active default directly in DB must fail
+    def test_db_unique_constraint_on_default(self):
+        # Attempting to create a second default directly in DB must fail
         with self.assertRaises(IntegrityError):
             BarcodeTemplate.objects.create(
                 name="Duplicate Default",
                 width_mm=Decimal("40.00"),
                 height_mm=Decimal("25.00"),
                 is_default=True,
-                is_active=True,
                 layout={"version": 1, "elements": []},
             )
 
@@ -339,26 +337,40 @@ class BarcodeTemplateAPITests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.json()["name"], "Katta Yorliq 58x40")
 
-    def test_delete_default_template_is_prevented(self):
-        response = self.client.delete(f"/api/products/barcode-templates/{self.default_template.id}/")
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertIn("Standart (default) shablonni o'chirib bo'lmaydi", response.json()["detail"])
-        self.default_template.refresh_from_db()
-        self.assertTrue(self.default_template.is_active)
-
-    def test_delete_non_default_template_soft_deletes(self):
+    def test_delete_non_default_template_hard_deletes(self):
         temp = BarcodeTemplate.objects.create(
             name="Vaqtinchalik Shablon",
             width_mm=Decimal("40.00"),
             height_mm=Decimal("20.00"),
             is_default=False,
-            is_active=True,
             layout={"version": 1, "elements": []},
         )
-        response = self.client.delete(f"/api/products/barcode-templates/{temp.id}/")
+        temp_id = temp.id
+        response = self.client.delete(f"/api/products/barcode-templates/{temp_id}/")
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
-        temp.refresh_from_db()
-        self.assertFalse(temp.is_active)
+        self.assertFalse(BarcodeTemplate.objects.filter(id=temp_id).exists())
+
+    def test_delete_default_template_promotes_next_template(self):
+        second = BarcodeTemplate.objects.create(
+            name="Ikkinchi Shablon",
+            width_mm=Decimal("40.00"),
+            height_mm=Decimal("20.00"),
+            is_default=False,
+            layout={"version": 1, "elements": []},
+        )
+        default_id = self.default_template.id
+        response = self.client.delete(f"/api/products/barcode-templates/{default_id}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(BarcodeTemplate.objects.filter(id=default_id).exists())
+        second.refresh_from_db()
+        self.assertTrue(second.is_default)
+
+    def test_delete_sole_default_template_succeeds_without_default(self):
+        BarcodeTemplate.objects.exclude(id=self.default_template.id).delete()
+        default_id = self.default_template.id
+        response = self.client.delete(f"/api/products/barcode-templates/{default_id}/")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(BarcodeTemplate.objects.count(), 0)
 
     def test_duplicate_template_action(self):
         response = self.client.post(f"/api/products/barcode-templates/{self.default_template.id}/duplicate/")
@@ -373,7 +385,6 @@ class BarcodeTemplateAPITests(TestCase):
             width_mm=Decimal("40.00"),
             height_mm=Decimal("25.00"),
             is_default=False,
-            is_active=True,
             layout={"version": 1, "elements": []},
         )
         response = self.client.post(f"/api/products/barcode-templates/{new_template.id}/set-default/")

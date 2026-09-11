@@ -3,7 +3,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from rest_framework.generics import get_object_or_404
 
 from apps.common.quantity import validate_items_quantity_steps
+from apps.inventory.exceptions import InsufficientStockError
 from apps.inventory.services.inventory_hooks_service import handle_sale_item
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.sales.models import Sale, SaleItem, Payment
 from apps.sales.services.payment_service import SalePaymentService
 from apps.products.models import Product, ProductBatch
@@ -102,28 +104,23 @@ class SaleService:
 
         subtotal = Decimal("0")
 
+        sorted_pids = sorted(list({item["product"] for item in items_data}))
+        # Deadlock prevention: lock product batches in deterministic ASC order
+        ProductBatch.objects.select_for_update().filter(
+            store=store,
+            product_id__in=sorted_pids
+        ).order_by("product_id")
+
         for item in items_data:
-            # ⚠️ MUAMMO [KRITIK/PERFORMANCE]: Loop ichida har item uchun batch lookup, UPDATE, SaleItem create va hook chaqirilmoqda.
-            # Sabab: kerakli ProductBatch yozuvlari oldindan `product_id__in` bilan lock qilinmagan va SaleItemlar bulk yaratilmagan.
-            # Natija: ko'p itemli sotuvda transaction uzoq davom etadi, lock contention va N ta query paydo bo'ladi.
-            # ✅ YECHIM:
-            # product_ids = [item["product"] for item in items_data]
-            # batches = ProductBatch.objects.select_for_update().filter(store=store, product_id__in=product_ids, quantity__gt=0)
-            # SaleItem.objects.bulk_create(item_objs)
-            # ProductBatch.objects.bulk_update(updated_batches, ["quantity"])
-            # PERFORMANCE: har bir savdo pozitsiyasi uchun `select_for_update` + alohida UPDATE —
-            # ko'p qatorli savdoda tranzaksiya uzoq yopilib qolishi mumkin; batch strategiya yoki
-            # birlashtirilgan stock update ko'rib chiqiladi.
             product_id = item["product"]
             quantity_to_sell = item["quantity"]
             price = item["price"]
 
-            batch = ProductBatch.objects.select_for_update().filter(
+            batch = ProductBatch.objects.filter(
                 store=store,
                 product_id=product_id,
                 quantity__gt=0
             ).order_by("created_at").first()
-
 
             if not batch:
                 raise ValidationError("Mahsulot mavjud emas")
@@ -131,7 +128,6 @@ class SaleService:
             if batch.quantity < quantity_to_sell:
                 raise ValidationError("Mahsulot yetarli emas")
 
-            # 🔥 CRITICAL FIX
             purchase_price = batch.purchase_price
 
             # Narx mijoz tomonidan yuboriladi, shuning uchun tannarxdan past
@@ -144,10 +140,6 @@ class SaleService:
                     f"(tannarx: {purchase_price})"
                 )
 
-            ProductBatch.objects.filter(id=batch.pk).update(
-                quantity=F('quantity') - quantity_to_sell
-            )
-
             total_price = price * quantity_to_sell
             subtotal += total_price
 
@@ -156,9 +148,21 @@ class SaleService:
                 product_id=product_id,
                 quantity=quantity_to_sell,
                 unit_price=price,
-                purchase_price=purchase_price,  # 🔥 YANGI
+                purchase_price=purchase_price,
                 total_price=total_price
             )
+
+            # Yangi FIFO ledger deduksiyasi va ProductBatch sinxronizatsiyasi
+            try:
+                allocations = StockAllocationService.allocate_sale(sale_item=sale_item)
+                if allocations:
+                    total_cost = sum(a.quantity * a.unit_cost for a in allocations)
+                    avg_cost = (total_cost / quantity_to_sell).quantize(Decimal("0.01"))
+                    if sale_item.purchase_price != avg_cost:
+                        sale_item.purchase_price = avg_cost
+                        sale_item.save(update_fields=["purchase_price"])
+            except InsufficientStockError as e:
+                raise ValidationError("Mahsulot yetarli emas") from e
 
             handle_sale_item(sale_item)
 

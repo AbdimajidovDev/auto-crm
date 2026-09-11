@@ -3,7 +3,9 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import F
 from apps.common.quantity import validate_items_quantity_steps
+from apps.inventory.models import StockLot
 from apps.inventory.services.inventory_hooks_service import handle_stock_entry
+from apps.inventory.services.stock_allocation_service import StockAllocationService
 from apps.products.models import ProductBatch
 from apps.contract.models import StockEntry, StockEntryItem, StockEntryPayment, SupplierTransaction
 
@@ -87,26 +89,17 @@ class StockEntryService:
         StockEntryPayment.objects.bulk_create(payment_objs)
 
         product_ids = [item["product"].id for item in items]
+        sorted_pids = sorted(list(set(product_ids)))
 
         existing_batches = {
             batch.product_id: batch
             for batch in ProductBatch.objects.select_for_update().filter(
                 store=store,
-                product_id__in=product_ids
-            )
+                product_id__in=sorted_pids
+            ).order_by("product_id")
         }
 
-        batches_to_update = []
-        batches_to_create = []
         item_objs = []
-
-        # Bitta kirimda bir mahsulot bir necha qatorda kelishi mumkin (10 dona +
-        # 15 dona). Qatorlar o'z narxlari bilan alohida saqlanadi, LEKIN ombor
-        # qoldig'i mahsulot bo'yicha JAMLANADI.
-        # Ilgari har qator `batch.quantity = F("quantity") + qty` ni qayta
-        # yozardi — natijada faqat oxirgi qator qo'shilib, qolgani yo'qolardi;
-        # yangi mahsulotda esa bir xil (store, product) uchun ikkita
-        # ProductBatch yaratilib, unique constraint 500 bilan yiqilardi.
         merged = {}
         for item in items:
             product = item["product"]
@@ -141,35 +134,36 @@ class StockEntryService:
                     "wholesale_price": w_price,
                 }
 
+        # 1. Mavjud partiyalardagi un-lotted qoldiqlarni ochish (bridging)
         for product_id, data in merged.items():
-            if product_id in existing_batches:
-                batch = existing_batches[product_id]
-                batch.quantity = F("quantity") + data["quantity"]
-                batch.purchase_price = data["purchase_price"]
-                batch.selling_price = data["selling_price"]
-                batch.wholesale_price = data["wholesale_price"]
-                batches_to_update.append(batch)
-            else:
-                batches_to_create.append(
-                    ProductBatch(
-                        product=data["product"],
-                        store=store,
-                        quantity=data["quantity"],
-                        purchase_price=data["purchase_price"],
-                        selling_price=data["selling_price"],
-                        wholesale_price=data["wholesale_price"],
-                    )
-                )
+            StockAllocationService.ensure_lot_coverage(store, data["product"])
 
-        if batches_to_update:
-            ProductBatch.objects.bulk_update(
-                batches_to_update,
-                ["quantity", "purchase_price", "selling_price", "wholesale_price"]
+        # 2. StockEntryItem larni yaratish
+        created_items = StockEntryItem.objects.bulk_create(item_objs)
+
+        # 3. Har bir xarid satri uchun alohida authoritative StockLot yaratish (lot_type=PURCHASE)
+        stock_lots = [
+            StockLot(
+                store=store,
+                product=item.product,
+                supplier=supplier,
+                stock_entry_item=item,
+                lot_type=StockLot.LotType.PURCHASE,
+                initial_quantity=item.quantity,
+                remaining_quantity=item.quantity,
+                purchase_price=item.purchase_price,
             )
-        if batches_to_create:
-            ProductBatch.objects.bulk_create(batches_to_create)
+            for item in created_items
+        ]
+        StockLot.objects.bulk_create(stock_lots)
 
-        StockEntryItem.objects.bulk_create(item_objs)
+        # 4. ProductBatch kesh agregatini sinxronlashtirish va narxlarni yangilash
+        for product_id, data in merged.items():
+            batch = StockAllocationService._sync_product_batch(store, data["product"])
+            batch.purchase_price = data["purchase_price"]
+            batch.selling_price = data["selling_price"]
+            batch.wholesale_price = data["wholesale_price"]
+            batch.save(update_fields=["purchase_price", "selling_price", "wholesale_price"])
 
         # Qarzdorlik — debt_amount endi entry.save() ichida hisoblangan
         if entry.debt_amount > 0:

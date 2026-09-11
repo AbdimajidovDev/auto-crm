@@ -37,7 +37,24 @@ def _scoped_meta(request) -> dict:
     filtered_reports = []
     for report in meta["reports"]:
         rep_key = report["key"]
-        if not user_has_perm(user, f"reports.{rep_key}.view"):
+        has_view = user_has_perm(user, f"reports.{rep_key}.view")
+        if not has_view and rep_key in ("sales_by_product", "product_efficiency", "abc_analysis", "order_returns"):
+            has_view = user_has_perm(user, "reports.sales.view") or user_has_perm(user, "sales.view")
+        if not has_view and rep_key == "inventory_results":
+            has_view = user_has_perm(user, "reports.inventory.view") or user_has_perm(user, "inventory.view")
+        if not has_view and rep_key == "write_offs":
+            has_view = (
+                user_has_perm(user, "reports.inventory.view")
+                or user_has_perm(user, "inventory.view")
+                or user_has_perm(user, "writeoff.view")
+            )
+        if not has_view and rep_key == "imports":
+            has_view = (
+                user_has_perm(user, "reports.inventory.view")
+                or user_has_perm(user, "inventory.view")
+                or user_has_perm(user, "stockentry.view")
+            )
+        if not has_view:
             continue
 
         if allowed_stores is not None:
@@ -79,7 +96,24 @@ class ReportBuilderGenerateAPIView(APIView):
             )
 
         req_perm = f"reports.{report_type}.view"
-        if not user_has_perm(request.user, req_perm):
+        has_perm = user_has_perm(request.user, req_perm)
+        if not has_perm and report_type in ("sales_by_product", "product_efficiency", "abc_analysis", "order_returns"):
+            has_perm = user_has_perm(request.user, "reports.sales.view") or user_has_perm(request.user, "sales.view")
+        if not has_perm and report_type == "inventory_results":
+            has_perm = user_has_perm(request.user, "reports.inventory.view") or user_has_perm(request.user, "inventory.view")
+        if not has_perm and report_type == "write_offs":
+            has_perm = (
+                user_has_perm(request.user, "reports.inventory.view")
+                or user_has_perm(request.user, "inventory.view")
+                or user_has_perm(request.user, "writeoff.view")
+            )
+        if not has_perm and report_type == "imports":
+            has_perm = (
+                user_has_perm(request.user, "reports.inventory.view")
+                or user_has_perm(request.user, "inventory.view")
+                or user_has_perm(request.user, "stockentry.view")
+            )
+        if not has_perm:
             return Response(
                 {
                     "detail": f"Sizda «{report_type}» hisobotini ko'rish huquqi yo'q.",
@@ -116,7 +150,35 @@ class ReportBuilderExportAPIView(APIView):
             )
 
         req_perm = f"reports.{report_type}.export"
-        if not user_has_perm(request.user, req_perm):
+        has_perm = user_has_perm(request.user, req_perm)
+        if not has_perm and report_type in ("sales_by_product", "product_efficiency", "abc_analysis", "order_returns"):
+            has_perm = (
+                user_has_perm(request.user, "reports.sales.export")
+                or user_has_perm(request.user, "reports.sales.view")
+                or user_has_perm(request.user, "sales.export")
+                or user_has_perm(request.user, "sales.view")
+            )
+        if not has_perm and report_type == "inventory_results":
+            has_perm = (
+                user_has_perm(request.user, "reports.inventory.export")
+                or user_has_perm(request.user, "reports.inventory.view")
+                or user_has_perm(request.user, "inventory.export")
+                or user_has_perm(request.user, "inventory.view")
+            )
+        if not has_perm and report_type == "write_offs":
+            has_perm = (
+                user_has_perm(request.user, "reports.write_offs.view")
+                or user_has_perm(request.user, "reports.inventory.export")
+                or user_has_perm(request.user, "inventory.export")
+                or user_has_perm(request.user, "writeoff.view")
+            )
+        if not has_perm and report_type == "imports":
+            has_perm = (
+                user_has_perm(request.user, "reports.inventory.export")
+                or user_has_perm(request.user, "inventory.export")
+                or user_has_perm(request.user, "stockentry.export")
+            )
+        if not has_perm:
             return Response(
                 {
                     "detail": f"Sizda «{report_type}» hisobotini eksport qilish (yuklab olish) huquqi yo'q.",
@@ -157,6 +219,13 @@ class ReportBuilderExportAPIView(APIView):
                 writer.writerow([s["label"], s["value"]])
             return response
 
+        elif export_type == "pdf":
+            from apps.reports.services.report_pdf_service import ReportPdfService
+            pdf_bytes = ReportPdfService.render(label, columns, rows, summary, info, params)
+            response = HttpResponse(pdf_bytes, content_type="application/pdf")
+            response["Content-Disposition"] = f'attachment; filename="{report_type}_{stamp}.pdf"'
+            return response
+
         # Excel
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {"in_memory": True})
@@ -171,6 +240,8 @@ class ReportBuilderExportAPIView(APIView):
         f_text = wb.add_format({"border": 1, "border_color": "#E1E0D9"})
         f_money = wb.add_format({"border": 1, "border_color": "#E1E0D9",
                                  "num_format": "#,##0.00", "align": "right"})
+        f_qty = wb.add_format({"border": 1, "border_color": "#E1E0D9",
+                               "num_format": "#,##0.00", "align": "right"})
         f_int = wb.add_format({"border": 1, "border_color": "#E1E0D9",
                                "num_format": "#,##0", "align": "center"})
         f_sum_l = wb.add_format({"bold": True})
@@ -209,9 +280,19 @@ class ReportBuilderExportAPIView(APIView):
 
         first_data_row = head_row + 1
         for col, c in enumerate(columns):
-            width = {"text": 28, "money": 16, "int": 12}.get(c["kind"], 16)
+            width = {"text": 28, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c["kind"], 16)
             ws.set_column(col, col, width)
-            ws.write(head_row, col, c["label"], f_head)
+
+        table_last_row = head_row + max(len(rows), 1)
+        table_cols = [{"header": c["label"]} for c in columns]
+        clean_name = "".join(ch for ch in report_type.title() if ch.isalnum()) + "Table"
+        ws.add_table(head_row, 0, table_last_row, last_col, {
+            "name": clean_name,
+            "columns": table_cols,
+            "style": "Table Style Light 1",
+            "autofilter": True,
+        })
+
         for i, r in enumerate(rows):
             for col, c in enumerate(columns):
                 val = r.get(c["key"], "")
@@ -225,11 +306,16 @@ class ReportBuilderExportAPIView(APIView):
                         ws.write_number(first_data_row + i, col, int(val), f_int)
                     except (TypeError, ValueError):
                         ws.write(first_data_row + i, col, str(val), f_text)
+                elif c["kind"] == "number":
+                    try:
+                        ws.write_number(first_data_row + i, col, float(val), f_qty)
+                    except (TypeError, ValueError):
+                        ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
                 else:
                     ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
 
         # Summary bloki jadval ostida
-        srow = first_data_row + len(rows) + 1
+        srow = table_last_row + 2
         for s in summary:
             ws.write(srow, 0, s["label"], f_sum_l)
             try:
@@ -239,8 +325,6 @@ class ReportBuilderExportAPIView(APIView):
             srow += 1
 
         ws.freeze_panes(first_data_row, 0)
-        if rows:
-            ws.autofilter(head_row, 0, head_row + len(rows), last_col)
         wb.close()
         output.seek(0)
 

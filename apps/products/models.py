@@ -287,7 +287,6 @@ class BarcodeTemplate(TimestampMixin):
     layout = models.JSONField(default=dict)
 
     is_default = models.BooleanField(default=False, db_index=True)
-    is_active = models.BooleanField(default=True, db_index=True)
 
     created_by = models.ForeignKey(
         "users.User", on_delete=models.SET_NULL, null=True, blank=True,
@@ -297,14 +296,11 @@ class BarcodeTemplate(TimestampMixin):
     class Meta:
         db_table = "barcode_template"
         ordering = ["-is_default", "name"]
-        indexes = [
-            models.Index(fields=["is_default", "is_active"]),
-        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["is_default"],
-                condition=models.Q(is_default=True, is_active=True),
-                name="uniq_active_default_barcode_template",
+                condition=models.Q(is_default=True),
+                name="uniq_default_barcode_template",
             ),
         ]
 

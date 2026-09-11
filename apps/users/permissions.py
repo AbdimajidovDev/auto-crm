@@ -339,6 +339,62 @@ PERMISSION_HIERARCHY = [
                 ],
             },
             {
+                "feature": "sales_by_product_report",
+                "label": "Tovarlar bo'yicha sotuvlar",
+                "actions": [
+                    {"code": "reports.sales_by_product.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.sales_by_product.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "product_efficiency_report",
+                "label": "Tovarlar samaradorligi",
+                "actions": [
+                    {"code": "reports.product_efficiency.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.product_efficiency.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "abc_analysis_report",
+                "label": "ABC tahlili",
+                "actions": [
+                    {"code": "reports.abc_analysis.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.abc_analysis.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "inventory_results_report",
+                "label": "Inventarizatsiya natijalari",
+                "actions": [
+                    {"code": "reports.inventory_results.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.inventory_results.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "order_returns_report",
+                "label": "Buyurtma qaytarishlari",
+                "actions": [
+                    {"code": "reports.order_returns.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.order_returns.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "write_offs_report",
+                "label": "Hisobdan chiqarishlar",
+                "actions": [
+                    {"code": "reports.write_offs.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.write_offs.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
+                "feature": "imports_report",
+                "label": "Kirimlar (Importlar)",
+                "actions": [
+                    {"code": "reports.imports.view", "action": "view", "label": "Ko'rish"},
+                    {"code": "reports.imports.export", "action": "export", "label": "Eksport (Excel/CSV)"},
+                ],
+            },
+            {
                 "feature": "top_products_report",
                 "label": "Ko'p sotilgan mahsulotlar",
                 "actions": [
@@ -487,6 +543,20 @@ LEGACY_PERMISSION_MAP = {
         "reports.view",
         "reports.sales.view",
         "reports.sales.export",
+        "reports.sales_by_product.view",
+        "reports.sales_by_product.export",
+        "reports.product_efficiency.view",
+        "reports.product_efficiency.export",
+        "reports.abc_analysis.view",
+        "reports.abc_analysis.export",
+        "reports.inventory_results.view",
+        "reports.inventory_results.export",
+        "reports.order_returns.view",
+        "reports.order_returns.export",
+        "reports.write_offs.view",
+        "reports.write_offs.export",
+        "reports.imports.view",
+        "reports.imports.export",
         "reports.top_products.view",
         "reports.top_products.export",
         "reports.products.view",
@@ -508,6 +578,11 @@ LEGACY_PERMISSION_MAP = {
         "reports.expenses.view",
         "reports.expenses.export",
     ],
+    "inventory.view": ["reports.inventory_results.view", "reports.write_offs.view", "reports.imports.view"],
+    "inventory.export": ["reports.inventory_results.export", "reports.write_offs.export", "reports.imports.export"],
+    "writeoff.view": ["reports.write_offs.view"],
+    "stockentry.view": ["reports.imports.view"],
+    "stockentry.export": ["reports.imports.export"],
 }
 
 

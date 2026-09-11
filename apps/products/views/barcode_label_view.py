@@ -56,11 +56,7 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
         return BarcodeTemplateDetailSerializer
 
     def get_queryset(self):
-        qs = BarcodeTemplate.objects.all().select_related("created_by")
-        include_inactive = self.request.query_params.get("include_inactive", "").lower() == "true"
-        if not include_inactive:
-            qs = qs.filter(is_active=True)
-        return qs.order_by("-is_default", "-id")
+        return BarcodeTemplate.objects.all().select_related("created_by").order_by("-is_default", "-id")
 
     def perform_create(self, serializer):
         with transaction.atomic():
@@ -76,13 +72,14 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        if instance.is_default:
-            return Response(
-                {"detail": "Standart (default) shablonni o'chirib bo'lmaydi. Avval boshqa shablonni standart qilib belgilang."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        instance.is_active = False
-        instance.save(update_fields=["is_active"])
+        with transaction.atomic():
+            was_default = instance.is_default
+            instance.delete()
+            if was_default:
+                next_default = BarcodeTemplate.objects.order_by("-id").first()
+                if next_default:
+                    next_default.is_default = True
+                    next_default.save(update_fields=["is_default"])
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="duplicate")
@@ -103,7 +100,6 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
             barcode_format=instance.barcode_format,
             layout=instance.layout,
             is_default=False,
-            is_active=True,
             created_by=request.user,
         )
         serializer = BarcodeTemplateDetailSerializer(new_template)
@@ -115,8 +111,7 @@ class BarcodeTemplateViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             BarcodeTemplate.objects.filter(is_default=True).update(is_default=False)
             instance.is_default = True
-            instance.is_active = True
-            instance.save(update_fields=["is_default", "is_active"])
+            instance.save(update_fields=["is_default"])
         serializer = BarcodeTemplateDetailSerializer(instance)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -144,13 +139,13 @@ class BarcodeLabelPreviewAPIView(APIView):
         )
 
         if template_id:
-            template = get_object_or_404(BarcodeTemplate, id=template_id, is_active=True)
+            template = get_object_or_404(BarcodeTemplate, id=template_id)
         else:
-            template = BarcodeTemplate.objects.filter(is_default=True, is_active=True).first()
+            template = BarcodeTemplate.objects.filter(is_default=True).first()
             if not template:
-                template = BarcodeTemplate.objects.filter(is_active=True).first()
+                template = BarcodeTemplate.objects.first()
             if not template:
-                return Response({"detail": "Faol shtrix-kod shabloni topilmadi."}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"detail": "Shtrix-kod shabloni topilmadi."}, status=status.HTTP_404_NOT_FOUND)
 
         width_mm = template.width_mm
         height_mm = template.height_mm
@@ -188,13 +183,13 @@ class BarcodeLabelPrintAPIView(APIView):
         items_input = serializer.validated_data["items"]
 
         if template_id:
-            template = get_object_or_404(BarcodeTemplate, id=template_id, is_active=True)
+            template = get_object_or_404(BarcodeTemplate, id=template_id)
         else:
-            template = BarcodeTemplate.objects.filter(is_default=True, is_active=True).first()
+            template = BarcodeTemplate.objects.filter(is_default=True).first()
             if not template:
-                template = BarcodeTemplate.objects.filter(is_active=True).first()
+                template = BarcodeTemplate.objects.first()
             if not template:
-                return Response({"detail": "Faol shtrix-kod shabloni topilmadi."}, status=status.HTTP_404_NOT_FOUND)
+                return Response({"detail": "Shtrix-kod shabloni topilmadi."}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             store = LabelDataResolver.resolve_store(request.user, store_id)
