@@ -2330,15 +2330,27 @@ REPORTS = {
         "builder": _build_supplier_sales,
         "builder_user": _build_supplier_sales,
         "needs_user": True,
-        "search": True,
+        "search": False,
         # Katalog katta — standart 5k cap kesib qo'ymasin (to'liq eksport kerak)
         "export_cap": LARGE_EXPORT_CAP,
         "filters": lambda: [
-            _f_daterange(), _f_store(), _f_supplier(), _f_category(), _f_brand(),
-            _f_seller(),
+            _f_daterange(),
+            _f_supplier(),
             _f_select("group_mode", "Tafsilotlar", [
-                ("day", "Kunlar bo'yicha"), ("period", "Davr jami"),
+                ("day", "Kunlar bo'yicha"),
+                ("period", "Davr jami"),
             ]),
+            _f_select("consolidate_stores", "Do'konlarni birlashtirish", [
+                ("false", "Birlashtirmaslik"),
+                ("true", "Birlashtirish"),
+            ]),
+            _f_select("price_type", "Sotuv narxi turi", [
+                ("all", "Barcha turlar"),
+                ("retail", "Chakana"),
+                ("wholesale", "Ulgurji"),
+                ("free", "Erkin"),
+            ]),
+            _f_store(),
         ],
     },
     "stock_leftovers": {

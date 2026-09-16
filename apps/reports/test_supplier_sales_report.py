@@ -340,32 +340,30 @@ class SupplierSalesReportTests(TestCase):
         self.assertTrue(all(r["store"] == self.store1.name for r in rows))
         self.assertFalse(any(r["store"] == self.store2.name for r in rows))
 
-    # 11. Category, brand, product, SKU, barcode filters
+    # 11. Category, brand, product, SKU, barcode filters are omitted/ignored (Billz contract parity)
     def test_11_category_brand_product_sku_barcode_filters(self):
         StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("5.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("500.00"))
         StockEntryService.create_entry(supplier=self.supplier2, store=self.store1, user=self.admin, items=[{"product": self.product2, "quantity": Decimal("5.00"), "purchase_price": Decimal("50.00"), "selling_price": Decimal("80.00"), "wholesale_price": Decimal("70.00")}], cash_amount=Decimal("250.00"))
         SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("1.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("150.00")}]})
         SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product2.id, "quantity": Decimal("1.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("80.00")}]})
 
-        # By category
+        # Passing category_id does not filter away other categories
         _, rows_cat, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "category_id": str(self.cat_brakes.id)})
-        self.assertEqual(len(rows_cat), 1)
-        self.assertEqual(rows_cat[0]["product"], self.product1.name)
+        self.assertEqual(len(rows_cat), 2)
 
-        # By brand
+        # Passing brand_id does not filter away other brands
         _, rows_brand, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "brand_id": str(self.brand_brembo.id)})
-        self.assertEqual(len(rows_brand), 1)
-        self.assertEqual(rows_brand[0]["product"], self.product2.name)
+        self.assertEqual(len(rows_brand), 2)
 
-        # By SKU
+        # Passing sku does not filter away other SKUs
         _, rows_sku, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "sku": "BP-001"})
-        self.assertEqual(len(rows_sku), 1)
+        self.assertEqual(len(rows_sku), 2)
 
-        # By Barcode
+        # Passing barcode does not filter away other barcodes
         _, rows_bar, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "barcode": "4781001000025"})
-        self.assertEqual(len(rows_bar), 1)
+        self.assertEqual(len(rows_bar), 2)
 
-    # 12. Seller and Customer filters
+    # 12. Seller and Customer filters are omitted/ignored (Billz contract parity)
     def test_12_seller_customer_filters(self):
         StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
         # Sale by seller_user
@@ -373,15 +371,15 @@ class SupplierSalesReportTests(TestCase):
         # Sale by admin with no customer
         SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": None, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("450.00")}]})
 
-        # Filter by seller
+        # Filter by seller is omitted; returns total 5.00 sold
         _, rows_sel, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "seller_id": str(self.seller_user.id)})
         self.assertEqual(len(rows_sel), 1)
-        self.assertEqual(rows_sel[0]["sold_qty"], Decimal("2.00"))
+        self.assertEqual(rows_sel[0]["sold_qty"], Decimal("5.00"))
 
-        # Filter by customer
+        # Filter by customer is omitted; returns total 5.00 sold
         _, rows_cust, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "customer_id": str(self.customer.id)})
         self.assertEqual(len(rows_cust), 1)
-        self.assertEqual(rows_cust[0]["sold_qty"], Decimal("2.00"))
+        self.assertEqual(rows_cust[0]["sold_qty"], Decimal("5.00"))
 
     # 13. Discount and revenue correctness
     def test_13_discount_and_revenue_correctness(self):
@@ -421,7 +419,7 @@ class SupplierSalesReportTests(TestCase):
             data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("4.00"), "price": Decimal("130.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("520.00")}]},
         )
         _, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
-        self.assertEqual(rows[0]["used_wholesale_price"], "130.00")
+        self.assertEqual(rows[0]["used_wholesale_price"], "Ha")
         self.assertEqual(rows[0]["free_price"], "Yo'q")
 
     # 16. Summary equals filtered rows
@@ -599,7 +597,7 @@ class SupplierSalesReportTests(TestCase):
         _, rows_all, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "product_id": "all", "group_mode": "period"})
         self.assertEqual(len(rows_all), 2)
 
-    # 27. Product filter: single product returned when product_id is specified
+    # 27. Product filter: omitted from contract, all products returned even if product_id is specified
     def test_27_product_filter_single_product_when_specified(self):
         StockEntryService.create_entry(
             supplier=self.supplier1, store=self.store1, user=self.admin,
@@ -620,23 +618,33 @@ class SupplierSalesReportTests(TestCase):
             data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product2.id, "quantity": Decimal("3.00"), "price": Decimal("80.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("240.00")}]},
         )
 
-        # Filter by product 1
+        # Passing product_id does not filter away product 2 (all products returned)
         _, rows_p1, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "product_id": str(self.product1.id)})
-        self.assertEqual(len(rows_p1), 1)
-        self.assertEqual(rows_p1[0]["product"], self.product1.name)
+        self.assertEqual(len(rows_p1), 2)
 
-        # Filter by product 2
         _, rows_p2, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "product_id": str(self.product2.id)})
-        self.assertEqual(len(rows_p2), 1)
-        self.assertEqual(rows_p2[0]["product"], self.product2.name)
+        self.assertEqual(len(rows_p2), 2)
 
-    # 28. Report builder metadata: supplier_sales has NO product filter (Billz parity)
+    # 28. Report builder metadata: supplier_sales has Billz toolbar filters and search=False
     def test_28_meta_reports_definition_no_product_filter(self):
         meta = ReportBuilderService.meta()
         sup_spec = next((r for r in meta["reports"] if r["key"] == "supplier_sales"), None)
         self.assertIsNotNone(sup_spec)
-        prod_filter = next((f for f in sup_spec["filters"] if f.get("param") == "product_id"), None)
-        self.assertIsNone(prod_filter)
+        self.assertFalse(sup_spec["search"])
+
+        filter_params = [f.get("param") for f in sup_spec["filters"]]
+        # Omitted filters
+        self.assertNotIn("product_id", filter_params)
+        self.assertNotIn("category_id", filter_params)
+        self.assertNotIn("brand_id", filter_params)
+        self.assertNotIn("seller_id", filter_params)
+
+        # Billz toolbar filters present
+        self.assertIn("supplier_id", filter_params)
+        self.assertIn("group_mode", filter_params)
+        self.assertIn("consolidate_stores", filter_params)
+        self.assertIn("price_type", filter_params)
+        self.assertIn("store_id", filter_params)
 
         # Other reports that genuinely need product (like product_history) still keep their product filter
         history_spec = next((r for r in meta["reports"] if r["key"] == "product_history"), None)
@@ -737,4 +745,141 @@ class SupplierSalesReportTests(TestCase):
         # Store 2 rows are completely excluded
         self.assertTrue(all(r["store"] == self.store1.name for r in res.data["rows"]))
         self.assertFalse(any(r["store"] == self.store2.name for r in res.data["rows"]))
+
+    # 32. Store consolidation: consolidate_stores false vs true
+    def test_32_consolidate_stores_false_vs_true(self):
+        # Product1 sold in Store1
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        # Product1 sold in Store2
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store2, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store2.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("450.00")}]})
+
+        # When consolidate_stores is False: 2 rows
+        _, rows_no_cons, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "consolidate_stores": "false", "group_mode": "period"})
+        self.assertEqual(len(rows_no_cons), 2)
+        store_names = {r["store"] for r in rows_no_cons}
+        self.assertIn(self.store1.name, store_names)
+        self.assertIn(self.store2.name, store_names)
+
+        # When consolidate_stores is True: 1 aggregated row
+        _, rows_cons, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "consolidate_stores": "true", "group_mode": "period"})
+        self.assertEqual(len(rows_cons), 1)
+        self.assertEqual(rows_cons[0]["store"], "Barcha do'konlar")
+        self.assertEqual(rows_cons[0]["sold_qty"], Decimal("5.00"))
+        self.assertEqual(Decimal(rows_cons[0]["revenue"]), Decimal("750.00"))
+
+    # 33. Price type filtering: retail, wholesale, free, all
+    def test_33_price_type_filtering(self):
+        # Product1: selling_price=150.00, wholesale_price=130.00
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("30.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("3000.00"))
+
+        # 1. Retail sale (price=150.00)
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("1.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("150.00")}]})
+        # 2. Wholesale sale (price=130.00)
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("130.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("260.00")}]})
+        # 3. Free price sale (price=175.00)
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("3.00"), "price": Decimal("175.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("525.00")}]})
+
+        # price_type = "retail"
+        _, rows_ret, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "price_type": "retail"})
+        self.assertEqual(len(rows_ret), 1)
+        self.assertEqual(rows_ret[0]["sold_qty"], Decimal("1.00"))
+        self.assertEqual(rows_ret[0]["free_price"], "Yo'q")
+        self.assertEqual(rows_ret[0]["used_wholesale_price"], "Yo'q")
+
+        # price_type = "wholesale"
+        _, rows_ws, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "price_type": "wholesale"})
+        self.assertEqual(len(rows_ws), 1)
+        self.assertEqual(rows_ws[0]["sold_qty"], Decimal("2.00"))
+        self.assertEqual(rows_ws[0]["used_wholesale_price"], "Ha")
+        self.assertEqual(rows_ws[0]["free_price"], "Yo'q")
+
+        # price_type = "free"
+        _, rows_fr, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "price_type": "free"})
+        self.assertEqual(len(rows_fr), 1)
+        self.assertEqual(rows_fr[0]["sold_qty"], Decimal("3.00"))
+        self.assertEqual(rows_fr[0]["free_price"], "Ha")
+        self.assertEqual(rows_fr[0]["used_wholesale_price"], "Yo'q")
+
+        # price_type = "all"
+        _, rows_all, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id, "price_type": "all"})
+        self.assertEqual(len(rows_all), 1)
+        self.assertEqual(rows_all[0]["sold_qty"], Decimal("6.00"))
+        self.assertEqual(rows_all[0]["free_price"], "Ha")
+        self.assertEqual(rows_all[0]["used_wholesale_price"], "Ha")
+
+    # 34. Exact 13 columns Billz contract parity
+    def test_34_exact_13_columns_billz_order_and_kinds(self):
+        cols, _, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales"})
+        self.assertEqual(len(cols), 13)
+        expected_keys = [
+            "store",
+            "date",
+            "supplier",
+            "product",
+            "sku",
+            "barcode",
+            "categories_path",
+            "sold_qty",
+            "returned_qty",
+            "net_sold_qty",
+            "revenue",
+            "free_price",
+            "used_wholesale_price",
+        ]
+        self.assertEqual([c["key"] for c in cols], expected_keys)
+        # Check kinds of flags
+        free_col = next(c for c in cols if c["key"] == "free_price")
+        ws_col = next(c for c in cols if c["key"] == "used_wholesale_price")
+        self.assertEqual(free_col["kind"], "text")
+        self.assertEqual(ws_col["kind"], "text")
+
+    # 35. Excel A1 table structure: header on row 1, data on row 2, no metadata banner, no bottom summary
+    def test_35_excel_a1_structure_and_no_summary_block(self):
+        import openpyxl
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        request = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "excel", "store_id": self.store1.id})
+        force_authenticate(request, user=self.export_user)
+        response = ReportBuilderExportAPIView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+
+        wb = openpyxl.load_workbook(io.BytesIO(response.content))
+        ws = wb.active
+        # Row 1 must be headers directly
+        self.assertEqual(ws.cell(row=1, column=1).value, "Do'kon")
+        self.assertEqual(ws.cell(row=1, column=2).value, "Sana")
+        self.assertEqual(ws.cell(row=1, column=3).value, "Yetkazib beruvchi")
+        self.assertEqual(ws.cell(row=1, column=12).value, "Erkin narx")
+        self.assertEqual(ws.cell(row=1, column=13).value, "Ulgurji narx")
+
+        # Row 2 must be the first data row
+        self.assertEqual(ws.cell(row=2, column=1).value, self.store1.name)
+        self.assertEqual(ws.cell(row=2, column=3).value, self.supplier1.name)
+        self.assertEqual(ws.cell(row=2, column=4).value, self.product1.name)
+
+        # Row 3 must NOT contain any summary block
+        self.assertIsNone(ws.cell(row=3, column=1).value)
+
+    # 36. CSV clean structure: header row first, data rows follow, no summary section
+    def test_36_csv_clean_structure_no_trailing_summary(self):
+        StockEntryService.create_entry(supplier=self.supplier1, store=self.store1, user=self.admin, items=[{"product": self.product1, "quantity": Decimal("10.00"), "purchase_price": Decimal("100.00"), "selling_price": Decimal("150.00"), "wholesale_price": Decimal("130.00")}], cash_amount=Decimal("1000.00"))
+        SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("2.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("300.00")}]})
+
+        request = self.factory.get("/api/reports/builder/export/", {"report_type": "supplier_sales", "export_type": "csv", "store_id": self.store1.id})
+        force_authenticate(request, user=self.export_user)
+        response = ReportBuilderExportAPIView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+
+        lines = [ln.strip() for ln in response.content.decode("utf-8-sig").splitlines() if ln.strip()]
+        # Line 0 is header
+        self.assertTrue(lines[0].startswith("Do'kon,Sana,Yetkazib beruvchi"))
+        # Line 1 is data row
+        self.assertIn(self.supplier1.name, lines[1])
+        # Exactly 2 lines (header + 1 row), no summary rows
+        self.assertEqual(len(lines), 2)
+
 

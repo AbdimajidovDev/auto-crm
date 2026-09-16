@@ -201,6 +201,12 @@ class ReportBuilderExportAPIView(APIView):
             response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
             response["Content-Disposition"] = f"attachment; filename={report_type}_{stamp}.csv"
             writer = csv.writer(response)
+            if report_type == "supplier_sales":
+                writer.writerow([c["label"] for c in columns])
+                for r in rows:
+                    writer.writerow([r.get(c["key"], "") for c in columns])
+                return response
+
             # Kartochka (mahsulot tafsilotlari) jadval tepasida — fayl o'zi
             # yetarli bo'lishi uchun (qaysi mahsulot ekani ko'rinib tursin)
             if info:
@@ -250,6 +256,55 @@ class ReportBuilderExportAPIView(APIView):
         f_card = wb.add_format({"bold": True, "font_size": 11, "font_color": "#0D366B"})
 
         last_col = len(columns) - 1
+
+        if report_type == "supplier_sales":
+            head_row = 0
+            first_data_row = 1
+            for col, c in enumerate(columns):
+                width = {"text": 26, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c["kind"], 16)
+                ws.set_column(col, col, width)
+
+            table_last_row = head_row + max(len(rows), 1)
+            table_cols = [{"header": c["label"]} for c in columns]
+            clean_name = "SupplierSalesTable"
+            ws.add_table(head_row, 0, table_last_row, last_col, {
+                "name": clean_name,
+                "columns": table_cols,
+                "style": "Table Style Light 1",
+                "autofilter": True,
+            })
+
+            for i, r in enumerate(rows):
+                for col, c in enumerate(columns):
+                    val = r.get(c["key"], "")
+                    if c["kind"] == "money":
+                        try:
+                            ws.write_number(first_data_row + i, col, float(val), f_money)
+                        except (TypeError, ValueError):
+                            ws.write(first_data_row + i, col, str(val), f_text)
+                    elif c["kind"] == "int":
+                        try:
+                            ws.write_number(first_data_row + i, col, int(val), f_int)
+                        except (TypeError, ValueError):
+                            ws.write(first_data_row + i, col, str(val), f_text)
+                    elif c["kind"] == "number":
+                        try:
+                            ws.write_number(first_data_row + i, col, float(val), f_qty)
+                        except (TypeError, ValueError):
+                            ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
+                    else:
+                        ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
+
+            ws.freeze_panes(first_data_row, 0)
+            wb.close()
+            output.seek(0)
+
+            response = HttpResponse(
+                output,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response["Content-Disposition"] = f"attachment; filename={report_type}_{stamp}.xlsx"
+            return response
         ws.set_row(0, 26)
         ws.merge_range(0, 0, 0, max(last_col, 1), label, f_title)
         gen = datetime.now().strftime("%d.%m.%Y %H:%M")
