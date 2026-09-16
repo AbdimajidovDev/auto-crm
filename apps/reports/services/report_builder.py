@@ -226,12 +226,12 @@ def _f_select(param, label, pairs, empty_label=None):
     return {"param": param, "type": "select", "label": label, "options": options}
 
 
-def _f_product():
+def _f_product(required=True):
     """
     Bitta mahsulot tanlash. Katalog minglab qatorli — variantlar meta bilan
     yuborilmaydi, frontend qidiruv (autocomplete) orqali tanlaydi.
     """
-    return {"param": "product_id", "type": "product", "label": "Mahsulot", "required": True}
+    return {"param": "product_id", "type": "product", "label": "Mahsulot", "required": required}
 
 
 def _f_supplier():
@@ -2329,11 +2329,12 @@ REPORTS = {
         "label": "Yetkazib beruvchilar bo'yicha sotuvlar",
         "builder": _build_supplier_sales,
         "builder_user": _build_supplier_sales,
+        "needs_user": True,
         "search": True,
         # Katalog katta — standart 5k cap kesib qo'ymasin (to'liq eksport kerak)
         "export_cap": LARGE_EXPORT_CAP,
         "filters": lambda: [
-            _f_daterange(), _f_store(), _f_supplier(), _f_product(), _f_category(), _f_brand(),
+            _f_daterange(), _f_store(), _f_supplier(), _f_category(), _f_brand(),
             _f_seller(),
             _f_select("group_mode", "Tafsilotlar", [
                 ("day", "Kunlar bo'yicha"), ("period", "Davr jami"),

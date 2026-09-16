@@ -732,3 +732,257 @@ class BarcodeLabelDeviceImageUploadTests(TestCase):
         )
         self.assertEqual(preview_res.status_code, status.HTTP_200_OK)
         self.assertEqual(preview_res["Content-Type"], "image/png")
+
+
+class ProductBarcodePrintRegressionTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create(
+            phone_number="+998901112233",
+            full_name="Print Admin",
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        self.store1 = Store.objects.create(name="Asosiy Do'kon", is_active=True)
+        self.store2 = Store.objects.create(name="Filial Do'kon", is_active=True)
+
+        BarcodeTemplate.objects.filter(is_default=True).update(is_default=False)
+        self.custom_template = BarcodeTemplate.objects.create(
+            name="Maxsus Visual Shablon 40x25",
+            width_mm=Decimal("40.00"),
+            height_mm=Decimal("25.00"),
+            barcode_format="EAN13",
+            is_default=True,
+            layout={
+                "version": 1,
+                "background_color": "#FFFFFF",
+                "elements": [
+                    {
+                        "id": "elem_company",
+                        "type": "text",
+                        "field": "company.name",
+                        "x_mm": 2.0,
+                        "y_mm": 1.0,
+                        "width_mm": 36.0,
+                        "height_mm": 4.0,
+                        "font_size": 8,
+                        "font_weight": "bold",
+                        "align": "center",
+                        "visible": True,
+                    },
+                    {
+                        "id": "elem_name",
+                        "type": "text",
+                        "field": "product.name",
+                        "x_mm": 2.0,
+                        "y_mm": 5.5,
+                        "width_mm": 36.0,
+                        "height_mm": 4.0,
+                        "font_size": 7,
+                        "align": "left",
+                        "visible": True,
+                    },
+                    {
+                        "id": "elem_sku",
+                        "type": "text",
+                        "field": "product.sku",
+                        "x_mm": 2.0,
+                        "y_mm": 10.0,
+                        "width_mm": 18.0,
+                        "height_mm": 3.5,
+                        "font_size": 6,
+                        "align": "left",
+                        "visible": True,
+                    },
+                    {
+                        "id": "elem_price",
+                        "type": "text",
+                        "field": "product.batch.selling_price",
+                        "x_mm": 20.0,
+                        "y_mm": 10.0,
+                        "width_mm": 18.0,
+                        "height_mm": 3.5,
+                        "font_size": 7,
+                        "font_weight": "bold",
+                        "align": "right",
+                        "visible": True,
+                    },
+                    {
+                        "id": "elem_barcode",
+                        "type": "barcode",
+                        "field": "product.barcode",
+                        "x_mm": 3.0,
+                        "y_mm": 14.0,
+                        "width_mm": 34.0,
+                        "height_mm": 9.0,
+                        "show_text": True,
+                        "visible": True,
+                    },
+                ],
+            },
+        )
+
+        self.product = Product.objects.create(
+            name="Amortizator Cobalt",
+            sku="AMORT-COB-01",
+            barcode="2000000011448",
+        )
+
+        ProductBatch.objects.create(
+            product=self.product,
+            store=self.store1,
+            quantity=Decimal("10"),
+            purchase_price=Decimal("100000"),
+            selling_price=Decimal("150000"),
+            is_active=True,
+        )
+
+        ProductBatch.objects.create(
+            product=self.product,
+            store=self.store2,
+            quantity=Decimal("5"),
+            purchase_price=Decimal("100000"),
+            selling_price=Decimal("175000"),
+            is_active=True,
+        )
+
+    def test_01_product_print_resolves_saved_default_template(self):
+        """When template_id is omitted, print endpoint resolves the active default template."""
+        res = self.client.post(
+            "/api/products/barcode-labels/print/",
+            {
+                "store_id": self.store1.id,
+                "items": [{"product_id": self.product.id, "quantity": 1}],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertTrue(res.content.startswith(b"%PDF"))
+
+    def test_02_custom_template_fields_rendered(self):
+        """Custom template fields (company, product name, sku, price) are resolved in context."""
+        ctx = LabelDataResolver.resolve_context(self.product, self.store1)
+        self.assertEqual(ctx["company.name"], "AVTOYON")
+        self.assertEqual(ctx["product.name"], "Amortizator Cobalt")
+        self.assertEqual(ctx["product.sku"], "AMORT-COB-01")
+        self.assertEqual(ctx["product.batch.selling_price"], "150 000 so'm")
+
+        # Renders without error
+        pdf_bytes = PdfLabelRenderer.render_pdf(
+            float(self.custom_template.width_mm),
+            float(self.custom_template.height_mm),
+            self.custom_template.layout,
+            [(ctx, 1)],
+        )
+        self.assertTrue(pdf_bytes.startswith(b"%PDF"))
+
+    def test_03_barcode_value_remains_correct(self):
+        """Barcode value 2000000011448 is properly preserved and encoded to 95 modules."""
+        res = BarcodeGeneratorService.generate(self.product.barcode)
+        self.assertEqual(res.barcode_value, "2000000011448")
+        self.assertEqual(res.total_modules, 95)
+
+    def test_04_store_specific_price_is_correct(self):
+        """Price resolution respects the requested store ID (store1: 150 000, store2: 175 000)."""
+        ctx_store1 = LabelDataResolver.resolve_context(self.product, self.store1)
+        ctx_store2 = LabelDataResolver.resolve_context(self.product, self.store2)
+        self.assertEqual(ctx_store1["product.batch.selling_price"], "150 000 so'm")
+        self.assertEqual(ctx_store2["product.batch.selling_price"], "175 000 so'm")
+
+    def test_05_template_dimensions_are_respected(self):
+        """PDF pagesize corresponds to width_mm and height_mm of the template."""
+        from reportlab.lib.units import mm
+        ctx = LabelDataResolver.resolve_context(self.product, self.store1)
+        pdf_bytes = PdfLabelRenderer.render_pdf(
+            float(self.custom_template.width_mm),
+            float(self.custom_template.height_mm),
+            self.custom_template.layout,
+            [(ctx, 1)],
+        )
+        expected_width = float(self.custom_template.width_mm) * mm
+        self.assertTrue(len(pdf_bytes) > 0)
+        self.assertIn(f"{expected_width:.2f}".encode("ascii")[:4], pdf_bytes)
+
+    def test_06_print_flow_does_not_fall_back_to_legacy_simple_barcode_renderer(self):
+        """Print endpoint generates vector multi-element PDF stream with reportlab canvas."""
+        res = self.client.post(
+            "/api/products/barcode-labels/print/",
+            {
+                "template_id": self.custom_template.id,
+                "store_id": self.store1.id,
+                "items": [{"product_id": self.product.id, "quantity": 1}],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertTrue(res.content.startswith(b"%PDF"))
+        self.assertIn(b"/Producer (ReportLab", res.content)
+
+    def test_07_existing_default_template_still_works(self):
+        """Product print works seamlessly with the active default template without requiring manual selection."""
+        self.assertTrue(BarcodeTemplate.objects.filter(is_default=True).exists())
+        res = self.client.post(
+            "/api/products/barcode-labels/print/",
+            {
+                "items": [{"product_id": self.product.id, "quantity": 2}],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertTrue(res.content.startswith(b"%PDF"))
+
+    def test_08_multi_product_multi_quantity_print(self):
+        """Multi-product, multi-quantity print payload generates combined vector PDF with exact page count."""
+        product2 = Product.objects.create(
+            name="Tormoz Kolodkasi",
+            sku="BRAKE-02",
+            barcode="2000000022554",
+        )
+        ProductBatch.objects.create(
+            product=product2,
+            store=self.store1,
+            quantity=Decimal("20"),
+            purchase_price=Decimal("60000"),
+            selling_price=Decimal("85000"),
+            is_active=True,
+        )
+
+        res = self.client.post(
+            "/api/products/barcode-labels/print/",
+            {
+                "template_id": self.custom_template.id,
+                "store_id": self.store1.id,
+                "items": [
+                    {"product_id": self.product.id, "quantity": 3},
+                    {"product_id": product2.id, "quantity": 2},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertTrue(res.content.startswith(b"%PDF"))
+        page_count = res.content.count(b"/Type /Page\n") + res.content.count(b"/Type /Page ") + res.content.count(b"/Type/Page")
+        self.assertEqual(page_count, 5)
+
+    def test_09_stock_entry_items_payload_format(self):
+        """StockEntry module print payload format is fully accepted and resolved with store prices."""
+        res = self.client.post(
+            "/api/products/barcode-labels/print/",
+            {
+                "store_id": self.store2.id,
+                "items": [
+                    {"product_id": self.product.id, "quantity": 1},
+                ],
+            },
+            format="json",
+        )
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.assertEqual(res["Content-Type"], "application/pdf")
+        self.assertTrue(res.content.startswith(b"%PDF"))
+
+
