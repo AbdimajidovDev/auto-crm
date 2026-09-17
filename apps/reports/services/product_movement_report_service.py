@@ -398,7 +398,7 @@ class ProductMovementReportService:
                 "counterparty": None,
                 "user": getattr(item.stock_transfer.created_by, "full_name", None),
                 "status": item.stock_transfer.status,
-                "note": item.stock_transfer.note or "",
+                "note": "",
             }
             for item in qs
         ]
@@ -475,7 +475,7 @@ class ProductMovementReportService:
                 "counterparty": None,
                 "user": getattr(item.write_off.created_by, "full_name", None),
                 "status": item.write_off.reason,
-                "note": item.write_off.note or "",
+                "note": item.write_off.comment or "",
             }
             for item in qs
         ]
