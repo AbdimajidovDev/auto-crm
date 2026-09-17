@@ -17,6 +17,8 @@ from decimal import Decimal, InvalidOperation
 
 import xlsxwriter
 
+from apps.common.excel_export import safe_add_worksheet, sanitize_worksheet_name
+
 # ─── Dataviz palitra (oq fonda validatsiyadan o'tgan kategorik slotlar) ───
 SERIES = [
     "#2A78D6",  # 1 ko'k
@@ -121,7 +123,7 @@ class _ReportWorkbook:
 
     # ─────────────────── umumiy bloklar ───────────────────
     def sheet(self, name: str, tab_color: str):
-        ws = self.wb.add_worksheet(name)
+        ws = safe_add_worksheet(self.wb, name)
         ws.set_tab_color(tab_color)
         ws.hide_gridlines(2)
         return ws

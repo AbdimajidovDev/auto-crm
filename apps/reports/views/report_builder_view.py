@@ -20,6 +20,7 @@ from apps.reports.permissions import scope_report_params
 from apps.reports.services.report_builder import ReportBuilderService
 from apps.contract.permissions import allowed_store_ids
 from apps.users.permissions import user_has_perm
+from apps.common.excel_export import safe_add_worksheet, sanitize_worksheet_name
 
 
 def _scoped_meta(request) -> dict:
@@ -296,10 +297,10 @@ class ReportBuilderExportAPIView(APIView):
 
                 ws.freeze_panes(first_data_row, 0)
 
-            ws1 = wb.add_worksheet("Cheklar")
+            ws1 = safe_add_worksheet(wb, "Cheklar")
             write_clean_table_sheet(ws1, cols1, rows1, "CheklarTable")
 
-            ws2 = wb.add_worksheet("Mahsulotlar")
+            ws2 = safe_add_worksheet(wb, "Mahsulotlar")
             write_clean_table_sheet(ws2, cols2, rows2, "MahsulotlarTable")
 
             wb.close()
@@ -316,7 +317,7 @@ class ReportBuilderExportAPIView(APIView):
         wb = xlsxwriter.Workbook(output, {"in_memory": True})
         # Varaq nomi 31 belgidan oshmasligi kerak; sarlavhadagi qavs ichidagi
         # izoh (masalan holat sanasi) faqat sarlavha satrida qoladi
-        ws = wb.add_worksheet(label.split(" (")[0][:31] or "Hisobot")
+        ws = safe_add_worksheet(wb, label.split(" (")[0] if label else "Hisobot", default="Hisobot")
         f_title = wb.add_format({"bold": True, "font_size": 13, "font_color": "#FFFFFF",
                                  "bg_color": "#0D366B", "valign": "vcenter", "indent": 1})
         f_meta = wb.add_format({"font_size": 9, "italic": True, "font_color": "#52514E"})
