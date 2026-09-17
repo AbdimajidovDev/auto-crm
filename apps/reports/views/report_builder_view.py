@@ -201,7 +201,7 @@ class ReportBuilderExportAPIView(APIView):
             response = HttpResponse(content_type="text/csv; charset=utf-8-sig")
             response["Content-Disposition"] = f"attachment; filename={report_type}_{stamp}.csv"
             writer = csv.writer(response)
-            if report_type == "supplier_sales":
+            if report_type in ("supplier_sales", "sales"):
                 writer.writerow([c["label"] for c in columns])
                 for r in rows:
                     writer.writerow([r.get(c["key"], "") for c in columns])
@@ -233,6 +233,85 @@ class ReportBuilderExportAPIView(APIView):
             return response
 
         # Excel
+        if report_type == "sales":
+            # Sheet 1: Cheklar (view="receipts")
+            params_receipts = params.copy()
+            params_receipts["view"] = "receipts"
+            label1, cols1, rows1, summary1, _ = ReportBuilderService.export_rows(params_receipts, request.user)
+
+            # Sheet 2: Mahsulotlar (view="items")
+            params_items = params.copy()
+            params_items["view"] = "items"
+            label2, cols2, rows2, summary2, _ = ReportBuilderService.export_rows(params_items, request.user)
+
+            output = io.BytesIO()
+            wb = xlsxwriter.Workbook(output, {"in_memory": True})
+
+            f_text = wb.add_format({"border": 1, "border_color": "#E1E0D9"})
+            f_money = wb.add_format({"border": 1, "border_color": "#E1E0D9",
+                                     "num_format": "#,##0.00", "align": "right"})
+            f_qty = wb.add_format({"border": 1, "border_color": "#E1E0D9",
+                                   "num_format": "#,##0.00", "align": "right"})
+            f_int = wb.add_format({"border": 1, "border_color": "#E1E0D9",
+                                   "num_format": "#,##0", "align": "center"})
+
+            def write_clean_table_sheet(ws, sheet_cols, sheet_rows, tbl_name):
+                head_row = 0
+                first_data_row = 1
+                last_col = len(sheet_cols) - 1
+                for col_idx, c in enumerate(sheet_cols):
+                    width = {"text": 24, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c.get("kind"), 16)
+                    ws.set_column(col_idx, col_idx, width)
+
+                table_last_row = head_row + max(len(sheet_rows), 1)
+                table_cols = [{"header": c["label"]} for c in sheet_cols]
+                ws.add_table(head_row, 0, table_last_row, last_col, {
+                    "name": tbl_name,
+                    "columns": table_cols,
+                    "style": "Table Style Light 1",
+                    "autofilter": True,
+                })
+
+                for i, r in enumerate(sheet_rows):
+                    for col_idx, c in enumerate(sheet_cols):
+                        val = r.get(c["key"], "")
+                        kind = c.get("kind")
+                        if kind == "money":
+                            try:
+                                ws.write_number(first_data_row + i, col_idx, float(val), f_money)
+                            except (TypeError, ValueError):
+                                ws.write(first_data_row + i, col_idx, str(val), f_text)
+                        elif kind == "int":
+                            try:
+                                ws.write_number(first_data_row + i, col_idx, int(val), f_int)
+                            except (TypeError, ValueError):
+                                ws.write(first_data_row + i, col_idx, str(val), f_text)
+                        elif kind == "number":
+                            try:
+                                ws.write_number(first_data_row + i, col_idx, float(val), f_qty)
+                            except (TypeError, ValueError):
+                                ws.write(first_data_row + i, col_idx, "-" if val in (None, "") else str(val), f_text)
+                        else:
+                            ws.write(first_data_row + i, col_idx, "-" if val in (None, "") else str(val), f_text)
+
+                ws.freeze_panes(first_data_row, 0)
+
+            ws1 = wb.add_worksheet("Cheklar")
+            write_clean_table_sheet(ws1, cols1, rows1, "CheklarTable")
+
+            ws2 = wb.add_worksheet("Mahsulotlar")
+            write_clean_table_sheet(ws2, cols2, rows2, "MahsulotlarTable")
+
+            wb.close()
+            output.seek(0)
+
+            response = HttpResponse(
+                output,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            response["Content-Disposition"] = f"attachment; filename=Sales_Report_{stamp}.xlsx"
+            return response
+
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {"in_memory": True})
         # Varaq nomi 31 belgidan oshmasligi kerak; sarlavhadagi qavs ichidagi

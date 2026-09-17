@@ -44,7 +44,13 @@ from apps.users.models.customers import Customer
 from apps.users.models.user import User
 
 from .report_service import _dt_bounds, _store_q, ExpensesService
-from .reporting_foundation import ReportingFoundationService
+from .reporting_foundation import (
+    ReportingFoundationService,
+    ZERO_MONEY,
+    ZERO_QTY,
+    MONEY_FIELD,
+    QTY_FIELD,
+)
 from .stock_history_service import day_end, stock_delta_after
 
 # Eksportda ham cheklov bor — "hamma yozuvlar" hech qachon yuklanmaydi
@@ -267,6 +273,13 @@ def _f_user(param="user_id", label="Mas'ul xodim"):
 #  rows: dict ro'yxati (column key → qiymat)
 # ─────────────────────────────────────────────
 def _build_sales(params, store_id):
+    view = (params.get("view") or "receipts").strip().lower()
+    if view == "items":
+        return _build_sales_items(params, store_id)
+    return _build_sales_receipts(params, store_id)
+
+
+def _build_sales_receipts(params, store_id):
     # Sana tanlanmasa — boshidan bugungacha JAMI (foydalanuvchi "hammasi"ni
     # ko'rish uchun har safar sana tanlab o'tirmasin)
     d_from, d_to = _parse_dates(params, default_all=True)
@@ -287,6 +300,12 @@ def _build_sales(params, store_id):
     sale_status = params.get("status")
     if sale_status in SALE_STATUS_LABELS:
         qs = qs.filter(status=sale_status)
+    seller_id = params.get("seller_id")
+    if seller_id and str(seller_id).isdigit():
+        qs = qs.filter(seller_id=int(seller_id))
+    customer_id = params.get("customer_id")
+    if customer_id and str(customer_id).isdigit():
+        qs = qs.filter(customer_id=int(customer_id))
     search = (params.get("search") or "").strip()
     if search:
         qs = qs.filter(
@@ -372,6 +391,192 @@ def _build_sales(params, store_id):
             "kind": "text",
         })
     return columns, qs, row, summary
+
+
+def _build_sales_items(params, store_id):
+    d_from, d_to = _parse_dates(params, default_all=True)
+    start, end = _dt_bounds(d_from, d_to)
+
+    items_qs = (
+        SaleItem.objects
+        .filter(
+            sale__created_at__gte=start,
+            sale__created_at__lt=end,
+            sale__deleted_at__isnull=True,
+        )
+        .filter(_store_q(store_id, "sale__store_id"))
+        .select_related(
+            "sale",
+            "sale__store",
+            "sale__customer",
+            "sale__seller",
+            "product",
+            "product__category",
+            "product__brand",
+            "product__unit_measurement",
+        )
+    )
+
+    payment_type = params.get("payment_type")
+    if payment_type in PAYMENT_TYPE_LABELS:
+        items_qs = items_qs.filter(sale__payment_type=payment_type)
+    sale_status = params.get("status")
+    if sale_status in SALE_STATUS_LABELS:
+        items_qs = items_qs.filter(sale__status=sale_status)
+    seller_id = params.get("seller_id")
+    if seller_id and str(seller_id).isdigit():
+        items_qs = items_qs.filter(sale__seller_id=int(seller_id))
+    customer_id = params.get("customer_id")
+    if customer_id and str(customer_id).isdigit():
+        items_qs = items_qs.filter(sale__customer_id=int(customer_id))
+    search = (params.get("search") or "").strip()
+    if search:
+        items_qs = items_qs.filter(
+            Q(sale__customer__full_name__icontains=search)
+            | Q(sale__customer__phone_number__icontains=search)
+            | (Q(sale__id__iexact=search) if search.isdigit() else Q())
+            | Q(product__name__icontains=search)
+            | Q(product__sku__icontains=search)
+            | Q(product__barcode__icontains=search)
+        )
+
+    # Subtotal and line expressions for proportional discount and net revenue
+    subtotal_expr = ExpressionWrapper(
+        Coalesce(F("sale__total_amount"), ZERO_MONEY) + Coalesce(F("sale__discount_amount"), ZERO_MONEY),
+        output_field=MONEY_FIELD,
+    )
+    gross_line_rev_expr = ExpressionWrapper(
+        F("unit_price") * F("quantity"),
+        output_field=MONEY_FIELD,
+    )
+    net_qty_expr = Case(
+        When(sale__status=Sale.Status.RETURNED, then=ZERO_QTY),
+        When(quantity__gt=F("returned_quantity"), then=F("quantity") - F("returned_quantity")),
+        default=ZERO_QTY,
+        output_field=QTY_FIELD,
+    )
+    net_line_rev_expr = ExpressionWrapper(
+        F("unit_price") * net_qty_expr,
+        output_field=MONEY_FIELD,
+    )
+    item_discount_expr = Case(
+        When(
+            sale__discount_amount__gt=0,
+            then=ExpressionWrapper(
+                Coalesce(F("sale__discount_amount"), ZERO_MONEY) * net_line_rev_expr / subtotal_expr,
+                output_field=MONEY_FIELD,
+            ),
+        ),
+        default=ZERO_MONEY,
+        output_field=MONEY_FIELD,
+    )
+    net_total_expr = Case(
+        When(sale__status=Sale.Status.RETURNED, then=ZERO_MONEY),
+        default=ExpressionWrapper(net_line_rev_expr - item_discount_expr, output_field=MONEY_FIELD),
+        output_field=MONEY_FIELD,
+    )
+
+    items_qs = items_qs.annotate(
+        annotated_gross_rev=gross_line_rev_expr,
+        annotated_discount=item_discount_expr,
+        annotated_net_qty=net_qty_expr,
+        annotated_net_total=net_total_expr,
+    )
+
+    # Server-side sorting
+    sort_by = (params.get("sort_by") or "").strip().lower()
+    order = (params.get("order") or "desc").strip().lower()
+    sort_map = {
+        "date": "sale__created_at",
+        "id": "sale__id",
+        "sale_id": "sale__id",
+        "product": "product__name",
+        "quantity": "quantity",
+        "total": "annotated_net_total",
+    }
+    if sort_by in sort_map:
+        field_name = sort_map[sort_by]
+        order_prefix = "-" if order == "desc" else ""
+        items_qs = items_qs.order_by(f"{order_prefix}{field_name}", "-id")
+    else:
+        items_qs = items_qs.order_by("-sale__created_at", "-id")
+
+    # Aggregation for summary
+    agg = items_qs.aggregate(
+        n=Count("id"),
+        total_qty=Coalesce(Sum("quantity"), ZERO_QTY),
+        total_ret_qty=Coalesce(Sum("returned_quantity"), ZERO_QTY),
+        total_net_qty=Coalesce(Sum("annotated_net_qty"), ZERO_QTY),
+        gross_sales=Coalesce(Sum("annotated_gross_rev"), ZERO_MONEY),
+        total_discount=Coalesce(Sum("annotated_discount"), ZERO_MONEY),
+        net_revenue=Coalesce(Sum("annotated_net_total"), ZERO_MONEY),
+    )
+
+    columns = [
+        {"key": "sale_id", "label": "Check №", "kind": "int"},
+        {"key": "date", "label": "Sana", "kind": "text"},
+        {"key": "store", "label": "Do'kon", "kind": "text"},
+        {"key": "product", "label": "Tovar", "kind": "text"},
+        {"key": "sku", "label": "SKU", "kind": "text"},
+        {"key": "barcode", "label": "Shtrix kod", "kind": "text"},
+        {"key": "category", "label": "Kategoriya", "kind": "text"},
+        {"key": "brand", "label": "Brend", "kind": "text"},
+        {"key": "unit", "label": "O'lchov birligi", "kind": "text"},
+        {"key": "seller", "label": "Sotuvchi", "kind": "text"},
+        {"key": "customer", "label": "Mijoz", "kind": "text"},
+        {"key": "quantity", "label": "Miqdor", "kind": "number"},
+        {"key": "returned_quantity", "label": "Qaytarilgan", "kind": "number"},
+        {"key": "net_quantity", "label": "Sof miqdor", "kind": "number"},
+        {"key": "unit_price", "label": "Birlik narxi", "kind": "money"},
+        {"key": "discount", "label": "Chegirma", "kind": "money"},
+        {"key": "total", "label": "Jami", "kind": "money"},
+    ]
+
+    def _fmt_q(val):
+        if val is None:
+            return "0"
+        d = Decimal(str(val))
+        return f"{d:.2f}" if d % 1 != 0 else f"{int(d)}"
+
+    def row(item):
+        sale = item.sale
+        prod = item.product
+        net_q = getattr(item, "annotated_net_qty", max(Decimal("0"), item.quantity - (item.returned_quantity or Decimal("0"))))
+        disc = getattr(item, "annotated_discount", Decimal("0"))
+        net_tot = getattr(item, "annotated_net_total", Decimal("0"))
+
+        return {
+            "sale_id": sale.id,
+            "date": timezone.localtime(sale.created_at).strftime("%d.%m.%Y %H:%M"),
+            "store": sale.store.name if sale.store else "-",
+            "product": prod.name if prod else "-",
+            "sku": prod.sku if (prod and prod.sku) else "-",
+            "barcode": prod.barcode if (prod and prod.barcode) else "-",
+            "category": prod.category.name if (prod and prod.category) else "-",
+            "brand": prod.brand.name if (prod and prod.brand) else "-",
+            "unit": prod.unit_measurement.measurement if (prod and prod.unit_measurement) else "-",
+            "seller": (sale.seller.full_name or "-") if sale.seller else "-",
+            "customer": (sale.customer.full_name or "-") if sale.customer else "-",
+            "quantity": _fmt_q(item.quantity),
+            "returned_quantity": _fmt_q(item.returned_quantity),
+            "net_quantity": _fmt_q(net_q),
+            "unit_price": _money(item.unit_price),
+            "discount": _money(disc),
+            "total": _money(net_tot),
+        }
+
+    summary = [
+        {"label": "Davr", "value": _period_label(params, d_from, d_to), "kind": "text"},
+        {"label": "Qatorlar soni", "value": agg["n"], "kind": "int"},
+        {"label": "Jami sotilgan", "value": _fmt_q(agg["total_qty"]), "kind": "number"},
+        {"label": "Jami qaytarilgan", "value": _fmt_q(agg["total_ret_qty"]), "kind": "number"},
+        {"label": "Sof sotilgan", "value": _fmt_q(agg["total_net_qty"]), "kind": "number"},
+        {"label": "Chegirmagacha savdo", "value": _money(agg["gross_sales"]), "kind": "money"},
+        {"label": "Jami chegirma", "value": _money(agg["total_discount"]), "kind": "money"},
+        {"label": "Sof tushum", "value": _money(agg["net_revenue"]), "kind": "money"},
+    ]
+
+    return columns, items_qs, row, summary
 
 
 def _build_sales_by_product(params, store_id):
@@ -2058,10 +2263,12 @@ REPORTS = {
         "label": "Sotuvlar hisoboti",
         "builder": _build_sales,
         "search": True,
+        "export_cap": LARGE_EXPORT_CAP,
         "filters": lambda: [
             _f_daterange(), _f_store(),
             _f_select("payment_type", "To'lov turi", list(PAYMENT_TYPE_LABELS.items()), "Barchasi"),
             _f_select("status", "Holat", list(SALE_STATUS_LABELS.items()), "Barchasi"),
+            _f_seller(),
         ],
     },
     "sales_by_product": {
