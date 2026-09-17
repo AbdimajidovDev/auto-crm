@@ -961,7 +961,7 @@ def _build_abc_analysis(params, store_id):
 
 def _build_inventory_results(params, store_id):
     """
-    Inventarizatsiya natijalari va kamomad/ortiqcha tahlili (Phase 1.4).
+    Inventarizatsiya natijalari va kamomad/ortiqcha tahlili (Billz darajasiga kengaytirilgan).
     """
     d_from, d_to = _parse_dates(params)
     start, end = _dt_bounds(d_from, d_to)
@@ -973,6 +973,7 @@ def _build_inventory_results(params, store_id):
     brand_id = int(params["brand_id"]) if (params.get("brand_id") or "").isdigit() else None
     sku = params.get("sku")
     barcode = params.get("barcode")
+    product_status = params.get("product_status")
     status = params.get("status")
     search = params.get("search")
 
@@ -986,6 +987,7 @@ def _build_inventory_results(params, store_id):
         barcode=barcode,
         category_id=category_id,
         brand_id=brand_id,
+        product_status=product_status,
         status=status,
         search=search,
     )
@@ -995,19 +997,25 @@ def _build_inventory_results(params, store_id):
     sort_dir = (params.get("sort_dir") or "desc").strip().lower()
     reverse = sort_dir != "asc"
 
-    if sort_by == "difference":
+    if sort_by in ("difference", "difference_qty"):
         null_val = float("-inf") if reverse else float("inf")
         raw_rows.sort(key=lambda x: (x["difference_qty"] if x["difference_qty"] is not None else null_val), reverse=reverse)
     elif sort_by == "shortage_qty":
         raw_rows.sort(key=lambda x: x["shortage_qty"], reverse=reverse)
     elif sort_by == "excess_qty":
         raw_rows.sort(key=lambda x: x["excess_qty"], reverse=reverse)
-    elif sort_by == "shortage_value":
-        raw_rows.sort(key=lambda x: x["shortage_value"], reverse=reverse)
-    elif sort_by == "excess_value":
-        raw_rows.sort(key=lambda x: x["excess_value"], reverse=reverse)
-    elif sort_by == "name":
+    elif sort_by in ("shortage_value", "shortage_purchase_value"):
+        raw_rows.sort(key=lambda x: x["shortage_purchase_value"], reverse=reverse)
+    elif sort_by == "shortage_sale_value":
+        raw_rows.sort(key=lambda x: x["shortage_sale_value"], reverse=reverse)
+    elif sort_by in ("excess_value", "excess_purchase_value"):
+        raw_rows.sort(key=lambda x: x["excess_purchase_value"], reverse=reverse)
+    elif sort_by == "excess_sale_value":
+        raw_rows.sort(key=lambda x: x["excess_sale_value"], reverse=reverse)
+    elif sort_by in ("name", "product_name"):
         raw_rows.sort(key=lambda x: (x.get("product_name") or "").lower(), reverse=reverse)
+    elif sort_by == "sku":
+        raw_rows.sort(key=lambda x: (x.get("sku") or "").lower(), reverse=reverse)
     elif sort_by == "status":
         raw_rows.sort(key=lambda x: x["status"], reverse=reverse)
     elif sort_by == "expected_qty":
@@ -1015,6 +1023,10 @@ def _build_inventory_results(params, store_id):
     elif sort_by == "counted_qty":
         null_val = float("-inf") if reverse else float("inf")
         raw_rows.sort(key=lambda x: (x["counted_qty"] if x["counted_qty"] is not None else null_val), reverse=reverse)
+    elif sort_by == "period_sold_qty":
+        raw_rows.sort(key=lambda x: x["period_sold_qty"], reverse=reverse)
+    elif sort_by == "final_balance":
+        raw_rows.sort(key=lambda x: x["final_balance"], reverse=reverse)
     else:  # session_id
         raw_rows.sort(key=lambda x: (x["session_id"], (x.get("product_name") or "").lower()), reverse=reverse)
 
@@ -1027,6 +1039,7 @@ def _build_inventory_results(params, store_id):
 
     columns = [
         {"key": "session_id", "label": "Sessiya ID", "kind": "int"},
+        {"key": "session_name", "label": "Inventarizatsiya", "kind": "text"},
         {"key": "store_name", "label": "Do'kon", "kind": "text"},
         {"key": "session_date", "label": "Sana", "kind": "text"},
         {"key": "product_name", "label": "Tovar nomi", "kind": "text"},
@@ -1035,14 +1048,25 @@ def _build_inventory_results(params, store_id):
         {"key": "unit", "label": "O'lchov", "kind": "text"},
         {"key": "category_name", "label": "Kategoriya", "kind": "text"},
         {"key": "brand_name", "label": "Brend", "kind": "text"},
+        {"key": "product_status", "label": "Tovar holati", "kind": "badge"},
         {"key": "expected_qty", "label": "Kutilgan qoldiq", "kind": "number"},
         {"key": "counted_qty", "label": "Sanalgan miqdor", "kind": "number"},
         {"key": "difference_qty", "label": "Tafovut miqdori", "kind": "number"},
         {"key": "shortage_qty", "label": "Kamomad miqdori", "kind": "number"},
         {"key": "excess_qty", "label": "Ortiqcha miqdori", "kind": "number"},
-        {"key": "unit_cost", "label": "Birlik tannarxi", "kind": "money"},
-        {"key": "shortage_value", "label": "Kamomad summasi", "kind": "money"},
-        {"key": "excess_value", "label": "Ortiqcha summasi", "kind": "money"},
+        {"key": "period_sold_qty", "label": "Sessiya davridagi sotuv", "kind": "number"},
+        {"key": "period_reserved_qty", "label": "Band qilingan (rezerv)", "kind": "number"},
+        {"key": "period_write_off_qty", "label": "Hisobdan chiqarilgan", "kind": "number"},
+        {"key": "period_transfer_out_qty", "label": "Chiqish transferi", "kind": "number"},
+        {"key": "period_transfer_in_qty", "label": "Kirish transferi", "kind": "number"},
+        {"key": "auto_excess_qty", "label": "Avto kirim (ortiqcha)", "kind": "number"},
+        {"key": "auto_shortage_qty", "label": "Avto chiqim (kamomad)", "kind": "number"},
+        {"key": "unit_purchase_cost", "label": "Birlik tannarxi", "kind": "money"},
+        {"key": "unit_sale_price", "label": "Birlik sotuv narxi", "kind": "money"},
+        {"key": "shortage_purchase_value", "label": "Kamomad — tannarx", "kind": "money"},
+        {"key": "shortage_sale_value", "label": "Kamomad — sotuv narxi", "kind": "money"},
+        {"key": "excess_purchase_value", "label": "Ortiqcha — tannarx", "kind": "money"},
+        {"key": "excess_sale_value", "label": "Ortiqcha — sotuv narxi", "kind": "money"},
         {"key": "final_balance", "label": "Yakuniy hisobiy qoldiq", "kind": "number"},
         {"key": "status", "label": "Holati", "kind": "badge"},
     ]
@@ -1050,6 +1074,7 @@ def _build_inventory_results(params, store_id):
     formatted_rows = [
         {
             "session_id": r["session_id"],
+            "session_name": r.get("session_name") or f"Inventarizatsiya #{r['session_id']}",
             "store_id": r.get("store_id"),
             "store_name": r.get("store_name") or "-",
             "session_date": r.get("session_date") or "-",
@@ -1060,14 +1085,29 @@ def _build_inventory_results(params, store_id):
             "unit": r.get("unit") or "-",
             "category_name": r.get("category_name") or "-",
             "brand_name": r.get("brand_name") or "-",
+            "product_status": r.get("product_status") or "Faol",
+            "raw_product_status": r.get("raw_product_status"),
             "expected_qty": r["expected_qty"],
             "counted_qty": r["counted_qty"] if r["counted_qty"] is not None else "—",
             "difference_qty": r["difference_qty"] if r["difference_qty"] is not None else "—",
             "shortage_qty": r["shortage_qty"],
             "excess_qty": r["excess_qty"],
+            "period_sold_qty": r.get("period_sold_qty", 0.0),
+            "period_reserved_qty": r.get("period_reserved_qty", 0.0),
+            "period_write_off_qty": r.get("period_write_off_qty", 0.0),
+            "period_transfer_out_qty": r.get("period_transfer_out_qty", 0.0),
+            "period_transfer_in_qty": r.get("period_transfer_in_qty", 0.0),
+            "auto_excess_qty": r.get("auto_excess_qty", 0.0),
+            "auto_shortage_qty": r.get("auto_shortage_qty", 0.0),
+            "unit_purchase_cost": _money(r["unit_purchase_cost"]),
             "unit_cost": _money(r["unit_cost"]),
+            "unit_sale_price": _money(r["unit_sale_price"]),
+            "shortage_purchase_value": _money(r["shortage_purchase_value"]),
             "shortage_value": _money(r["shortage_value"]),
+            "shortage_sale_value": _money(r["shortage_sale_value"]),
+            "excess_purchase_value": _money(r["excess_purchase_value"]),
             "excess_value": _money(r["excess_value"]),
+            "excess_sale_value": _money(r["excess_sale_value"]),
             "final_balance": r["final_balance"],
             "status": STATUS_DISPLAY.get(r["status"], r["status"]),
             "raw_status": r["status"],
@@ -1077,13 +1117,21 @@ def _build_inventory_results(params, store_id):
 
     summary = [
         {"label": "Davr", "value": period_label, "kind": "text"},
+        {"label": "Jami sessiyalar", "value": f"{totals.get('total_sessions', 0)} ta", "kind": "text"},
+        {"label": "Jami tovar qatorlari", "value": f"{totals.get('total_rows', 0)} ta", "kind": "text"},
         {"label": "Jami kutilgan qoldiq", "value": totals["total_expected_qty"], "kind": "number"},
         {"label": "Jami sanalgan qoldiq", "value": totals["total_counted_qty"], "kind": "number"},
         {"label": "Jami kamomad miqdori", "value": totals["total_shortage_qty"], "kind": "number"},
-        {"label": "Jami kamomad summasi", "value": _money(totals["total_shortage_value"]), "kind": "money"},
         {"label": "Jami ortiqcha miqdori", "value": totals["total_excess_qty"], "kind": "number"},
-        {"label": "Jami ortiqcha summasi", "value": _money(totals["total_excess_value"]), "kind": "money"},
-        {"label": "Sof tafovut qiymati (Ortiqcha - Kamomad)", "value": _money(totals["net_difference_value"]), "kind": "money"},
+        {"label": "Davrdagi jami sotuv", "value": totals.get("total_period_sold_qty", 0.0), "kind": "number"},
+        {"label": "Davrdagi hisobdan chiqarish", "value": totals.get("total_period_write_off_qty", 0.0), "kind": "number"},
+        {"label": "Chiqish transferi", "value": totals.get("total_period_transfer_out_qty", 0.0), "kind": "number"},
+        {"label": "Kirish transferi", "value": totals.get("total_period_transfer_in_qty", 0.0), "kind": "number"},
+        {"label": "Kamomad summasi (tannarx)", "value": _money(totals["total_shortage_purchase_value"]), "kind": "money"},
+        {"label": "Kamomad summasi (sotuv)", "value": _money(totals["total_shortage_sale_value"]), "kind": "money"},
+        {"label": "Ortiqcha summasi (tannarx)", "value": _money(totals["total_excess_purchase_value"]), "kind": "money"},
+        {"label": "Ortiqcha summasi (sotuv)", "value": _money(totals["total_excess_sale_value"]), "kind": "money"},
+        {"label": "Sof tafovut qiymati (tannarx bo'yicha)", "value": _money(totals["net_difference_value"]), "kind": "money"},
         {"label": "Mos kelgan tovarlar", "value": f"{totals['matched_count']} ta", "kind": "text"},
         {"label": "Kamomadli tovarlar", "value": f"{totals['shortage_count']} ta", "kind": "text"},
         {"label": "Ortiqchali tovarlar", "value": f"{totals['excess_count']} ta", "kind": "text"},
@@ -2295,7 +2343,17 @@ REPORTS = {
             _f_store(),
             _f_category(),
             _f_brand(),
+            _f_text("session_id", "Sessiya ID"),
+            _f_text("sku", "SKU"),
+            _f_text("barcode", "Shtrix-kod"),
+            _f_select("product_status", "Tovar holati", [
+                ("all", "Barchasi"),
+                ("a", "Faol"),
+                ("i", "Nofaol"),
+                ("d", "Qoralama"),
+            ], "Barchasi"),
             _f_select("status", "Holati", [
+                ("all", "Barchasi"),
                 ("matched", "Mos kelgan"),
                 ("shortage", "Kamomad"),
                 ("excess", "Ortiqcha"),
@@ -2306,11 +2364,16 @@ REPORTS = {
                 ("difference", "Tafovut miqdori bo'yicha"),
                 ("shortage_qty", "Kamomad miqdori bo'yicha"),
                 ("excess_qty", "Ortiqcha miqdori bo'yicha"),
-                ("shortage_value", "Kamomad summasi bo'yicha"),
-                ("excess_value", "Ortiqcha summasi bo'yicha"),
+                ("shortage_value", "Kamomad summasi (tannarx) bo'yicha"),
+                ("shortage_sale_value", "Kamomad summasi (sotuv) bo'yicha"),
+                ("excess_value", "Ortiqcha summasi (tannarx) bo'yicha"),
+                ("excess_sale_value", "Ortiqcha summasi (sotuv) bo'yicha"),
+                ("period_sold_qty", "Sessiya davridagi sotuv bo'yicha"),
+                ("final_balance", "Yakuniy hisobiy qoldiq bo'yicha"),
                 ("expected_qty", "Kutilgan qoldiq bo'yicha"),
                 ("counted_qty", "Sanalgan miqdor bo'yicha"),
                 ("name", "Tovar nomi bo'yicha"),
+                ("sku", "SKU bo'yicha"),
                 ("status", "Holat bo'yicha"),
             ]),
         ],

@@ -2794,8 +2794,8 @@ class InventoryResultsReportTest(TestCase):
 
     def test_25_query_count_o_1_no_n_plus_one(self):
         """25. Query count: Mahsulotlar soni ortganda ham SQL so'rovlar soni O(1) qolishi."""
-        # 5 mahsulotli holatda SQL so'rovlar sonini o'lchaymiz
-        with self.assertNumQueries(6):
+        # 5 mahsulotli holatda SQL so'rovlar sonini o'lchaymiz (StockAllocation bilan kengaytirilgan O(1) so'rovlar)
+        with self.assertNumQueries(9):
             ReportingFoundationService.get_inventory_results_metrics(
                 session_id=self.session1.id,
             )
@@ -2818,8 +2818,8 @@ class InventoryResultsReportTest(TestCase):
         ]
         InventoryCount.objects.bulk_create(extra_counts)
 
-        # Endi 20 ta mahsulot bo'lsa ham so'rovlar soni aynan 6 ta qolishi shart!
-        with self.assertNumQueries(6):
+        # Endi 20 ta mahsulot bo'lsa ham so'rovlar soni aynan 9 ta (O(1)) qolishi shart!
+        with self.assertNumQueries(9):
             ReportingFoundationService.get_inventory_results_metrics(
                 session_id=self.session1.id,
             )
@@ -3057,14 +3057,17 @@ class InventoryResultsReportTest(TestCase):
         tbl = ws.tables[tbl_name]
         self.assertIn("InventoryResults", tbl.name)
 
-        # 2. 19 ta ustun mavjudligi
-        self.assertEqual(len(tbl.tableColumns), 19)
+        # 2. 31 ta ustun mavjudligi (Billz darajasiga kengaytirilgan)
+        self.assertEqual(len(tbl.tableColumns), 31)
         col_names = [c.name for c in tbl.tableColumns]
         expected_cols = [
-            "Sessiya ID", "Do'kon", "Sana", "Tovar nomi", "SKU", "Shtrix-kod",
-            "O'lchov", "Kategoriya", "Brend", "Kutilgan qoldiq", "Sanalgan miqdor",
-            "Tafovut miqdori", "Kamomad miqdori", "Ortiqcha miqdori", "Birlik tannarxi",
-            "Kamomad summasi", "Ortiqcha summasi", "Yakuniy hisobiy qoldiq", "Holati",
+            "Sessiya ID", "Inventarizatsiya", "Do'kon", "Sana", "Tovar nomi", "SKU", "Shtrix-kod",
+            "O'lchov", "Kategoriya", "Brend", "Tovar holati",
+            "Kutilgan qoldiq", "Sanalgan miqdor", "Tafovut miqdori", "Kamomad miqdori", "Ortiqcha miqdori",
+            "Sessiya davridagi sotuv", "Band qilingan (rezerv)", "Hisobdan chiqarilgan",
+            "Chiqish transferi", "Kirish transferi", "Avto kirim (ortiqcha)", "Avto chiqim (kamomad)",
+            "Birlik tannarxi", "Birlik sotuv narxi", "Kamomad — tannarx", "Kamomad — sotuv narxi",
+            "Ortiqcha — tannarx", "Ortiqcha — sotuv narxi", "Yakuniy hisobiy qoldiq", "Holati",
         ]
         self.assertEqual(col_names, expected_cols)
 
@@ -3078,8 +3081,8 @@ class InventoryResultsReportTest(TestCase):
         # 5. Filtrlangan dataset (faqat shortage bo'lgan tovar, ya'ni FLT-002)
         # Qatorlar soni aynan 1 ta bo'lishi kerak
         rows_data = [row for row in ws.iter_rows(min_row=5, values_only=True) if row[0] is not None]
-        # Faqat 1 ta tovar qatori (FLT-002)
-        item_rows = [r for r in rows_data if r[4] == "FLT-002"]
+        # Faqat 1 ta tovar qatori (FLT-002, Col 5 = SKU)
+        item_rows = [r for r in rows_data if r[5] == "FLT-002"]
         self.assertEqual(len(item_rows), 1)
 
     def test_39_store_isolation_export_excel_csv_pdf(self):

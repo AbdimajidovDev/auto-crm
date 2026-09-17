@@ -43,6 +43,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from apps.contract.models import (
     StockEntry,
@@ -55,6 +56,8 @@ from apps.inventory.models import (
     InventoryMovement,
     InventorySession,
     InventorySnapshot,
+    StockAllocation,
+    StockLot,
 )
 from apps.products.models import Product, ProductBatch
 from apps.sales.models import Payment, Sale, SaleItem, SaleReturn, SaleReturnItem
@@ -1220,37 +1223,54 @@ class ReportingFoundationService:
         barcode: str | None = None,
         category_id: int | None = None,
         brand_id: int | None = None,
+        product_status: str | None = None,
         status: str | None = None,
         search: str | None = None,
     ) -> tuple[list[dict], dict]:
         """
-        Inventarizatsiya natijalari va kamomad/ortiqcha tahlili (Phase 1.4).
+        Inventarizatsiya natijalari va kamomad/ortiqcha tahlili (Billz darajasiga kengaytirilgan).
 
         Source-of-truth tamoyillari:
           - Expected Qty FAQAT `InventorySnapshot.expected_quantity` dan olinadi (ProductBatch dan emas).
-          - Counted Qty FAQAT `InventoryCount.counted_quantity` dan olinadi.
+          - Counted Qty FAQAT `InventoryCount.counted_quantity` dan olinadi (faqat is_check=True).
           - `is_check=False` tovarlar kamomad/nol deb hisoblanmaydi; ularning statusi 'unchecked',
             difference_qty=None, shortage_qty=0, excess_qty=0 bo'ladi.
           - Faqat 'completed' sessiyalar hisobotga kiritiladi.
-          - Final balance: `finalize()` biznes logikasi bilan 100% bir xil:
+          - StockAllocation yangi o'zgarmas inventar harakatlari daftari (authoritative ledger).
+            Davr ichidagi SALE, WRITE_OFF, TRANSFER_OUT, TRANSFER_IN movementlari StockAllocation'dan olinadi.
+            Agar eski sessiyalarda StockAllocation mavjud bo'lmasa, InventoryMovement'dan fallback qilinadi.
+            Double-counting qat'iyan taqiqlangan.
+          - Final balance: `finalize()` biznes logikasi bilan 100% mos:
             counted - sold_out - transfer_out + transfer_in + entry + returned (faqat created_at > counted_at).
-          - Unit cost:
-            Kamomad uchun: `WriteOffItem.purchase_price` snapshot (mavjud bo'lsa).
-            Ortiqcha / fallback uchun: `ProductBatch.purchase_price` (tarixiy excess narx modeli yo'q).
+          - Narxlar:
+            Kamomad tannarxi: StockAllocation(inventory_shortage).unit_cost -> WriteOffItem.purchase_price -> ProductBatch.purchase_price.
+            Ortiqcha tannarxi: StockAllocation(inventory_excess).unit_cost -> ProductBatch.purchase_price.
+            Sotuv narxi: WriteOffItem.selling_price -> ProductBatch.selling_price.
         """
         empty_totals = {
+            "total_sessions": 0,
+            "total_rows": 0,
             "total_expected_qty": 0.0,
             "total_counted_qty": 0.0,
             "total_shortage_qty": 0.0,
             "total_excess_qty": 0.0,
+            "total_period_sold_qty": 0.0,
+            "total_period_write_off_qty": 0.0,
+            "total_period_transfer_out_qty": 0.0,
+            "total_period_transfer_in_qty": 0.0,
+            "total_auto_excess_qty": 0.0,
+            "total_auto_shortage_qty": 0.0,
+            "total_shortage_purchase_value": 0.0,
             "total_shortage_value": 0.0,
+            "total_shortage_sale_value": 0.0,
+            "total_excess_purchase_value": 0.0,
             "total_excess_value": 0.0,
+            "total_excess_sale_value": 0.0,
             "net_difference_value": 0.0,
             "matched_count": 0,
             "shortage_count": 0,
             "excess_count": 0,
             "unchecked_count": 0,
-            "total_rows": 0,
         }
 
         session_filter = Q(status=InventorySession.Status.COMPLETED)
@@ -1282,6 +1302,8 @@ class ReportingFoundationService:
             snapshot_filter &= Q(product__category_id=category_id)
         if brand_id:
             snapshot_filter &= Q(product__brand_id=brand_id)
+        if product_status and product_status.strip() and product_status.strip().lower() != "all":
+            snapshot_filter &= Q(product__status=product_status.strip().lower())
         if search and search.strip():
             s = search.strip()
             snapshot_filter &= (
@@ -1314,68 +1336,258 @@ class ReportingFoundationService:
         counts = InventoryCount.objects.filter(
             session_id__in=target_session_ids,
             product_id__in=target_product_ids,
-        ).values("session_id", "product_id", "counted_quantity", "is_check", "counted_at")
+        ).values("session_id", "product_id", "counted_quantity", "is_check", "counted_at", "status")
 
         count_map = {
             (c["session_id"], c["product_id"]): c
             for c in counts
         }
 
-        # 2. InventoryMovement (faqat is_check=True va created_at > counted_at)
+        # 2. Sessiyaning finalize StockAllocation'larini olish (avto kamomad / avto ortiqcha)
+        direct_session_allocs = StockAllocation.objects.filter(
+            inventory_session_id__in=target_session_ids,
+            lot__product_id__in=target_product_ids,
+            movement_type__in=[
+                StockAllocation.MovementType.INVENTORY_SHORTAGE,
+                StockAllocation.MovementType.INVENTORY_EXCESS,
+            ],
+        ).values("inventory_session_id", "lot__product_id", "movement_type", "quantity", "unit_cost", "created_at")
+
+        auto_shortage_map: dict[tuple[int, int], dict[str, Decimal]] = {}
+        auto_excess_map: dict[tuple[int, int], dict[str, Decimal]] = {}
+        session_finalize_dt: dict[int, datetime] = {}
+
+        for a in direct_session_allocs:
+            s_id = a["inventory_session_id"]
+            p_id = a["lot__product_id"]
+            m_type = a["movement_type"]
+            qty = a["quantity"] or Decimal("0")
+            u_cost = a["unit_cost"] or Decimal("0.00")
+            c_at = a["created_at"]
+
+            if s_id not in session_finalize_dt or c_at > session_finalize_dt[s_id]:
+                session_finalize_dt[s_id] = c_at
+
+            key = (s_id, p_id)
+            if m_type == StockAllocation.MovementType.INVENTORY_SHORTAGE:
+                entry = auto_shortage_map.setdefault(key, {"qty": Decimal("0"), "unit_cost": u_cost})
+                entry["qty"] += qty
+                if u_cost > Decimal("0.00"):
+                    entry["unit_cost"] = u_cost
+            elif m_type == StockAllocation.MovementType.INVENTORY_EXCESS:
+                entry = auto_excess_map.setdefault(key, {"qty": Decimal("0"), "unit_cost": u_cost})
+                entry["qty"] += qty
+                if u_cost > Decimal("0.00"):
+                    entry["unit_cost"] = u_cost
+
+        # 3. Sessiyalar vaqt oralig'i (started_at -> finalize / end)
+        sessions_info: dict[int, dict] = {}
+        for s in snapshots:
+            s_obj = s.session
+            if s_obj.id not in sessions_info:
+                max_c_at = None
+                for c in counts:
+                    if c["session_id"] == s_obj.id and c.get("counted_at"):
+                        if max_c_at is None or c["counted_at"] > max_c_at:
+                            max_c_at = c["counted_at"]
+
+                end_candidates = [t for t in [session_finalize_dt.get(s_obj.id), s_obj.updated_at, max_c_at] if t is not None]
+                sess_end = max(end_candidates) if end_candidates else (s_obj.started_at or timezone.now())
+                if s_obj.started_at and sess_end < s_obj.started_at:
+                    sess_end = s_obj.started_at
+
+                sessions_info[s_obj.id] = {
+                    "store_id": s_obj.store_id,
+                    "start": s_obj.started_at,
+                    "end": sess_end,
+                }
+
+        valid_starts = [info["start"] for info in sessions_info.values() if info["start"]]
+        valid_ends = [info["end"] for info in sessions_info.values() if info["end"]]
+        min_start = min(valid_starts) if valid_starts else None
+        max_end = max(valid_ends) if valid_ends else None
+        if min_start and max_end and max_end < min_start:
+            max_end = min_start
+
+        # 4. Davriy StockAllocation (sessiya oralig'idagi haqiqiy operatsion movementlar)
+        alloc_buckets: dict[tuple[int, int], dict[str, Decimal]] = {}
+        alloc_post_count: dict[tuple[int, int], dict[str, Decimal]] = {}
+
+        if min_start and max_end:
+            period_allocs = StockAllocation.objects.filter(
+                lot__store_id__in=target_store_ids,
+                lot__product_id__in=target_product_ids,
+                movement_type__in=[
+                    StockAllocation.MovementType.SALE,
+                    StockAllocation.MovementType.WRITE_OFF,
+                    StockAllocation.MovementType.TRANSFER_OUT,
+                    StockAllocation.MovementType.TRANSFER_IN,
+                    StockAllocation.MovementType.SALE_RETURN,
+                ],
+                inventory_session__isnull=True,
+                created_at__gte=min_start,
+                created_at__lte=max_end,
+            ).values("lot__store_id", "lot__product_id", "movement_type", "direction", "quantity", "unit_cost", "created_at")
+
+            for a in period_allocs:
+                st_id = a["lot__store_id"]
+                p_id = a["lot__product_id"]
+                m_at = a["created_at"]
+                qty = a["quantity"] or Decimal("0")
+                m_type = a["movement_type"]
+
+                for sess_id, s_info in sessions_info.items():
+                    if s_info["store_id"] != st_id:
+                        continue
+                    if s_info["start"] and s_info["start"] <= m_at <= s_info["end"]:
+                        key = (sess_id, p_id)
+                        b = alloc_buckets.setdefault(key, {
+                            "sale": Decimal("0"),
+                            "write_off": Decimal("0"),
+                            "transfer_out": Decimal("0"),
+                            "transfer_in": Decimal("0"),
+                            "return": Decimal("0"),
+                        })
+                        if m_type == StockAllocation.MovementType.SALE:
+                            b["sale"] += qty
+                        elif m_type == StockAllocation.MovementType.WRITE_OFF:
+                            b["write_off"] += qty
+                        elif m_type == StockAllocation.MovementType.TRANSFER_OUT:
+                            b["transfer_out"] += qty
+                        elif m_type == StockAllocation.MovementType.TRANSFER_IN:
+                            b["transfer_in"] += qty
+                        elif m_type == StockAllocation.MovementType.SALE_RETURN:
+                            b["return"] += qty
+
+                        cnt = count_map.get(key)
+                        if cnt and cnt.get("is_check"):
+                            cnt_at = cnt.get("counted_at")
+                            if cnt_at is not None and m_at > cnt_at:
+                                pc = alloc_post_count.setdefault(key, {
+                                    "sold_out": Decimal("0"),
+                                    "returned": Decimal("0"),
+                                    "transfer_out": Decimal("0"),
+                                    "transfer_in": Decimal("0"),
+                                })
+                                if m_type == StockAllocation.MovementType.SALE:
+                                    pc["sold_out"] += qty
+                                elif m_type == StockAllocation.MovementType.TRANSFER_OUT:
+                                    pc["transfer_out"] += qty
+                                elif m_type == StockAllocation.MovementType.TRANSFER_IN:
+                                    pc["transfer_in"] += qty
+                                elif m_type == StockAllocation.MovementType.SALE_RETURN:
+                                    pc["returned"] += qty
+
+        # 5. InventoryMovement (sessiya va sanoqdan keyingi harakatlar — authoritative fallback)
         movements = InventoryMovement.objects.filter(
             session_id__in=target_session_ids,
             product_id__in=target_product_ids,
         ).values("session_id", "product_id", "type", "quantity", "created_at")
 
-        movement_buckets: dict[tuple[int, int], dict[str, Decimal]] = {}
+        mv_buckets: dict[tuple[int, int], dict[str, Decimal]] = {}
+        mv_post_count: dict[tuple[int, int], dict[str, Decimal]] = {}
+
         for mv in movements:
             key = (mv["session_id"], mv["product_id"])
-            cnt = count_map.get(key)
-            if not cnt or not cnt.get("is_check"):
-                continue
-            counted_at = cnt.get("counted_at")
-            if counted_at is not None and mv["created_at"] <= counted_at:
-                continue
-            bucket = movement_buckets.setdefault(key, {
+            qty = mv["quantity"] or Decimal("0")
+            mtype = mv["type"]
+
+            b = mv_buckets.setdefault(key, {
                 "sold_out": Decimal("0"),
                 "returned": Decimal("0"),
                 "transfer_out": Decimal("0"),
                 "transfer_in": Decimal("0"),
                 "entry": Decimal("0"),
             })
-            mtype = mv["type"]
             if mtype == "s":
-                bucket["sold_out"] += mv["quantity"]
+                b["sold_out"] += qty
             elif mtype == "r":
-                bucket["returned"] += mv["quantity"]
+                b["returned"] += qty
             elif mtype == "to":
-                bucket["transfer_out"] += mv["quantity"]
+                b["transfer_out"] += qty
             elif mtype == "ti":
-                bucket["transfer_in"] += mv["quantity"]
+                b["transfer_in"] += qty
             elif mtype == "e":
-                bucket["entry"] += mv["quantity"]
+                b["entry"] += qty
 
-        # 3. WriteOffItem dan kamomad tannarxini olish (linked to session)
+            cnt = count_map.get(key)
+            if cnt and cnt.get("is_check"):
+                cnt_at = cnt.get("counted_at")
+                if cnt_at is None or mv["created_at"] > cnt_at:
+                    pc = mv_post_count.setdefault(key, {
+                        "sold_out": Decimal("0"),
+                        "returned": Decimal("0"),
+                        "transfer_out": Decimal("0"),
+                        "transfer_in": Decimal("0"),
+                        "entry": Decimal("0"),
+                    })
+                    if mtype == "s":
+                        pc["sold_out"] += qty
+                    elif mtype == "r":
+                        pc["returned"] += qty
+                    elif mtype == "to":
+                        pc["transfer_out"] += qty
+                    elif mtype == "ti":
+                        pc["transfer_in"] += qty
+                    elif mtype == "e":
+                        pc["entry"] += qty
+
+        # 6. Spisaniye WriteOffItem (kamomad narxi va operatsion spisaniye miqdori)
         writeoff_items = WriteOffItem.objects.filter(
             write_off__inventory_session_id__in=target_session_ids,
             write_off__reason=WriteOff.Reason.INVENTORY,
             product_id__in=target_product_ids,
-        ).values("write_off__inventory_session_id", "product_id", "purchase_price")
+        ).values("write_off__inventory_session_id", "product_id", "purchase_price", "selling_price")
 
         writeoff_cost_map = {
             (w["write_off__inventory_session_id"], w["product_id"]): w["purchase_price"]
-            for w in writeoff_items
+            for w in writeoff_items if w.get("purchase_price") is not None
+        }
+        writeoff_sale_price_map = {
+            (w["write_off__inventory_session_id"], w["product_id"]): w["selling_price"]
+            for w in writeoff_items if w.get("selling_price") is not None
         }
 
-        # 4. ProductBatch dan tannarx (excess yoki fallback)
+        # Operatsion (non-inventory) write-off miqdori fallback
+        writeoff_period_map: dict[tuple[int, int], Decimal] = {}
+        if min_start and max_end:
+            writeoff_period_items = WriteOffItem.objects.filter(
+                write_off__store_id__in=target_store_ids,
+                product_id__in=target_product_ids,
+                write_off__created_at__gte=min_start,
+                write_off__created_at__lte=max_end,
+            ).exclude(
+                write_off__reason=WriteOff.Reason.INVENTORY,
+            ).values("write_off__store_id", "product_id", "quantity", "write_off__created_at")
+
+            for w in writeoff_period_items:
+                st_id = w["write_off__store_id"]
+                p_id = w["product_id"]
+                w_at = w["write_off__created_at"]
+                w_qty = w["quantity"] or Decimal("0")
+                for sess_id, s_info in sessions_info.items():
+                    if s_info["store_id"] == st_id and s_info["start"] and s_info["start"] <= w_at <= s_info["end"]:
+                        writeoff_period_map[(sess_id, p_id)] = writeoff_period_map.get((sess_id, p_id), Decimal("0")) + w_qty
+
+        # 7. ProductBatch dan tannarx va sotuv narxi (fallback)
         batch_items = ProductBatch.objects.filter(
             store_id__in=target_store_ids,
             product_id__in=target_product_ids,
-        ).values("store_id", "product_id", "purchase_price")
+        ).values("store_id", "product_id", "purchase_price", "selling_price")
 
         batch_cost_map = {
             (b["store_id"], b["product_id"]): (b["purchase_price"] or Decimal("0.00"))
             for b in batch_items
+        }
+        batch_sale_map = {
+            (b["store_id"], b["product_id"]): (b["selling_price"] or Decimal("0.00"))
+            for b in batch_items
+        }
+
+        PRODUCT_STATUS_DISPLAY = {
+            Product.ProductStatus.ACTIVE: "Faol",
+            Product.ProductStatus.INACTIVE: "Nofaol",
+            Product.ProductStatus.DRAFT: "Qoralama",
         }
 
         rows = []
@@ -1387,66 +1599,150 @@ class ReportingFoundationService:
             is_check = cnt.get("is_check", False) if cnt else False
             expected_qty = s.expected_quantity or Decimal("0")
 
+            # Davrdagi operatsion harakatlar (StockAllocation birlamchi, InventoryMovement / WriteOffItem fallback)
+            alloc_data = alloc_buckets.get(key, {})
+            mv_data = mv_buckets.get(key, {})
+
+            if alloc_data.get("sale", Decimal("0")) > Decimal("0"):
+                period_sold_qty = alloc_data["sale"]
+            else:
+                period_sold_qty = mv_data.get("sold_out", Decimal("0"))
+
+            if alloc_data.get("write_off", Decimal("0")) > Decimal("0"):
+                period_write_off_qty = alloc_data["write_off"]
+            else:
+                period_write_off_qty = writeoff_period_map.get(key, Decimal("0"))
+
+            if alloc_data.get("transfer_out", Decimal("0")) > Decimal("0"):
+                period_transfer_out_qty = alloc_data["transfer_out"]
+            else:
+                period_transfer_out_qty = mv_data.get("transfer_out", Decimal("0"))
+
+            if alloc_data.get("transfer_in", Decimal("0")) > Decimal("0"):
+                period_transfer_in_qty = alloc_data["transfer_in"]
+            else:
+                period_transfer_in_qty = mv_data.get("transfer_in", Decimal("0"))
+
+            period_reserved_qty = Decimal("0")
+
+            # Finalize dagi avtomatik kirim/chiqim yozuvlari
+            sh_alloc = auto_shortage_map.get(key)
+            ex_alloc = auto_excess_map.get(key)
+
             if not is_check:
                 status_code = "unchecked"
                 counted_qty = None
                 difference_qty = None
                 shortage_qty = Decimal("0")
                 excess_qty = Decimal("0")
-                unit_cost = batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
-                shortage_value = Decimal("0.00")
-                excess_value = Decimal("0.00")
+                auto_shortage_qty = Decimal("0")
+                auto_excess_qty = Decimal("0")
+                unit_purchase_cost = batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
+                unit_sale_price = batch_sale_map.get((s.store_id, s.product_id), Decimal("0.00"))
+                shortage_purchase_val = Decimal("0.00")
+                shortage_sale_val = Decimal("0.00")
+                excess_purchase_val = Decimal("0.00")
+                excess_sale_val = Decimal("0.00")
                 final_balance = expected_qty
             else:
                 counted_qty = cnt.get("counted_quantity", Decimal("0")) if cnt else Decimal("0")
                 difference_qty = counted_qty - expected_qty
 
-                # Sanoqdan keyingi harakatlar bo'yicha yakuniy balans
-                mv_data = movement_buckets.get(key, {})
-                sold_out = mv_data.get("sold_out", Decimal("0"))
-                returned = mv_data.get("returned", Decimal("0"))
-                transfer_out = mv_data.get("transfer_out", Decimal("0"))
-                transfer_in = mv_data.get("transfer_in", Decimal("0"))
-                entry = mv_data.get("entry", Decimal("0"))
+                # Sanoqdan keyingi harakatlar bo'yicha yakuniy balans (finalize() bilan 1:1)
+                post_alloc = alloc_post_count.get(key)
+                post_mv = mv_post_count.get(key, {})
+
+                if post_alloc is not None:
+                    sold_pc = post_alloc.get("sold_out", Decimal("0"))
+                    ret_pc = post_alloc.get("returned", Decimal("0"))
+                    to_pc = post_alloc.get("transfer_out", Decimal("0"))
+                    ti_pc = post_alloc.get("transfer_in", Decimal("0"))
+                    entry_pc = post_mv.get("entry", Decimal("0"))
+                else:
+                    sold_pc = post_mv.get("sold_out", Decimal("0"))
+                    ret_pc = post_mv.get("returned", Decimal("0"))
+                    to_pc = post_mv.get("transfer_out", Decimal("0"))
+                    ti_pc = post_mv.get("transfer_in", Decimal("0"))
+                    entry_pc = post_mv.get("entry", Decimal("0"))
 
                 final_balance = (
                     counted_qty
-                    - sold_out
-                    - transfer_out
-                    + transfer_in
-                    + entry
-                    + returned
+                    - sold_pc
+                    - to_pc
+                    + ti_pc
+                    + entry_pc
+                    + ret_pc
                 )
 
                 if counted_qty == expected_qty:
                     status_code = "matched"
                     shortage_qty = Decimal("0")
                     excess_qty = Decimal("0")
-                    unit_cost = batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
-                    shortage_value = Decimal("0.00")
-                    excess_value = Decimal("0.00")
+                    auto_shortage_qty = sh_alloc["qty"] if sh_alloc else Decimal("0")
+                    auto_excess_qty = ex_alloc["qty"] if ex_alloc else Decimal("0")
+                    unit_purchase_cost = batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
+                    unit_sale_price = batch_sale_map.get((s.store_id, s.product_id), Decimal("0.00"))
+                    shortage_purchase_val = Decimal("0.00")
+                    shortage_sale_val = Decimal("0.00")
+                    excess_purchase_val = Decimal("0.00")
+                    excess_sale_val = Decimal("0.00")
                 elif counted_qty < expected_qty:
                     status_code = "shortage"
                     shortage_qty = expected_qty - counted_qty
                     excess_qty = Decimal("0")
-                    unit_cost = writeoff_cost_map.get(key) or batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
-                    shortage_value = (shortage_qty * unit_cost).quantize(Decimal("0.01"))
-                    excess_value = Decimal("0.00")
+                    auto_shortage_qty = sh_alloc["qty"] if sh_alloc else shortage_qty
+                    auto_excess_qty = Decimal("0")
+
+                    u_cost = (
+                        (sh_alloc.get("unit_cost") if sh_alloc and sh_alloc.get("unit_cost") > 0 else None)
+                        or writeoff_cost_map.get(key)
+                        or batch_cost_map.get((s.store_id, s.product_id))
+                        or Decimal("0.00")
+                    )
+                    u_sale = (
+                        writeoff_sale_price_map.get(key)
+                        or batch_sale_map.get((s.store_id, s.product_id))
+                        or Decimal("0.00")
+                    )
+                    unit_purchase_cost = u_cost
+                    unit_sale_price = u_sale
+                    shortage_purchase_val = (shortage_qty * unit_purchase_cost).quantize(Decimal("0.01"))
+                    shortage_sale_val = (shortage_qty * unit_sale_price).quantize(Decimal("0.01"))
+                    excess_purchase_val = Decimal("0.00")
+                    excess_sale_val = Decimal("0.00")
                 else:
                     status_code = "excess"
                     shortage_qty = Decimal("0")
                     excess_qty = counted_qty - expected_qty
-                    unit_cost = batch_cost_map.get((s.store_id, s.product_id), Decimal("0.00"))
-                    shortage_value = Decimal("0.00")
-                    excess_value = (excess_qty * unit_cost).quantize(Decimal("0.01"))
+                    auto_shortage_qty = Decimal("0")
+                    auto_excess_qty = ex_alloc["qty"] if ex_alloc else excess_qty
+
+                    u_cost = (
+                        (ex_alloc.get("unit_cost") if ex_alloc and ex_alloc.get("unit_cost") > 0 else None)
+                        or batch_cost_map.get((s.store_id, s.product_id))
+                        or Decimal("0.00")
+                    )
+                    u_sale = (
+                        batch_sale_map.get((s.store_id, s.product_id))
+                        or Decimal("0.00")
+                    )
+                    unit_purchase_cost = u_cost
+                    unit_sale_price = u_sale
+                    shortage_purchase_val = Decimal("0.00")
+                    shortage_sale_val = Decimal("0.00")
+                    excess_purchase_val = (excess_qty * unit_purchase_cost).quantize(Decimal("0.01"))
+                    excess_sale_val = (excess_qty * unit_sale_price).quantize(Decimal("0.01"))
 
             # Status bo'yicha filtr
             if status and status.strip() and status.strip().lower() != "all":
                 if status_code != status.strip().lower():
                     continue
 
+            product_status_display = PRODUCT_STATUS_DISPLAY.get(prod.status, "Faol")
+
             rows.append({
                 "session_id": sess.id,
+                "session_name": f"Inventarizatsiya #{sess.id}",
                 "store_id": sess.store_id,
                 "store_name": sess.store.name if sess.store else "",
                 "session_date": sess.started_at.strftime("%d.%m.%Y %H:%M") if sess.started_at else "",
@@ -1459,14 +1755,29 @@ class ReportingFoundationService:
                 "category_name": prod.category.name if prod.category else "-",
                 "brand_id": prod.brand_id,
                 "brand_name": prod.brand.name if prod.brand else "-",
+                "product_status": product_status_display,
+                "raw_product_status": prod.status,
                 "expected_qty": float(expected_qty),
                 "counted_qty": float(counted_qty) if counted_qty is not None else None,
                 "difference_qty": float(difference_qty) if difference_qty is not None else None,
                 "shortage_qty": float(shortage_qty),
                 "excess_qty": float(excess_qty),
-                "unit_cost": float(unit_cost),
-                "shortage_value": float(shortage_value),
-                "excess_value": float(excess_value),
+                "period_sold_qty": float(period_sold_qty),
+                "period_reserved_qty": float(period_reserved_qty),
+                "period_write_off_qty": float(period_write_off_qty),
+                "period_transfer_out_qty": float(period_transfer_out_qty),
+                "period_transfer_in_qty": float(period_transfer_in_qty),
+                "auto_excess_qty": float(auto_excess_qty),
+                "auto_shortage_qty": float(auto_shortage_qty),
+                "unit_purchase_cost": float(unit_purchase_cost),
+                "unit_cost": float(unit_purchase_cost),
+                "unit_sale_price": float(unit_sale_price),
+                "shortage_purchase_value": float(shortage_purchase_val),
+                "shortage_value": float(shortage_purchase_val),
+                "shortage_sale_value": float(shortage_sale_val),
+                "excess_purchase_value": float(excess_purchase_val),
+                "excess_value": float(excess_purchase_val),
+                "excess_sale_value": float(excess_sale_val),
                 "final_balance": float(final_balance),
                 "status": status_code,
             })
@@ -1475,8 +1786,17 @@ class ReportingFoundationService:
         total_counted = sum(r["counted_qty"] for r in rows if r["counted_qty"] is not None)
         total_shortage_qty = sum(r["shortage_qty"] for r in rows)
         total_excess_qty = sum(r["excess_qty"] for r in rows)
-        total_shortage_val = sum(Decimal(str(r["shortage_value"])) for r in rows)
-        total_excess_val = sum(Decimal(str(r["excess_value"])) for r in rows)
+        total_period_sold_qty = sum(r["period_sold_qty"] for r in rows)
+        total_period_write_off_qty = sum(r["period_write_off_qty"] for r in rows)
+        total_period_transfer_out_qty = sum(r["period_transfer_out_qty"] for r in rows)
+        total_period_transfer_in_qty = sum(r["period_transfer_in_qty"] for r in rows)
+        total_auto_excess_qty = sum(r["auto_excess_qty"] for r in rows)
+        total_auto_shortage_qty = sum(r["auto_shortage_qty"] for r in rows)
+
+        total_shortage_val = sum(Decimal(str(r["shortage_purchase_value"])) for r in rows)
+        total_shortage_sale_val = sum(Decimal(str(r["shortage_sale_value"])) for r in rows)
+        total_excess_val = sum(Decimal(str(r["excess_purchase_value"])) for r in rows)
+        total_excess_sale_val = sum(Decimal(str(r["excess_sale_value"])) for r in rows)
         net_difference_val = total_excess_val - total_shortage_val
 
         matched_count = sum(1 for r in rows if r["status"] == "matched")
@@ -1485,18 +1805,29 @@ class ReportingFoundationService:
         unchecked_count = sum(1 for r in rows if r["status"] == "unchecked")
 
         totals = {
+            "total_sessions": len({r["session_id"] for r in rows}),
+            "total_rows": len(rows),
             "total_expected_qty": total_expected,
             "total_counted_qty": total_counted,
             "total_shortage_qty": total_shortage_qty,
             "total_excess_qty": total_excess_qty,
+            "total_period_sold_qty": total_period_sold_qty,
+            "total_period_write_off_qty": total_period_write_off_qty,
+            "total_period_transfer_out_qty": total_period_transfer_out_qty,
+            "total_period_transfer_in_qty": total_period_transfer_in_qty,
+            "total_auto_excess_qty": total_auto_excess_qty,
+            "total_auto_shortage_qty": total_auto_shortage_qty,
+            "total_shortage_purchase_value": float(total_shortage_val),
             "total_shortage_value": float(total_shortage_val),
+            "total_shortage_sale_value": float(total_shortage_sale_val),
+            "total_excess_purchase_value": float(total_excess_val),
             "total_excess_value": float(total_excess_val),
+            "total_excess_sale_value": float(total_excess_sale_val),
             "net_difference_value": float(net_difference_val),
             "matched_count": matched_count,
             "shortage_count": shortage_count,
             "excess_count": excess_count,
             "unchecked_count": unchecked_count,
-            "total_rows": len(rows),
         }
 
         return rows, totals
