@@ -37,7 +37,7 @@ from apps.products.services.product_query_service import (
     apply_stock_status,
     apply_token_search,
 )
-from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
+from apps.sales.models import Sale, SaleItem, SaleReturn
 from apps.sales.profit import partial_cost_filter, sum_item_profit
 from apps.store.models import Store
 from apps.users.models.customers import Customer
@@ -1800,62 +1800,6 @@ def _build_suppliers(params, store_id):
     return columns, qs, row, summary
 
 
-def _build_payments(params, store_id):
-    d_from, d_to = _parse_dates(params)
-    start, end = _dt_bounds(d_from, d_to)
-    qs = (
-        Payment.objects
-        .filter(created_at__gte=start, created_at__lt=end)
-        .filter(_store_q(store_id, "sale__store_id"))
-        .select_related("bank_card", "sale")
-    )
-    ptype = params.get("payment_method")
-    if ptype in ("cash", "card"):
-        qs = qs.filter(type=ptype)
-    bank_card = params.get("bank_card_id")
-    if bank_card and str(bank_card).isdigit():
-        qs = qs.filter(bank_card_id=int(bank_card))
-    qs = qs.order_by("-created_at")
-
-    agg = qs.aggregate(
-        n=Count("id"),
-        net=Coalesce(
-            Sum(Case(
-                When(is_refund=True, then=-F("amount")),
-                default=F("amount"), output_field=DecimalField(),
-            )),
-            Value(Decimal("0")), output_field=DecimalField(),
-        ),
-    )
-    columns = [
-        {"key": "date", "label": "Sana", "kind": "text"},
-        {"key": "sale", "label": "Chek №", "kind": "int"},
-        {"key": "method", "label": "Usul", "kind": "text"},
-        {"key": "kind", "label": "Turi", "kind": "text"},
-        {"key": "amount", "label": "Summa", "kind": "money"},
-    ]
-
-    def row(p):
-        if p.is_refund:
-            kind = "Qaytarim"
-        elif p.is_debt_payment:
-            kind = "Qarz to'lovi"
-        else:
-            kind = "Sotuv"
-        return {
-            "date": timezone.localtime(p.created_at).strftime("%d.%m.%Y %H:%M"),
-            "sale": p.sale_id or "-",
-            "method": "Naqd" if p.type == "cash" else (p.bank_card.name if p.bank_card else "Karta"),
-            "kind": kind,
-            "amount": _money(-p.amount if p.is_refund else p.amount),
-        }
-
-    summary = [
-        {"label": "To'lovlar soni", "value": agg["n"], "kind": "int"},
-        {"label": "Sof tushum (NET)", "value": _money(agg["net"]), "kind": "money"},
-    ]
-    return columns, qs, row, summary
-
 
 def _build_expenses(params, store_id):
     d_from, d_to = _parse_dates(params)
@@ -2254,10 +2198,6 @@ def _build_product_history(params, store_id, user):
 # ─────────────────────────────────────────────
 #  REGISTRY
 # ─────────────────────────────────────────────
-def _bank_card_pairs():
-    return [(str(c["id"]), c["name"]) for c in BankCard.objects.filter(is_active=True).values("id", "name")]
-
-
 REPORTS = {
     "sales": {
         "label": "Sotuvlar hisoboti",
@@ -2573,16 +2513,6 @@ REPORTS = {
             _f_select("leftover_state", "Qoldiq holati", [
                 ("in_stock", "Bor (>0)"), ("out", "Tugagan (0)"),
             ], "Barchasi"),
-        ],
-    },
-    "payments": {
-        "label": "To'lovlar hisoboti",
-        "builder": _build_payments,
-        "search": False,
-        "filters": lambda: [
-            _f_daterange(), _f_store(),
-            _f_select("payment_method", "Usul", [("cash", "Naqd"), ("card", "Karta")], "Barchasi"),
-            _f_select("bank_card_id", "Karta turi", _bank_card_pairs(), "Barchasi"),
         ],
     },
     "expenses": {

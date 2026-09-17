@@ -459,14 +459,6 @@ PERMISSION_HIERARCHY = [
                 ],
             },
             {
-                "feature": "payments_report",
-                "label": "To'lovlar hisoboti",
-                "actions": [
-                    {"code": "reports.payments.view", "action": "view", "label": "Ko'rish"},
-                    {"code": "reports.payments.export", "action": "export", "label": "Eksport (Excel/CSV)"},
-                ],
-            },
-            {
                 "feature": "expenses_report",
                 "label": "Chiqimlar hisoboti",
                 "actions": [
@@ -573,8 +565,6 @@ LEGACY_PERMISSION_MAP = {
         "reports.supplier_sales.export",
         "reports.stock_leftovers.view",
         "reports.stock_leftovers.export",
-        "reports.payments.view",
-        "reports.payments.export",
         "reports.expenses.view",
         "reports.expenses.export",
     ],

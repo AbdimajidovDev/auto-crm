@@ -99,7 +99,7 @@ class GranularRBACAndSecurityTests(TestCase):
         """Superuser barcha huquqlarga ega (user_permissions=None, user_has_perm=True)."""
         self.assertIsNone(user_permissions(self.superuser))
         self.assertTrue(user_has_perm(self.superuser, "reports.view"))
-        self.assertTrue(user_has_perm(self.superuser, "reports.payments.view"))
+        self.assertTrue(user_has_perm(self.superuser, "reports.expenses.view"))
         self.assertTrue(user_has_perm(self.superuser, "products.stock.adjust"))
         self.assertTrue(user_has_perm(self.superuser, "anything.arbitrary"))
 
@@ -140,17 +140,17 @@ class GranularRBACAndSecurityTests(TestCase):
         self.assertEqual(resp_ok.status_code, 200)
 
     def test_granular_report_permissions(self):
-        """Foydalanuvchida faqat reports.sales.view bo'lsa, sales ko'rinadi, payments 403 bo'ladi."""
+        """Foydalanuvchida faqat reports.sales.view bo'lsa, sales ko'rinadi, expenses 403 bo'ladi."""
         self.client.force_authenticate(user=self.sales_reporter_user)
 
         # 1. reports.sales.view -> 200 OK
         resp_sales = self.client.get("/api/reports/builder/?report_type=sales")
         self.assertEqual(resp_sales.status_code, 200)
 
-        # 2. reports.payments.view -> 403 Forbidden
-        resp_payments = self.client.get("/api/reports/builder/?report_type=payments")
-        self.assertEqual(resp_payments.status_code, 403)
-        self.assertIn("reports.payments.view", resp_payments.json().get("permission", ""))
+        # 2. reports.expenses.view -> 403 Forbidden
+        resp_expenses = self.client.get("/api/reports/builder/?report_type=expenses")
+        self.assertEqual(resp_expenses.status_code, 403)
+        self.assertIn("reports.expenses.view", resp_expenses.json().get("permission", ""))
 
     def test_report_view_true_export_false_isolation(self):
         """Ko'rish huquqi bor, lekin export huquqi bo'lmasa -> generate 200, export 403."""
