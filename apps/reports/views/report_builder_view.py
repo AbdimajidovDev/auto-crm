@@ -20,7 +20,13 @@ from apps.reports.permissions import scope_report_params
 from apps.reports.services.report_builder import ReportBuilderService
 from apps.contract.permissions import allowed_store_ids
 from apps.users.permissions import user_has_perm
-from apps.common.excel_export import safe_add_worksheet, sanitize_worksheet_name
+from apps.common.excel_export import (
+    get_report_excel_formats,
+    safe_add_worksheet,
+    sanitize_table_name,
+    sanitize_worksheet_name,
+    write_report_table,
+)
 
 
 def _scoped_meta(request) -> dict:
@@ -247,61 +253,13 @@ class ReportBuilderExportAPIView(APIView):
 
             output = io.BytesIO()
             wb = xlsxwriter.Workbook(output, {"in_memory": True})
-
-            f_text = wb.add_format({"border": 1, "border_color": "#E1E0D9"})
-            f_money = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                                     "num_format": "#,##0.00", "align": "right"})
-            f_qty = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                                   "num_format": "#,##0.00", "align": "right"})
-            f_int = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                                   "num_format": "#,##0", "align": "center"})
-
-            def write_clean_table_sheet(ws, sheet_cols, sheet_rows, tbl_name):
-                head_row = 0
-                first_data_row = 1
-                last_col = len(sheet_cols) - 1
-                for col_idx, c in enumerate(sheet_cols):
-                    width = {"text": 24, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c.get("kind"), 16)
-                    ws.set_column(col_idx, col_idx, width)
-
-                table_last_row = head_row + max(len(sheet_rows), 1)
-                table_cols = [{"header": c["label"]} for c in sheet_cols]
-                ws.add_table(head_row, 0, table_last_row, last_col, {
-                    "name": tbl_name,
-                    "columns": table_cols,
-                    "style": "Table Style Light 1",
-                    "autofilter": True,
-                })
-
-                for i, r in enumerate(sheet_rows):
-                    for col_idx, c in enumerate(sheet_cols):
-                        val = r.get(c["key"], "")
-                        kind = c.get("kind")
-                        if kind == "money":
-                            try:
-                                ws.write_number(first_data_row + i, col_idx, float(val), f_money)
-                            except (TypeError, ValueError):
-                                ws.write(first_data_row + i, col_idx, str(val), f_text)
-                        elif kind == "int":
-                            try:
-                                ws.write_number(first_data_row + i, col_idx, int(val), f_int)
-                            except (TypeError, ValueError):
-                                ws.write(first_data_row + i, col_idx, str(val), f_text)
-                        elif kind == "number":
-                            try:
-                                ws.write_number(first_data_row + i, col_idx, float(val), f_qty)
-                            except (TypeError, ValueError):
-                                ws.write(first_data_row + i, col_idx, "-" if val in (None, "") else str(val), f_text)
-                        else:
-                            ws.write(first_data_row + i, col_idx, "-" if val in (None, "") else str(val), f_text)
-
-                ws.freeze_panes(first_data_row, 0)
+            fmts = get_report_excel_formats(wb)
 
             ws1 = safe_add_worksheet(wb, "Cheklar")
-            write_clean_table_sheet(ws1, cols1, rows1, "CheklarTable")
+            write_report_table(ws1, 0, cols1, rows1, "CheklarTable", fmts)
 
             ws2 = safe_add_worksheet(wb, "Mahsulotlar")
-            write_clean_table_sheet(ws2, cols2, rows2, "MahsulotlarTable")
+            write_report_table(ws2, 0, cols2, rows2, "MahsulotlarTable", fmts)
 
             wb.close()
             output.seek(0)
@@ -315,67 +273,11 @@ class ReportBuilderExportAPIView(APIView):
 
         output = io.BytesIO()
         wb = xlsxwriter.Workbook(output, {"in_memory": True})
-        # Varaq nomi 31 belgidan oshmasligi kerak; sarlavhadagi qavs ichidagi
-        # izoh (masalan holat sanasi) faqat sarlavha satrida qoladi
+        fmts = get_report_excel_formats(wb)
         ws = safe_add_worksheet(wb, label.split(" (")[0] if label else "Hisobot", default="Hisobot")
-        f_title = wb.add_format({"bold": True, "font_size": 13, "font_color": "#FFFFFF",
-                                 "bg_color": "#0D366B", "valign": "vcenter", "indent": 1})
-        f_meta = wb.add_format({"font_size": 9, "italic": True, "font_color": "#52514E"})
-        f_head = wb.add_format({"bold": True, "font_color": "#FFFFFF", "bg_color": "#184F95",
-                                "border": 1, "align": "center", "valign": "vcenter"})
-        f_text = wb.add_format({"border": 1, "border_color": "#E1E0D9"})
-        f_money = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                                 "num_format": "#,##0.00", "align": "right"})
-        f_qty = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                               "num_format": "#,##0.00", "align": "right"})
-        f_int = wb.add_format({"border": 1, "border_color": "#E1E0D9",
-                               "num_format": "#,##0", "align": "center"})
-        f_sum_l = wb.add_format({"bold": True})
-        f_sum_v = wb.add_format({"bold": True, "num_format": "#,##0.00"})
-
-        f_card = wb.add_format({"bold": True, "font_size": 11, "font_color": "#0D366B"})
-
-        last_col = len(columns) - 1
 
         if report_type == "supplier_sales":
-            head_row = 0
-            first_data_row = 1
-            for col, c in enumerate(columns):
-                width = {"text": 26, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c["kind"], 16)
-                ws.set_column(col, col, width)
-
-            table_last_row = head_row + max(len(rows), 1)
-            table_cols = [{"header": c["label"]} for c in columns]
-            clean_name = "SupplierSalesTable"
-            ws.add_table(head_row, 0, table_last_row, last_col, {
-                "name": clean_name,
-                "columns": table_cols,
-                "style": "Table Style Light 1",
-                "autofilter": True,
-            })
-
-            for i, r in enumerate(rows):
-                for col, c in enumerate(columns):
-                    val = r.get(c["key"], "")
-                    if c["kind"] == "money":
-                        try:
-                            ws.write_number(first_data_row + i, col, float(val), f_money)
-                        except (TypeError, ValueError):
-                            ws.write(first_data_row + i, col, str(val), f_text)
-                    elif c["kind"] == "int":
-                        try:
-                            ws.write_number(first_data_row + i, col, int(val), f_int)
-                        except (TypeError, ValueError):
-                            ws.write(first_data_row + i, col, str(val), f_text)
-                    elif c["kind"] == "number":
-                        try:
-                            ws.write_number(first_data_row + i, col, float(val), f_qty)
-                        except (TypeError, ValueError):
-                            ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
-                    else:
-                        ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
-
-            ws.freeze_panes(first_data_row, 0)
+            write_report_table(ws, 0, columns, rows, "SupplierSalesTable", fmts)
             wb.close()
             output.seek(0)
 
@@ -385,81 +287,48 @@ class ReportBuilderExportAPIView(APIView):
             )
             response["Content-Disposition"] = f"attachment; filename={report_type}_{stamp}.xlsx"
             return response
-        ws.set_row(0, 26)
-        ws.merge_range(0, 0, 0, max(last_col, 1), label, f_title)
+
+        last_col = len(columns) - 1
+        ws.set_row(0, 24)
+        ws.merge_range(0, 0, 0, max(last_col, 1), label, fmts["title"])
         gen = datetime.now().strftime("%d.%m.%Y %H:%M")
-        ws.merge_range(1, 0, 1, max(last_col, 1), f"Yaratildi: {gen}  |  Qatorlar: {len(rows)}", f_meta)
+        ws.merge_range(1, 0, 1, max(last_col, 1), f"Yaratildi: {gen}  |  Qatorlar: {len(rows)}", fmts["meta"])
 
         # Kartochka bloki (mahsulot tafsilotlari) — jadval sarlavhasidan tepada.
-        # Jadval qatori shu blokdan keyin boshlanadi, shuning uchun kursor bilan.
         head_row = 3
         if info:
             cursor = 3
-            ws.write(cursor, 0, info.get("title", ""), f_card)
+            ws.write(cursor, 0, info.get("title", ""), fmts["card_title"])
             cursor += 1
             if info.get("subtitle"):
-                ws.write(cursor, 0, info["subtitle"], f_meta)
+                ws.write(cursor, 0, info["subtitle"], fmts["meta"])
                 cursor += 1
             for field in info.get("fields", []):
-                ws.write(cursor, 0, field["label"], f_sum_l)
+                ws.write(cursor, 0, field["label"], fmts["sum_label"])
                 value = field.get("value")
                 if field.get("kind") in ("money", "int"):
                     try:
-                        ws.write_number(cursor, 1, float(value), f_sum_v)
+                        ws.write_number(cursor, 1, float(value), fmts["sum_val"])
                     except (TypeError, ValueError):
-                        ws.write(cursor, 1, str(value))
+                        ws.write(cursor, 1, str(value), fmts["text"])
                 else:
-                    ws.write(cursor, 1, "-" if value in (None, "") else str(value))
+                    ws.write(cursor, 1, "-" if value in (None, "") else str(value), fmts["text"])
                 cursor += 1
             head_row = cursor + 1
 
-        first_data_row = head_row + 1
-        for col, c in enumerate(columns):
-            width = {"text": 28, "money": 16, "int": 12, "number": 14, "badge": 14}.get(c["kind"], 16)
-            ws.set_column(col, col, width)
-
-        table_last_row = head_row + max(len(rows), 1)
-        table_cols = [{"header": c["label"]} for c in columns]
-        clean_name = "".join(ch for ch in report_type.title() if ch.isalnum()) + "Table"
-        ws.add_table(head_row, 0, table_last_row, last_col, {
-            "name": clean_name,
-            "columns": table_cols,
-            "style": "Table Style Light 1",
-            "autofilter": True,
-        })
-
-        for i, r in enumerate(rows):
-            for col, c in enumerate(columns):
-                val = r.get(c["key"], "")
-                if c["kind"] == "money":
-                    try:
-                        ws.write_number(first_data_row + i, col, float(val), f_money)
-                    except (TypeError, ValueError):
-                        ws.write(first_data_row + i, col, str(val), f_text)
-                elif c["kind"] == "int":
-                    try:
-                        ws.write_number(first_data_row + i, col, int(val), f_int)
-                    except (TypeError, ValueError):
-                        ws.write(first_data_row + i, col, str(val), f_text)
-                elif c["kind"] == "number":
-                    try:
-                        ws.write_number(first_data_row + i, col, float(val), f_qty)
-                    except (TypeError, ValueError):
-                        ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
-                else:
-                    ws.write(first_data_row + i, col, "-" if val in (None, "") else str(val), f_text)
+        clean_name = sanitize_table_name("".join(ch for ch in report_type.title() if ch.isalnum()) + "Table")
+        table_last_row = write_report_table(ws, head_row, columns, rows, clean_name, fmts)
 
         # Summary bloki jadval ostida
         srow = table_last_row + 2
         for s in summary:
-            ws.write(srow, 0, s["label"], f_sum_l)
+            ws.write(srow, 0, s["label"], fmts["sum_label"])
             try:
-                ws.write_number(srow, 1, float(s["value"]), f_sum_v)
+                ws.write_number(srow, 1, float(s["value"]), fmts["sum_val"])
             except (TypeError, ValueError):
-                ws.write(srow, 1, str(s["value"]), f_sum_v)
+                ws.write(srow, 1, str(s["value"]), fmts["sum_label"])
             srow += 1
 
-        ws.freeze_panes(first_data_row, 0)
         wb.close()
         output.seek(0)
 

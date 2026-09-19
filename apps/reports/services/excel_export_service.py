@@ -17,7 +17,11 @@ from decimal import Decimal, InvalidOperation
 
 import xlsxwriter
 
-from apps.common.excel_export import safe_add_worksheet, sanitize_worksheet_name
+from apps.common.excel_export import (
+    calculate_optimal_column_widths,
+    safe_add_worksheet,
+    sanitize_worksheet_name,
+)
 
 # ─── Dataviz palitra (oq fonda validatsiyadan o'tgan kategorik slotlar) ───
 SERIES = [
@@ -30,15 +34,18 @@ SERIES = [
     "#4A3AA7",  # 7 binafsha
     "#E34948",  # 8 qizil
 ]
-OTHER_GRAY = "#898781"   # "Boshqalar" bo'lagi — neytral kulrang
-INK        = "#0B0B0B"   # asosiy matn
-SECONDARY  = "#52514E"   # ikkinchi darajali matn
-GRID       = "#E1E0D9"   # chiziqlar
-ZEBRA_BG   = "#F5F7FA"   # juft qatorlar foni
-HEADER_BG  = "#184F95"   # jadval sarlavhasi (ko'k ramp 600)
-TITLE_BG   = "#0D366B"   # sahifa sarlavha bandi (ko'k ramp 700)
-GOOD_TEXT  = "#006300"   # musbat (foyda)
-BAD_RED    = "#D03B3B"   # chiqim/qarz urg'usi
+OTHER_GRAY    = "#898781"   # "Boshqalar" bo'lagi — neytral kulrang
+INK           = "#0F172A"   # asosiy to'q matn
+SECONDARY     = "#64748B"   # ikkinchi darajali matn
+GRID          = "#E2E8F0"   # nozik neytral chiziqlar
+HEADER_BORDER = "#CBD5E1"   # header chegarasi
+HEADER_BG     = "#F8FAFC"   # jadval sarlavhasi — yengil neytral fon
+HEADER_INK    = "#0F172A"   # jadval sarlavhasi matni
+TITLE_BG      = "#FFFFFF"   # sahifa sarlavha bandi
+TITLE_INK     = "#0F172A"   # sahifa sarlavha matni
+TOTAL_BG      = "#F8FAFC"   # JAMI qatori foni
+GOOD_TEXT     = "#006300"   # musbat (foyda)
+BAD_RED       = "#D03B3B"   # chiqim/qarz urg'usi
 
 # KPI kartochkalari: (bg tint, aksent chiziq rangi)
 KPI_TINTS = {
@@ -91,34 +98,29 @@ class _ReportWorkbook:
 
     def _build_formats(self):
         f = self._fmt
-        self.f_title = f(bold=True, font_size=15, font_color="#FFFFFF",
-                         bg_color=TITLE_BG, align="left", valign="vcenter", indent=1)
+        self.f_title = f(bold=True, font_size=14, font_color=TITLE_INK,
+                         align="left", valign="vcenter", indent=1)
         self.f_meta = f(font_size=9, font_color=SECONDARY, italic=True,
                         align="left", valign="vcenter", indent=1)
-        self.f_header = f(bold=True, font_size=10, font_color="#FFFFFF",
+        self.f_header = f(bold=True, font_size=10, font_color=HEADER_INK,
                           bg_color=HEADER_BG, align="center", valign="vcenter",
-                          border=1, border_color=HEADER_BG, text_wrap=True)
-        self.f_section = f(bold=True, font_size=11, font_color=TITLE_BG)
+                          border=1, border_color=HEADER_BORDER, text_wrap=True)
+        self.f_section = f(bold=True, font_size=11, font_color=TITLE_INK)
 
-        # Jadval katakchalari: (oddiy, zebra) juftliklari har tur uchun
-        def cell_pair(**extra):
-            plain = f(border=1, border_color=GRID, **extra)
-            zebra = f(border=1, border_color=GRID, bg_color=ZEBRA_BG, **extra)
-            return plain, zebra
+        # Jadval katakchalari: oddiy oq fon (banded/zebra rows butunlay yo'q)
+        self.c_text  = f(border=1, border_color=GRID, bg_color="#FFFFFF", align="left",  valign="vcenter", indent=1)
+        self.c_money = f(border=1, border_color=GRID, bg_color="#FFFFFF", align="right", valign="vcenter", num_format=MONEY_NUM)
+        self.c_int   = f(border=1, border_color=GRID, bg_color="#FFFFFF", align="center", valign="vcenter", num_format="#,##0")
+        self.c_pct   = f(border=1, border_color=GRID, bg_color="#FFFFFF", align="center", valign="vcenter", num_format=PCT_NUM)
 
-        self.c_text  = cell_pair(align="left",  valign="vcenter", indent=1)
-        self.c_money = cell_pair(align="right", valign="vcenter", num_format=MONEY_NUM)
-        self.c_int   = cell_pair(align="center", valign="vcenter", num_format="#,##0")
-        self.c_pct   = cell_pair(align="center", valign="vcenter", num_format=PCT_NUM)
-
-        self.f_total_label = f(bold=True, bg_color="#E9EEF6", border=1,
-                               border_color=GRID, align="left", indent=1, top=2, top_color=HEADER_BG)
-        self.f_total_money = f(bold=True, bg_color="#E9EEF6", border=1, border_color=GRID,
-                               align="right", num_format=MONEY_NUM, top=2, top_color=HEADER_BG)
-        self.f_total_int = f(bold=True, bg_color="#E9EEF6", border=1, border_color=GRID,
-                             align="center", num_format="#,##0", top=2, top_color=HEADER_BG)
-        self.f_total_blank = f(bg_color="#E9EEF6", border=1, border_color=GRID,
-                               top=2, top_color=HEADER_BG)
+        self.f_total_label = f(bold=True, bg_color=TOTAL_BG, font_color=HEADER_INK, border=1,
+                               border_color=GRID, align="left", indent=1, top=2, top_color=HEADER_BORDER)
+        self.f_total_money = f(bold=True, bg_color=TOTAL_BG, font_color=HEADER_INK, border=1, border_color=GRID,
+                               align="right", num_format=MONEY_NUM, top=2, top_color=HEADER_BORDER)
+        self.f_total_int = f(bold=True, bg_color=TOTAL_BG, font_color=HEADER_INK, border=1, border_color=GRID,
+                             align="center", num_format="#,##0", top=2, top_color=HEADER_BORDER)
+        self.f_total_blank = f(bg_color=TOTAL_BG, border=1, border_color=GRID,
+                               top=2, top_color=HEADER_BORDER)
         self.f_note = f(font_size=9, font_color=SECONDARY, italic=True)
 
     # ─────────────────── umumiy bloklar ───────────────────
@@ -130,7 +132,7 @@ class _ReportWorkbook:
 
     def title_band(self, ws, title: str, last_col: int):
         """0-qator: rangli sarlavha bandi, 1-qator: davr/do'kon/sana meta."""
-        ws.set_row(0, 30)
+        ws.set_row(0, 26)
         ws.merge_range(0, 0, 0, last_col, title, self.f_title)
         meta_bits = []
         if self.meta.get("period"):
@@ -143,7 +145,7 @@ class _ReportWorkbook:
 
     def table(self, ws, start_row: int, columns: list[dict], rows: list[list], totals: bool = True):
         """
-        Rangli jadval: sarlavha + zebra qatorlar + (ixtiyoriy) JAMI qatori.
+        Toza oq fonli jadval: sarlavha + oq qatorlar + (ixtiyoriy) JAMI qatori.
         columns: {header, width, kind: text|money|int|pct, total: sum|count|None}
         Qaytaradi: (header_row, first_data, last_data)
         """
@@ -152,17 +154,20 @@ class _ReportWorkbook:
         header_row = start_row
         first_data = start_row + 1
 
+        # Kontentga mos optimal ustun kengliklari
+        opt_widths = calculate_optimal_column_widths(columns, rows)
+
         for col, spec in enumerate(columns):
-            ws.set_column(col, col, spec.get("width", 14))
+            width = opt_widths.get(col, spec.get("width", 14))
+            ws.set_column(col, col, width)
             ws.write(header_row, col, spec["header"], self.f_header)
-        ws.set_row(header_row, 22)
+        ws.set_row(header_row, 24)
 
         for i, row_vals in enumerate(rows):
             r = first_data + i
-            pair_idx = i % 2  # zebra
             for col, value in enumerate(row_vals):
                 kind = columns[col].get("kind", "text")
-                fmt = kinds[kind][pair_idx]
+                fmt = kinds[kind]
                 if kind == "text":
                     ws.write_string(r, col, "-" if value in (None, "") else str(value), fmt)
                 elif kind == "pct":
@@ -216,7 +221,7 @@ class _ReportWorkbook:
         Mini ma'lumot paneli: (yorliq, qiymat, pul_formatimi) qatorlari.
         Keyingi bo'sh qator raqamini qaytaradi.
         """
-        f_label = self._fmt(bold=True, font_color=SECONDARY, bg_color="#E9EEF6",
+        f_label = self._fmt(bold=True, font_color=SECONDARY, bg_color="#F8FAFC",
                             border=1, border_color=GRID, align="left", indent=1)
         f_money = self._fmt(bold=True, bg_color="#FFFFFF", border=1, border_color=GRID,
                             align="right", num_format=MONEY_NUM)
