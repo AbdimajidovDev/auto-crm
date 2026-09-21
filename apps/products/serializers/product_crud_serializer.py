@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from rest_framework import serializers
 
@@ -606,8 +608,18 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
 
 class StoreStockUpdateItemSerializer(serializers.Serializer):
     store_id = serializers.IntegerField()
-    new_quantity = QuantityField(required=False, allow_null=True)
-    min_stock = QuantityField(required=False, allow_null=True)
+    new_quantity = QuantityField(
+        required=False,
+        allow_null=True,
+        min_value=Decimal("0"),
+        error_messages={"min_value": "Miqdor 0 yoki undan katta bo'lishi kerak"},
+    )
+    min_stock = QuantityField(
+        required=False,
+        allow_null=True,
+        min_value=Decimal("0"),
+        error_messages={"min_value": "MinStock 0 yoki undan katta bo'lishi kerak"},
+    )
 
 
 class ProductUpdateStocksSerializer(serializers.Serializer):

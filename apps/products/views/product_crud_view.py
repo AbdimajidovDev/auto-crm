@@ -518,9 +518,9 @@ class ProductUpdateStocksAPIView(APIView):
 
                 # 1. Quantity o'zgarishi
                 if "new_quantity" in item and item["new_quantity"] is not None:
-                    new_qty = validate_quantity_step(item["new_quantity"], product=product)
+                    new_qty = validate_quantity_step(item["new_quantity"], product=product, allow_zero=True)
                     if new_qty < Decimal("0"):
-                        raise ValidationError(f"Do'kon #{store_id} uchun miqdor manfiy bo'lishi mumkin emas.")
+                        raise ValidationError(f"Do'kon #{store_id} uchun miqdor 0 yoki undan katta bo'lishi kerak.")
 
                     if new_qty > current_qty:
                         diff = new_qty - current_qty
@@ -547,9 +547,9 @@ class ProductUpdateStocksAPIView(APIView):
 
                 # 2. MinStock o'zgarishi
                 if "min_stock" in item and item["min_stock"] is not None:
-                    min_stock_val = validate_quantity_step(item["min_stock"], product=product)
+                    min_stock_val = validate_quantity_step(item["min_stock"], product=product, allow_zero=True)
                     if min_stock_val < Decimal("0"):
-                        raise ValidationError(f"Do'kon #{store_id} uchun MinStock manfiy bo'lishi mumkin emas.")
+                        raise ValidationError(f"Do'kon #{store_id} uchun MinStock 0 yoki undan katta bo'lishi kerak.")
 
                     # Batch min_stock
                     batch = ProductBatch.objects.select_for_update().filter(
@@ -588,6 +588,9 @@ class ProductUpdateStocksAPIView(APIView):
             ProductDetailSerializer(product_detail, context={"request": request, "all_stores": all_stores}).data,
             status=status.HTTP_200_OK,
         )
+
+    def patch(self, request, pk):
+        return self.post(request, pk)
 
 
 

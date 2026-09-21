@@ -89,7 +89,12 @@ def validate_quantity_step(
     qty = as_quantity(quantity)
     name = f"{product_name}: " if product_name else ""
 
-    if qty < 0 or (qty == 0 and not allow_zero):
+    if qty < 0:
+        if allow_zero:
+            raise ValidationError(f"{name}miqdor 0 yoki undan katta bo'lishi kerak")
+        else:
+            raise ValidationError(f"{name}miqdor 0 dan katta bo'lishi kerak")
+    elif qty == 0 and not allow_zero:
         raise ValidationError(f"{name}miqdor 0 dan katta bo'lishi kerak")
 
     if pair_flag:

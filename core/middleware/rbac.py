@@ -99,6 +99,7 @@ EXACT_PATH_PERMISSIONS = [
 # Regex orqali tekshiriladigan yo'llar: (regex, method_or_None, required_permission)
 REGEX_PATH_PERMISSIONS = [
     (re.compile(r"^/api/products/\d+/update-stocks/$"), "POST", "products.stock.adjust"),
+    (re.compile(r"^/api/products/\d+/update-stocks/$"), "PATCH", "products.stock.adjust"),
     (re.compile(r"^/api/products/\d+/history/$"), "GET", "products.history.view"),
     (re.compile(r"^/api/transfer/\d+/approve/$"), "POST", "transfers.approve"),
     (re.compile(r"^/api/transfer/\d+/reject/$"), "POST", "transfers.reject"),

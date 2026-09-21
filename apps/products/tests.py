@@ -205,6 +205,142 @@ class ProductUpdateStocksAPITests(TestCase):
         # Hech qanday adjustment yaratilmagan
         self.assertEqual(StockAdjustment.objects.filter(product=self.prod_dona).count(), 0)
 
+    def test_update_stocks_to_zero_success(self):
+        """new_quantity = 0 va min_stock = 0 qabul qilinishi va to'g'ri write-off qilinishi."""
+        url = f"/api/products/{self.prod_dona.id}/update-stocks/"
+        payload = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": 0, "min_stock": 0},
+            ]
+        }
+
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        self.batch1.refresh_from_db()
+        self.assertEqual(self.batch1.quantity, Decimal("0"))
+        self.assertEqual(self.batch1.min_stock, Decimal("0"))
+
+        # 100 -> 0 write-off adjustment yaratilgan
+        adj = StockAdjustment.objects.get(product=self.prod_dona, store=self.store1)
+        self.assertEqual(adj.type, StockAdjustment.Type.WRITE_OFF)
+        self.assertEqual(adj.quantity, Decimal("100"))
+        self.assertEqual(adj.difference, Decimal("-100"))
+
+    def test_update_stocks_patch_method_success(self):
+        """PATCH metodi orqali update-stocks ishlashi."""
+        url = f"/api/products/{self.prod_dona.id}/update-stocks/"
+        payload = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": 0},
+            ]
+        }
+
+        response = self.client.patch(url, payload, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        self.batch1.refresh_from_db()
+        self.assertEqual(self.batch1.quantity, Decimal("0"))
+
+    def test_negative_quantity_fails_with_clear_error(self):
+        """Manfiy new_quantity rad etilishi va tushunarli xato qaytarishi."""
+        url = f"/api/products/{self.prod_dona.id}/update-stocks/"
+        payload = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": -5},
+            ]
+        }
+
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, 400)
+        # Serializer yoki validator tushunarli xabar bergan
+        resp_str = str(response.data)
+        self.assertTrue(
+            "Miqdor 0 yoki undan katta bo'lishi kerak" in resp_str
+            or "manfiy" in resp_str.lower()
+            or "greater than or equal to 0" in resp_str.lower()
+        )
+
+        # Batch o'zgarmasligi kerak
+        self.batch1.refresh_from_db()
+        self.assertEqual(self.batch1.quantity, Decimal("100"))
+
+    def test_negative_min_stock_fails_with_clear_error(self):
+        """Manfiy min_stock rad etilishi va tushunarli xato qaytarishi."""
+        self.batch1.min_stock = Decimal("10")
+        self.batch1.save(update_fields=["min_stock"])
+
+        url = f"/api/products/{self.prod_dona.id}/update-stocks/"
+        payload = {
+            "stores": [
+                {"store_id": self.store1.id, "min_stock": -2},
+            ]
+        }
+
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, 400)
+        resp_str = str(response.data)
+        self.assertTrue(
+            "MinStock 0 yoki undan katta bo'lishi kerak" in resp_str
+            or "manfiy" in resp_str.lower()
+            or "greater than or equal to 0" in resp_str.lower()
+        )
+
+        self.batch1.refresh_from_db()
+        self.assertEqual(self.batch1.min_stock, Decimal("10"))
+
+    def test_multiple_stores_zero_and_positive_updates(self):
+        """Bir vaqtning o'zida bir do'konda 0, boshqasida musbat qoldiq o'rnatilishi."""
+        url = f"/api/products/{self.prod_dona.id}/update-stocks/"
+        payload = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": 0, "min_stock": 0},
+                {"store_id": self.store2.id, "new_quantity": 250, "min_stock": 15},
+            ]
+        }
+
+        response = self.client.post(url, payload, format="json")
+        self.assertEqual(response.status_code, 200)
+
+        self.batch1.refresh_from_db()
+        self.batch2.refresh_from_db()
+        self.assertEqual(self.batch1.quantity, Decimal("0"))
+        self.assertEqual(self.batch1.min_stock, Decimal("0"))
+        self.assertEqual(self.batch2.quantity, Decimal("250"))
+        self.assertEqual(self.batch2.min_stock, Decimal("15"))
+
+    def test_juft_product_zero_quantity_allowed(self):
+        """Juft mahsulot uchun 0 va 0.25 ruxsat etilishi, noto'g'ri qadam esa rad etilishi."""
+        b1 = ProductBatch.objects.create(
+            store=self.store1,
+            product=self.prod_juft,
+            quantity=Decimal("50.00"),
+            purchase_price=Decimal("50000"),
+            selling_price=Decimal("70000"),
+        )
+        url = f"/api/products/{self.prod_juft.id}/update-stocks/"
+
+        # 0 ga tushirish muvaffaqiyatli
+        payload_zero = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": 0, "min_stock": 0},
+            ]
+        }
+        res_zero = self.client.post(url, payload_zero, format="json")
+        self.assertEqual(res_zero.status_code, 200)
+        b1.refresh_from_db()
+        self.assertEqual(b1.quantity, Decimal("0"))
+        self.assertEqual(b1.min_stock, Decimal("0"))
+
+        # Noto'g'ri qadam (masalan 0.33) rad etilishi kerak
+        payload_invalid = {
+            "stores": [
+                {"store_id": self.store1.id, "new_quantity": 0.33},
+            ]
+        }
+        res_invalid = self.client.post(url, payload_invalid, format="json")
+        self.assertEqual(res_invalid.status_code, 400)
+
 
 class ProductHistoryMovementAndRollbackTests(TestCase):
     """Mahsulot tarixi + Stock movements jurnallashtirish + Reversal testlari."""
