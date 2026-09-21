@@ -191,6 +191,7 @@ class ProductListAPIView(generics.ListAPIView):
                 "id",
                 "product_id",
                 "quantity",
+                "min_stock",
                 # Serializer (get_batches) ishlatadigan narx/holat maydonlari —
                 # only() dan tushib qolsa har bir batch uchun alohida deferred
                 # SQL chiqadi (N+1). 100 mahsulotda ~1600 so'rovga yetgan edi.

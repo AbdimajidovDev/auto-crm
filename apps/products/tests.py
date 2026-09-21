@@ -592,4 +592,169 @@ class ProductHistoryMovementAndRollbackTests(TestCase):
         self.assertEqual(events_a[0]["quantity"], Decimal("5"))
 
 
+class ProductSearchAPITests(TestCase):
+    """
+    Mahsulot qidiruvi API testlari:
+    - Partial search (2-3 ta harf)
+    - Multi-word search va so'zlar tartibiga bog'liq bo'lmaslik ("nex obli" / "obli nex")
+    - Case-insensitive search
+    - SKU va barcode bo'yicha qidiruv
+    - Do'kon / ombor izolyatsiyasi
+    - Natija topilmagan holat
+    - Queryset optimallashuvi (N+1 query yo'qligi)
+    """
+
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create(
+            phone_number="+998901112233",
+            full_name="Search Tester",
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.client.force_authenticate(user=self.user)
+
+        self.store1 = Store.objects.create(name="112-do'kon", is_active=True)
+        self.store2 = Store.objects.create(name="115-do'kon", is_active=True)
+        StoreUser.objects.create(user=self.user, store=self.store1)
+        StoreUser.objects.create(user=self.user, store=self.store2)
+
+        self.p1 = Product.objects.create(
+            name="Nexia oblisovka samarez kichik dona",
+            name_uz="Nexia oblisovka samarez kichik dona",
+            name_uz_cyrl="Нексия облисовка самарез кичик дона",
+            sku="A00864",
+            barcode="2000000007045",
+            status=Product.ProductStatus.ACTIVE,
+        )
+        self.p2 = Product.objects.create(
+            name="Universal zajim 3,6 x 300mm oq",
+            name_uz="Universal zajim 3,6 x 300mm oq",
+            name_uz_cyrl="Универсал зажим 3,6 х 300мм ок",
+            sku="A04647",
+            barcode="2000000047652",
+            status=Product.ProductStatus.ACTIVE,
+        )
+        self.p3 = Product.objects.create(
+            name="Cobalt amortizator orqa",
+            name_uz="Cobalt amortizator orqa",
+            name_uz_cyrl="Кобальт амортизатор орка",
+            sku="CB-99001",
+            barcode="2000000099001",
+            status=Product.ProductStatus.ACTIVE,
+        )
+
+        ProductBatch.objects.create(
+            store=self.store1,
+            product=self.p1,
+            quantity=Decimal("315.00"),
+            purchase_price=Decimal("145.00"),
+            selling_price=Decimal("300.00"),
+            is_active=True,
+        )
+        ProductBatch.objects.create(
+            store=self.store2,
+            product=self.p1,
+            quantity=Decimal("100.00"),
+            purchase_price=Decimal("145.00"),
+            selling_price=Decimal("300.00"),
+            is_active=True,
+        )
+        ProductBatch.objects.create(
+            store=self.store1,
+            product=self.p2,
+            quantity=Decimal("50.00"),
+            purchase_price=Decimal("100.00"),
+            selling_price=Decimal("200.00"),
+            is_active=True,
+        )
+
+    def test_partial_search_2_to_3_chars(self):
+        """2-3 ta harf bilan qidirish ('nex', 'uni', 'zaj')."""
+        response = self.client.get("/api/products/?search=nex")
+        self.assertEqual(response.status_code, 200)
+        names = [p["name"] for p in response.data.get("results", [])]
+        self.assertIn("Nexia oblisovka samarez kichik dona", names)
+        self.assertNotIn("Cobalt amortizator orqa", names)
+
+    def test_multi_word_search(self):
+        """Bir nechta so'z bilan qidirish ('nex obli', 'uni zaj', 'zaj 300')."""
+        response = self.client.get("/api/products/?search=nex+obli")
+        self.assertEqual(response.status_code, 200)
+        names = [p["name"] for p in response.data.get("results", [])]
+        self.assertIn("Nexia oblisovka samarez kichik dona", names)
+        self.assertNotIn("Universal zajim 3,6 x 300mm oq", names)
+
+        # "uni zaj"
+        response2 = self.client.get("/api/products/?search=uni+zaj")
+        self.assertEqual(response2.status_code, 200)
+        names2 = [p["name"] for p in response2.data.get("results", [])]
+        self.assertIn("Universal zajim 3,6 x 300mm oq", names2)
+        self.assertNotIn("Nexia oblisovka samarez kichik dona", names2)
+
+        # "zaj 300"
+        response3 = self.client.get("/api/products/?search=zaj+300")
+        self.assertEqual(response3.status_code, 200)
+        names3 = [p["name"] for p in response3.data.get("results", [])]
+        self.assertIn("Universal zajim 3,6 x 300mm oq", names3)
+
+    def test_multi_word_search_order_independent(self):
+        """Tokenlar tartibidan qat'i nazar bir xil natija berishi ('obli nex' == 'nex obli')."""
+        res_forward = self.client.get("/api/products/?search=nex+obli")
+        res_reverse = self.client.get("/api/products/?search=obli+nex")
+        self.assertEqual(res_forward.status_code, 200)
+        self.assertEqual(res_reverse.status_code, 200)
+        ids_forward = [p["id"] for p in res_forward.data.get("results", [])]
+        ids_reverse = [p["id"] for p in res_reverse.data.get("results", [])]
+        self.assertEqual(ids_forward, ids_reverse)
+        self.assertIn(self.p1.id, ids_forward)
+
+    def test_case_insensitive_search(self):
+        """Katta/kichik harflar aralash bo'lganda ham topilishi."""
+        res_upper = self.client.get("/api/products/?search=NEX+OBLI")
+        res_mixed = self.client.get("/api/products/?search=nEx+ObLi")
+        self.assertEqual(res_upper.status_code, 200)
+        self.assertEqual(res_mixed.status_code, 200)
+        names_upper = [p["name"] for p in res_upper.data.get("results", [])]
+        names_mixed = [p["name"] for p in res_mixed.data.get("results", [])]
+        self.assertIn(self.p1.name, names_upper)
+        self.assertIn(self.p1.name, names_mixed)
+
+    def test_sku_and_barcode_search(self):
+        """SKU va Barcode bo'yicha qidiruv."""
+        res_sku = self.client.get(f"/api/products/?search={self.p1.sku}")
+        self.assertEqual(res_sku.status_code, 200)
+        self.assertEqual(res_sku.data["results"][0]["id"], self.p1.id)
+
+        res_barcode = self.client.get(f"/api/products/?search={self.p2.barcode}")
+        self.assertEqual(res_barcode.status_code, 200)
+        self.assertEqual(res_barcode.data["results"][0]["id"], self.p2.id)
+
+    def test_empty_search_result(self):
+        """Mos kelmaydigan qidiruv bo'sh natija berishi kerak."""
+        res = self.client.get("/api/products/?search=mutlaqo_mavjud_bolmagan_tovar_12345")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.data.get("results", [])), 0)
+
+    def test_store_isolation_and_batches(self):
+        """store_id bo'yicha batch va qoldiqlar to'g'ri qaytishi."""
+        res = self.client.get(f"/api/products/?search=nex+obli&store_id={self.store1.id}&store_only=0")
+        self.assertEqual(res.status_code, 200)
+        results = res.data.get("results", [])
+        self.assertEqual(len(results), 1)
+        batches = results[0].get("batches", [])
+        store1_batch = next((b for b in batches if b["store"] == self.store1.id), None)
+        self.assertIsNotNone(store1_batch)
+        self.assertEqual(Decimal(str(store1_batch["quantity"])), Decimal("315.00"))
+
+    def test_no_n_plus_one_queries_on_search(self):
+        """Qidiruvda N+1 query bo'lmasligi va so'rovlar soni barqaror bo'lishi."""
+        # Warmup
+        self.client.get("/api/products/?search=nex&limit=10")
+        # 1 ta mahsulotda querylar soni
+        with self.assertNumQueries(7):
+            self.client.get("/api/products/?search=nex+obli&limit=10")
+
+
+
 
