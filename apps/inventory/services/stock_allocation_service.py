@@ -203,15 +203,14 @@ class StockAllocationService:
                         batch.purchase_price = active_purchase
                         update_fields.append("purchase_price")
 
-                    if active_selling is not None and active_selling > Decimal("0.00"):
-                        if batch.selling_price != active_selling:
-                            batch.selling_price = active_selling
-                            update_fields.append("selling_price")
+                    # Maintain existing positive current store selling price; only initialize if 0.00
+                    if batch.selling_price == Decimal("0.00") and active_selling is not None and active_selling > Decimal("0.00"):
+                        batch.selling_price = active_selling
+                        update_fields.append("selling_price")
 
-                    if active_wholesale is not None and active_wholesale > Decimal("0.00"):
-                        if batch.wholesale_price != active_wholesale:
-                            batch.wholesale_price = active_wholesale
-                            update_fields.append("wholesale_price")
+                    if batch.wholesale_price == Decimal("0.00") and active_wholesale is not None and active_wholesale > Decimal("0.00"):
+                        batch.wholesale_price = active_wholesale
+                        update_fields.append("wholesale_price")
 
             batch.save(update_fields=list(set(update_fields)))
 
@@ -660,6 +659,14 @@ class StockAllocationService:
                 avg_cost = (total_cost / total_qty).quantize(Decimal("0.01"))
                 total_selling = sum((a.quantity * a.lot.resolve_selling_price() for a in allocations), Decimal("0.00"))
                 avg_selling = (total_selling / total_qty).quantize(Decimal("0.01"))
+                if avg_selling <= Decimal("0.00"):
+                    if transfer_item.selling_price and transfer_item.selling_price > Decimal("0.00"):
+                        avg_selling = transfer_item.selling_price
+                    else:
+                        from_batch = ProductBatch.objects.filter(store=source_store, product=target_product).first()
+                        if from_batch and from_batch.selling_price:
+                            avg_selling = from_batch.selling_price
+
                 if transfer_item.purchase_price != avg_cost or transfer_item.selling_price != avg_selling:
                     transfer_item.purchase_price = avg_cost
                     transfer_item.selling_price = avg_selling
@@ -753,27 +760,33 @@ class StockAllocationService:
         # 2. Synchronize destination ProductBatch
         batch = cls._sync_product_batch(to_store, target_product)
 
-        # If destination store had NO prior active stock, guarantee destination ProductBatch
-        # inherits the incoming transferred lot's price snapshot immediately
-        if not had_prior_active_stock and created_in_allocations:
-            first_dest_lot = created_in_allocations[0].lot
-            inherited_purchase = first_dest_lot.purchase_price
-            inherited_selling = first_dest_lot.resolve_selling_price()
-            inherited_wholesale = first_dest_lot.resolve_wholesale_price()
+        # 3. Synchronize destination ProductBatch current retail selling price & wholesale price from transfer
+        if created_in_allocations:
+            latest_dest_lot = created_in_allocations[-1].lot
+            inherited_selling = latest_dest_lot.resolve_selling_price()
+            if not inherited_selling or inherited_selling <= Decimal("0.00"):
+                if transfer_item and transfer_item.selling_price and transfer_item.selling_price > Decimal("0.00"):
+                    inherited_selling = transfer_item.selling_price
+
+            inherited_wholesale = latest_dest_lot.resolve_wholesale_price()
 
             up_fields = []
-            if inherited_purchase is not None and inherited_purchase > Decimal("0.00"):
-                if batch.purchase_price != inherited_purchase:
-                    batch.purchase_price = inherited_purchase
-                    up_fields.append("purchase_price")
             if inherited_selling is not None and inherited_selling > Decimal("0.00"):
                 if batch.selling_price != inherited_selling:
                     batch.selling_price = inherited_selling
                     up_fields.append("selling_price")
+
             if inherited_wholesale is not None and inherited_wholesale > Decimal("0.00"):
                 if batch.wholesale_price != inherited_wholesale:
                     batch.wholesale_price = inherited_wholesale
                     up_fields.append("wholesale_price")
+
+            if not had_prior_active_stock:
+                inherited_purchase = latest_dest_lot.purchase_price
+                if inherited_purchase is not None and inherited_purchase > Decimal("0.00"):
+                    if batch.purchase_price != inherited_purchase:
+                        batch.purchase_price = inherited_purchase
+                        up_fields.append("purchase_price")
 
             if up_fields:
                 batch.save(update_fields=up_fields)
@@ -899,44 +912,40 @@ class StockAllocationService:
     @classmethod
     def resolve_selling_price(cls, store: Store, product: Product) -> Decimal:
         """
-        Resolves authoritative selling price for (store, product).
-        1. Checks current active FIFO lot with remaining_quantity > 0.
-        2. If active lot exists, returns its resolve_selling_price().
-        3. If no active lot exists, checks ProductBatch.selling_price.
-        4. If no batch exists, checks most recent lot's resolve_selling_price().
-        5. Fallback: Decimal("0.00").
+        Resolves authoritative current retail selling price for (store, product).
+        1. Checks ProductBatch.selling_price (current store active retail price).
+        2. If no batch or batch.selling_price <= 0, checks most recent lot's resolve_selling_price().
+        3. Fallback: product.price or Decimal("0.00").
         """
-        active_lot = (
+        batch = ProductBatch.objects.filter(store=store, product=product).first()
+        if batch and batch.selling_price and batch.selling_price > Decimal("0.00"):
+            return batch.selling_price
+
+        recent_lot = (
             StockLot.objects.filter(
                 store=store,
                 product=product,
                 remaining_quantity__gt=Decimal("0.00"),
             )
             .select_related("stock_entry_item", "source_lot")
-            .order_by("created_at", "id")
-            .first()
-        )
-        if active_lot:
-            price = active_lot.resolve_selling_price()
-            if price > Decimal("0.00"):
-                return price
-
-        batch = ProductBatch.objects.filter(store=store, product=product).first()
-        if batch and batch.selling_price and batch.selling_price > Decimal("0.00"):
-            return batch.selling_price
-
-        recent_lot = (
-            StockLot.objects.filter(store=store, product=product)
-            .select_related("stock_entry_item", "source_lot")
             .order_by("-created_at", "-id")
             .first()
         )
+        if not recent_lot:
+            recent_lot = (
+                StockLot.objects.filter(store=store, product=product)
+                .select_related("stock_entry_item", "source_lot")
+                .order_by("-created_at", "-id")
+                .first()
+            )
+
         if recent_lot:
             price = recent_lot.resolve_selling_price()
             if price > Decimal("0.00"):
                 return price
 
-        return Decimal("0.00")
+        prod_price = getattr(product, "price", Decimal("0.00")) or Decimal("0.00")
+        return prod_price
 
     @classmethod
     def resolve_purchase_price(cls, store: Store, product: Product) -> Decimal:

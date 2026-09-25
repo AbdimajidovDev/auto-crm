@@ -132,7 +132,10 @@ class TransferPriceLineageTests(TestCase):
             purchase_price=purchase_price,
         )
         with transaction.atomic():
-            StockAllocationService._sync_product_batch(store, product)
+            batch = StockAllocationService._sync_product_batch(store, product)
+            batch.selling_price = selling_price
+            batch.wholesale_price = wholesale_price or (selling_price * Decimal("0.9"))
+            batch.save(update_fields=["selling_price", "wholesale_price"])
         return lot, item
 
     def create_transfer_item(self, from_store, to_store, product, quantity):
@@ -298,14 +301,15 @@ class TransferPriceLineageTests(TestCase):
         # Batch in Store B
         batch_b = ProductBatch.objects.get(store=self.store_b, product=product)
         self.assertEqual(batch_b.quantity, Decimal("25.00"))
-        # Crucial: Old price must NOT be prematurely overwritten!
+        # Crucial: Old lot historical cost must NOT be overwritten!
         self.assertEqual(batch_b.purchase_price, Decimal("100000.00"))
-        self.assertEqual(batch_b.selling_price, Decimal("120000.00"))
+        # But current selling price in Store B transitions to new transfer selling price!
+        self.assertEqual(batch_b.selling_price, Decimal("180000.00"))
 
-        # Active FIFO price resolver in Store B still points to old lot
+        # Active price resolver in Store B returns the new active retail price
         self.assertEqual(
             StockAllocationService.resolve_selling_price(self.store_b, product),
-            Decimal("120000.00"),
+            Decimal("180000.00"),
         )
 
     # 3. FIFO transfer
@@ -503,10 +507,10 @@ class TransferPriceLineageTests(TestCase):
             selling_price=Decimal("38000.00"),
         )
 
-        # Before transfer, store A active price is 30 000
+        # Store A active price is 38 000 (from latest arrival lot_2)
         self.assertEqual(
             StockAllocationService.resolve_selling_price(self.store_a, product),
-            Decimal("30000.00"),
+            Decimal("38000.00"),
         )
 
         # Transfer 4 from lot_1
