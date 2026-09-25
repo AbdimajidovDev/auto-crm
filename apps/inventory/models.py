@@ -396,8 +396,108 @@ class StockLot(TimestampMixin):
         self.clean()
         super().save(*args, **kwargs)
 
+    def resolve_selling_price(self) -> Decimal:
+        """
+        Resolves authoritative selling price for this lot.
+        Resolution precedence:
+        1. Explicit in-memory override (_selling_price)
+        2. Direct stock_entry_item if PURCHASE lot
+        3. Recursive source_lot lineage if TRANSFER_IN lot
+        4. Transfer allocation transfer_item snapshot if present
+        5. Fallback: store ProductBatch selling_price or Decimal("0.00")
+        """
+        if hasattr(self, "_selling_price") and self._selling_price is not None:
+            return self._selling_price
+
+        if self.stock_entry_item_id:
+            try:
+                if self.stock_entry_item and self.stock_entry_item.selling_price is not None:
+                    if self.stock_entry_item.selling_price > Decimal("0.00"):
+                        return self.stock_entry_item.selling_price
+            except Exception:
+                pass
+
+        if self.source_lot_id:
+            try:
+                if self.source_lot:
+                    price = self.source_lot.resolve_selling_price()
+                    if price > Decimal("0.00"):
+                        return price
+            except Exception:
+                pass
+
+        if self.lot_type == self.LotType.TRANSFER_IN:
+            try:
+                in_alloc = self.allocations.filter(
+                    movement_type="transfer_in",
+                    transfer_item__isnull=False,
+                ).select_related("transfer_item").first()
+                if in_alloc and in_alloc.transfer_item and in_alloc.transfer_item.selling_price:
+                    if in_alloc.transfer_item.selling_price > Decimal("0.00"):
+                        return in_alloc.transfer_item.selling_price
+            except Exception:
+                pass
+
+        try:
+            from apps.products.models import ProductBatch
+            batch = ProductBatch.objects.filter(store_id=self.store_id, product_id=self.product_id).first()
+            if batch and batch.selling_price is not None and batch.selling_price > Decimal("0.00"):
+                return batch.selling_price
+        except Exception:
+            pass
+
+        return Decimal("0.00")
+
+    @property
+    def selling_price(self) -> Decimal:
+        return self.resolve_selling_price()
+
+    @selling_price.setter
+    def selling_price(self, value: Decimal):
+        self._selling_price = Decimal(str(value))
+
+    def resolve_wholesale_price(self) -> Decimal:
+        """
+        Resolves authoritative wholesale price for this lot.
+        """
+        if hasattr(self, "_wholesale_price") and self._wholesale_price is not None:
+            return self._wholesale_price
+
+        if self.stock_entry_item_id:
+            try:
+                if self.stock_entry_item and self.stock_entry_item.wholesale_price is not None:
+                    return self.stock_entry_item.wholesale_price
+            except Exception:
+                pass
+
+        if self.source_lot_id:
+            try:
+                if self.source_lot:
+                    return self.source_lot.resolve_wholesale_price()
+            except Exception:
+                pass
+
+        try:
+            from apps.products.models import ProductBatch
+            batch = ProductBatch.objects.filter(store_id=self.store_id, product_id=self.product_id).first()
+            if batch and batch.wholesale_price is not None:
+                return batch.wholesale_price
+        except Exception:
+            pass
+
+        return Decimal("0.00")
+
+    @property
+    def wholesale_price(self) -> Decimal:
+        return self.resolve_wholesale_price()
+
+    @wholesale_price.setter
+    def wholesale_price(self, value: Decimal):
+        self._wholesale_price = Decimal(str(value))
+
     def __str__(self):
         return f"Lot #{self.pk} [{self.lot_type}] Store:{self.store_id} Prod:{self.product_id} Rem:{self.remaining_quantity}/{self.initial_quantity}"
+
 
 
 class StockAllocation(TimestampMixin):

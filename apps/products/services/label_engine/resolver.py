@@ -83,10 +83,15 @@ class LabelDataResolver:
             return ""
 
         batch = ProductBatch.objects.filter(product=product, store=store, is_active=True).first()
-        if not batch or batch.selling_price is None:
-            return ""
+        price_val = None
+        if batch and batch.selling_price:
+            price_val = batch.selling_price
+        else:
+            from apps.inventory.services.stock_allocation_service import StockAllocationService
+            price_val = StockAllocationService.resolve_selling_price(store, product)
 
-        price_val = batch.selling_price
+        if not price_val:
+            return ""
         try:
             if price_val % 1 == 0:
                 formatted = f"{int(price_val):,}".replace(",", " ")

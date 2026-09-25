@@ -97,10 +97,24 @@ class StockAllocationService:
         return batches_by_product, lots_by_product
 
     @classmethod
-    def _sync_product_batch(cls, store: Store, product: Product) -> ProductBatch:
+    def _sync_product_batch(
+        cls,
+        store: Store,
+        product: Product,
+        sync_prices: bool = False,
+    ) -> ProductBatch:
         """
         Synchronizes ProductBatch.quantity to strictly match SUM(StockLot.remaining_quantity).
         Must be executed within an active transaction where ProductBatch is locked.
+
+        Price synchronization rules:
+        - If batch does not exist: creates ProductBatch initialized with active lot's prices.
+        - If batch exists:
+          Only updates prices if:
+            1. sync_prices is True (e.g. after transfer_in or when an active lot was exhausted during deduction), or
+            2. batch was previously empty (old_batch_quantity <= 0) and now receives positive stock, or
+            3. batch prices are uninitialized (purchase_price == 0).
+          Otherwise, performs a fast, bounded quantity update without redundant queries.
         """
         total_remaining = (
             StockLot.objects.filter(store=store, product=product).aggregate(
@@ -110,17 +124,96 @@ class StockAllocationService:
         )
 
         batch = ProductBatch.objects.select_for_update().filter(store=store, product=product).first()
+
         if batch is None:
+            active_lot = (
+                StockLot.objects.filter(
+                    store=store,
+                    product=product,
+                    remaining_quantity__gt=Decimal("0.00"),
+                )
+                .select_related("stock_entry_item", "source_lot")
+                .order_by("created_at", "id")
+                .first()
+            )
+            if active_lot is None:
+                active_lot = (
+                    StockLot.objects.filter(store=store, product=product)
+                    .select_related("stock_entry_item", "source_lot")
+                    .order_by("-created_at", "-id")
+                    .first()
+                )
+
+            active_purchase = (
+                active_lot.purchase_price
+                if active_lot
+                else (getattr(product, "purchase_price", Decimal("0.00")) or Decimal("0.00"))
+            )
+            active_selling = (
+                active_lot.resolve_selling_price()
+                if active_lot
+                else (getattr(product, "price", Decimal("0.00")) or Decimal("0.00"))
+            )
+            active_wholesale = (
+                active_lot.resolve_wholesale_price()
+                if active_lot
+                else Decimal("0.00")
+            )
+
             batch = ProductBatch.objects.create(
                 store=store,
                 product=product,
                 quantity=total_remaining,
-                purchase_price=getattr(product, "purchase_price", Decimal("0.00")) or Decimal("0.00"),
-                selling_price=getattr(product, "price", Decimal("0.00")) or Decimal("0.00"),
+                purchase_price=active_purchase,
+                selling_price=active_selling,
+                wholesale_price=active_wholesale,
             )
         else:
+            old_batch_quantity = batch.quantity
+            update_fields = ["quantity", "updated_at"]
             batch.quantity = total_remaining
-            batch.save(update_fields=["quantity", "updated_at"])
+
+            should_update_prices = (
+                sync_prices
+                or (old_batch_quantity <= Decimal("0.00") and total_remaining > Decimal("0.00"))
+                or (batch.purchase_price == Decimal("0.00") and total_remaining > Decimal("0.00"))
+            )
+
+            if should_update_prices:
+                active_lot = (
+                    StockLot.objects.filter(
+                        store=store,
+                        product=product,
+                        remaining_quantity__gt=Decimal("0.00"),
+                    )
+                    .select_related("stock_entry_item", "source_lot")
+                    .order_by("created_at", "id")
+                    .first()
+                )
+                if active_lot:
+                    active_purchase = active_lot.purchase_price
+                    active_selling = active_lot.resolve_selling_price()
+                    active_wholesale = active_lot.resolve_wholesale_price()
+
+                    if active_purchase is not None and active_purchase > Decimal("0.00"):
+                        if batch.purchase_price != active_purchase:
+                            batch.purchase_price = active_purchase
+                            update_fields.append("purchase_price")
+                    elif batch.purchase_price == Decimal("0.00") and active_purchase is not None:
+                        batch.purchase_price = active_purchase
+                        update_fields.append("purchase_price")
+
+                    if active_selling is not None and active_selling > Decimal("0.00"):
+                        if batch.selling_price != active_selling:
+                            batch.selling_price = active_selling
+                            update_fields.append("selling_price")
+
+                    if active_wholesale is not None and active_wholesale > Decimal("0.00"):
+                        if batch.wholesale_price != active_wholesale:
+                            batch.wholesale_price = active_wholesale
+                            update_fields.append("wholesale_price")
+
+            batch.save(update_fields=list(set(update_fields)))
 
         return batch
 
@@ -245,7 +338,8 @@ class StockAllocationService:
             created_allocations.append(alloc)
 
         # 3. Synchronize ProductBatch aggregate
-        cls._sync_product_batch(store, product)
+        exhausted_any_lot = any(lot.remaining_quantity == Decimal("0.00") for lot in lots)
+        cls._sync_product_batch(store, product, sync_prices=exhausted_any_lot)
 
         return created_allocations
 
@@ -549,7 +643,7 @@ class StockAllocationService:
         target_product = product or transfer_item.product
         target_quantity = quantity if quantity is not None else transfer_item.quantity
 
-        return cls._deduct_fifo(
+        allocations = cls._deduct_fifo(
             store=source_store,
             product=target_product,
             quantity=target_quantity,
@@ -557,6 +651,21 @@ class StockAllocationService:
             direction=StockAllocation.Direction.OUT,
             item_kwargs={"transfer_item": transfer_item},
         )
+
+        # Synchronize transfer_item price snapshot to match actual allocated FIFO lots
+        if transfer_item and allocations:
+            total_qty = sum((a.quantity for a in allocations), Decimal("0.00"))
+            if total_qty > Decimal("0.00"):
+                total_cost = sum((a.quantity * a.unit_cost for a in allocations), Decimal("0.00"))
+                avg_cost = (total_cost / total_qty).quantize(Decimal("0.01"))
+                total_selling = sum((a.quantity * a.lot.resolve_selling_price() for a in allocations), Decimal("0.00"))
+                avg_selling = (total_selling / total_qty).quantize(Decimal("0.01"))
+                if transfer_item.purchase_price != avg_cost or transfer_item.selling_price != avg_selling:
+                    transfer_item.purchase_price = avg_cost
+                    transfer_item.selling_price = avg_selling
+                    transfer_item.save(update_fields=["purchase_price", "selling_price"])
+
+        return allocations
 
     # =========================================================================
     # F. ALLOCATE TRANSFER IN
@@ -610,6 +719,12 @@ class StockAllocationService:
         cls._lock_product_batch(to_store, target_product)
         cls.ensure_lot_coverage(to_store, target_product)
 
+        had_prior_active_stock = StockLot.objects.filter(
+            store=to_store,
+            product=target_product,
+            remaining_quantity__gt=Decimal("0.00"),
+        ).exists()
+
         created_in_allocations = []
         for out_alloc in out_allocations:
             # Create corresponding TRANSFER_IN lot in destination store
@@ -636,7 +751,32 @@ class StockAllocationService:
             created_in_allocations.append(in_alloc)
 
         # 2. Synchronize destination ProductBatch
-        cls._sync_product_batch(to_store, target_product)
+        batch = cls._sync_product_batch(to_store, target_product)
+
+        # If destination store had NO prior active stock, guarantee destination ProductBatch
+        # inherits the incoming transferred lot's price snapshot immediately
+        if not had_prior_active_stock and created_in_allocations:
+            first_dest_lot = created_in_allocations[0].lot
+            inherited_purchase = first_dest_lot.purchase_price
+            inherited_selling = first_dest_lot.resolve_selling_price()
+            inherited_wholesale = first_dest_lot.resolve_wholesale_price()
+
+            up_fields = []
+            if inherited_purchase is not None and inherited_purchase > Decimal("0.00"):
+                if batch.purchase_price != inherited_purchase:
+                    batch.purchase_price = inherited_purchase
+                    up_fields.append("purchase_price")
+            if inherited_selling is not None and inherited_selling > Decimal("0.00"):
+                if batch.selling_price != inherited_selling:
+                    batch.selling_price = inherited_selling
+                    up_fields.append("selling_price")
+            if inherited_wholesale is not None and inherited_wholesale > Decimal("0.00"):
+                if batch.wholesale_price != inherited_wholesale:
+                    batch.wholesale_price = inherited_wholesale
+                    up_fields.append("wholesale_price")
+
+            if up_fields:
+                batch.save(update_fields=up_fields)
 
         return created_in_allocations
 
@@ -752,3 +892,80 @@ class StockAllocationService:
         cls._sync_product_batch(target_store, product)
 
         return InventoryExcessResult(lot=excess_lot, allocation=excess_alloc)
+
+    # =========================================================================
+    # H. PRICE RESOLUTION HELPERS
+    # =========================================================================
+    @classmethod
+    def resolve_selling_price(cls, store: Store, product: Product) -> Decimal:
+        """
+        Resolves authoritative selling price for (store, product).
+        1. Checks current active FIFO lot with remaining_quantity > 0.
+        2. If active lot exists, returns its resolve_selling_price().
+        3. If no active lot exists, checks ProductBatch.selling_price.
+        4. If no batch exists, checks most recent lot's resolve_selling_price().
+        5. Fallback: Decimal("0.00").
+        """
+        active_lot = (
+            StockLot.objects.filter(
+                store=store,
+                product=product,
+                remaining_quantity__gt=Decimal("0.00"),
+            )
+            .select_related("stock_entry_item", "source_lot")
+            .order_by("created_at", "id")
+            .first()
+        )
+        if active_lot:
+            price = active_lot.resolve_selling_price()
+            if price > Decimal("0.00"):
+                return price
+
+        batch = ProductBatch.objects.filter(store=store, product=product).first()
+        if batch and batch.selling_price and batch.selling_price > Decimal("0.00"):
+            return batch.selling_price
+
+        recent_lot = (
+            StockLot.objects.filter(store=store, product=product)
+            .select_related("stock_entry_item", "source_lot")
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if recent_lot:
+            price = recent_lot.resolve_selling_price()
+            if price > Decimal("0.00"):
+                return price
+
+        return Decimal("0.00")
+
+    @classmethod
+    def resolve_purchase_price(cls, store: Store, product: Product) -> Decimal:
+        """
+        Resolves authoritative purchase price (cost) for (store, product).
+        """
+        active_lot = (
+            StockLot.objects.filter(
+                store=store,
+                product=product,
+                remaining_quantity__gt=Decimal("0.00"),
+            )
+            .order_by("created_at", "id")
+            .first()
+        )
+        if active_lot and active_lot.purchase_price > Decimal("0.00"):
+            return active_lot.purchase_price
+
+        batch = ProductBatch.objects.filter(store=store, product=product).first()
+        if batch and batch.purchase_price and batch.purchase_price > Decimal("0.00"):
+            return batch.purchase_price
+
+        recent_lot = (
+            StockLot.objects.filter(store=store, product=product)
+            .order_by("-created_at", "-id")
+            .first()
+        )
+        if recent_lot and recent_lot.purchase_price > Decimal("0.00"):
+            return recent_lot.purchase_price
+
+        return Decimal("0.00")
+

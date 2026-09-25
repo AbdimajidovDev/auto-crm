@@ -129,6 +129,10 @@ class SaleService:
                 raise ValidationError("Mahsulot yetarli emas")
 
             purchase_price = batch.purchase_price
+            if not purchase_price or purchase_price <= Decimal("0"):
+                resolved = StockAllocationService.resolve_purchase_price(sale.store, batch.product)
+                if resolved:
+                    purchase_price = resolved
 
             # Narx mijoz tomonidan yuboriladi, shuning uchun tannarxdan past
             # sotuv bloklanadi: aks holda sotuvchi 500 000 lik detalni `price: 1`
