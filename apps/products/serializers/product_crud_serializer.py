@@ -128,6 +128,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     unit_measurement_name = serializers.CharField(
         source="unit_measurement.measurement", read_only=True, default=None
     )
+    selling_price = serializers.SerializerMethodField()
     # batches endi SerializerMethodField — barcha do'konlarni qamrab oladi
     batches = serializers.SerializerMethodField()
 
@@ -146,8 +147,55 @@ class ProductListSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "images",
+            "selling_price",
             "batches",
         )
+
+    def _get_target_store_id(self):
+        store_id = self.context.get("store_id")
+        if store_id is not None:
+            return int(store_id) if str(store_id).isdigit() else None
+        request = self.context.get("request")
+        if request:
+            params = getattr(request, "query_params", getattr(request, "GET", {}))
+            raw_store = params.get("store_id") or params.get("store")
+            if raw_store and str(raw_store).isdigit():
+                return int(raw_store)
+            user_store_id = getattr(getattr(request, "user", None), "store_id", None)
+            if user_store_id:
+                return user_store_id
+        return None
+
+    def _get_scoped_batch(self, product):
+        store_id = self._get_target_store_id()
+        if store_id is None:
+            return None
+
+        if not hasattr(product, "_scoped_batch_cache"):
+            product._scoped_batch_cache = {}
+        elif not isinstance(product._scoped_batch_cache, dict):
+            product._scoped_batch_cache = {}
+
+        if store_id in product._scoped_batch_cache:
+            return product._scoped_batch_cache[store_id]
+
+        chosen_batch = None
+        if hasattr(product, "_prefetched_objects_cache") and "batches" in product._prefetched_objects_cache:
+            for b in product.batches.all():
+                if b.store_id == store_id:
+                    chosen_batch = b
+                    break
+        else:
+            chosen_batch = product.batches.filter(store_id=store_id).first()
+
+        product._scoped_batch_cache[store_id] = chosen_batch
+        return chosen_batch
+
+    def get_selling_price(self, product):
+        batch = self._get_scoped_batch(product)
+        if batch is not None and batch.selling_price is not None:
+            return batch.selling_price
+        return None
 
     def get_batches(self, product):
         # Context dan barcha do'konlar olinadi (view da set qilinadi)
