@@ -128,7 +128,9 @@ class ProductListSerializer(serializers.ModelSerializer):
     unit_measurement_name = serializers.CharField(
         source="unit_measurement.measurement", read_only=True, default=None
     )
+    purchase_price = serializers.SerializerMethodField()
     selling_price = serializers.SerializerMethodField()
+    wholesale_price = serializers.SerializerMethodField()
     # batches endi SerializerMethodField — barcha do'konlarni qamrab oladi
     batches = serializers.SerializerMethodField()
 
@@ -147,7 +149,9 @@ class ProductListSerializer(serializers.ModelSerializer):
             "status",
             "created_at",
             "images",
+            "purchase_price",
             "selling_price",
+            "wholesale_price",
             "batches",
         )
 
@@ -188,21 +192,37 @@ class ProductListSerializer(serializers.ModelSerializer):
         product._scoped_batch_cache[store_id] = chosen_batch
         return chosen_batch
 
-    def get_selling_price(self, product):
-        annotated_price = getattr(product, "latest_selling_price", None)
-        if annotated_price is not None:
-            return annotated_price
-
-        # Fallback if product queryset was not annotated (e.g. standalone serializer call in tests)
+    def _resolve_latest_inbound_prices(self, product):
+        """
+        Annotatsiya qilingan yoki eng oxirgi kirim (StockEntryItem / StockTransferItem / ProductBatch)
+        orqali mahsulotning barcha 3 ta narxini (purchase, selling, wholesale) bitta yagona eventdan oladi.
+        """
         store_id = self._get_target_store_id()
+        if not hasattr(product, "_cached_latest_inbound_prices") or not isinstance(product._cached_latest_inbound_prices, dict):
+            product._cached_latest_inbound_prices = {}
+
+        if store_id in product._cached_latest_inbound_prices:
+            return product._cached_latest_inbound_prices[store_id]
+
+        # 1. Annotated qiymatlar mavjud bo'lsa darhol O(1) qaytarish
+        ann_purchase = getattr(product, "latest_purchase_price", None)
+        ann_selling = getattr(product, "latest_selling_price", None)
+        ann_wholesale = getattr(product, "latest_wholesale_price", None)
+        if ann_selling is not None or ann_purchase is not None or ann_wholesale is not None:
+            res = {
+                "purchase_price": ann_purchase,
+                "selling_price": ann_selling,
+                "wholesale_price": ann_wholesale,
+            }
+            product._cached_latest_inbound_prices[store_id] = res
+            return res
+
+        # 2. Standalone serializer chaqiruvlari uchun (annotatsiya bo'lmaganda) fallback
+        from apps.contract.models import StockEntryItem
+        from apps.transfer.models import StockTransferItem
+        from apps.products.models import ProductBatch
+
         if store_id is not None:
-            batch = self._get_scoped_batch(product)
-            if batch is not None and batch.selling_price is not None and batch.selling_price > Decimal("0.00"):
-                return batch.selling_price
-
-            from apps.contract.models import StockEntryItem
-            from apps.transfer.models import StockTransferItem
-
             sei = (
                 StockEntryItem.objects.filter(
                     product_id=product.id,
@@ -223,22 +243,42 @@ class ProductListSerializer(serializers.ModelSerializer):
                 .first()
             )
 
+            winner = None
             if sei and sti:
                 t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
                 e_time = sei.entry.created_at
-                if t_time and e_time and t_time > e_time:
-                    return sti.selling_price
-                return sei.selling_price
-            if sei:
-                return sei.selling_price
-            if sti:
-                return sti.selling_price
-            return None
-        else:
-            # All stores: find latest global stock-in event
-            from apps.contract.models import StockEntryItem
-            from apps.transfer.models import StockTransferItem
+                winner = sti if t_time and e_time and t_time > e_time else sei
+            elif sti:
+                winner = sti
+            elif sei:
+                winner = sei
 
+            if winner and winner == sti:
+                dest_batch = self._get_scoped_batch(product)
+                ws = dest_batch.wholesale_price if dest_batch else None
+                res = {
+                    "purchase_price": sti.purchase_price,
+                    "selling_price": sti.selling_price,
+                    "wholesale_price": ws,
+                }
+            elif winner and winner == sei:
+                res = {
+                    "purchase_price": sei.purchase_price,
+                    "selling_price": sei.selling_price,
+                    "wholesale_price": sei.wholesale_price,
+                }
+            else:
+                batch = self._get_scoped_batch(product)
+                if batch:
+                    res = {
+                        "purchase_price": batch.purchase_price,
+                        "selling_price": batch.selling_price,
+                        "wholesale_price": batch.wholesale_price,
+                    }
+                else:
+                    res = {"purchase_price": None, "selling_price": None, "wholesale_price": None}
+        else:
+            # All stores: latest global stock-in event
             sei = (
                 StockEntryItem.objects.filter(
                     product_id=product.id,
@@ -257,27 +297,61 @@ class ProductListSerializer(serializers.ModelSerializer):
                 .first()
             )
 
+            winner = None
             if sei and sti:
                 t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
                 e_time = sei.entry.created_at
-                if t_time and e_time and t_time > e_time:
-                    return sti.selling_price
-                return sei.selling_price
-            if sei:
-                return sei.selling_price
-            if sti:
-                return sti.selling_price
+                winner = sti if t_time and e_time and t_time > e_time else sei
+            elif sti:
+                winner = sti
+            elif sei:
+                winner = sei
 
-            # Fallback to prefetched batches
-            if hasattr(product, "_prefetched_objects_cache") and "batches" in product._prefetched_objects_cache:
-                for b in product.batches.all():
-                    if b.selling_price and b.selling_price > Decimal("0.00"):
-                        return b.selling_price
+            if winner and winner == sti:
+                dest_batch = ProductBatch.objects.filter(
+                    product_id=product.id,
+                    store_id=sti.stock_transfer.to_store_id,
+                ).first()
+                res = {
+                    "purchase_price": sti.purchase_price,
+                    "selling_price": sti.selling_price,
+                    "wholesale_price": dest_batch.wholesale_price if dest_batch else None,
+                }
+            elif winner and winner == sei:
+                res = {
+                    "purchase_price": sei.purchase_price,
+                    "selling_price": sei.selling_price,
+                    "wholesale_price": sei.wholesale_price,
+                }
             else:
-                b = product.batches.filter(selling_price__gt=0).order_by("-updated_at", "-id").first()
+                b = None
+                if hasattr(product, "_prefetched_objects_cache") and "batches" in product._prefetched_objects_cache:
+                    for item_b in product.batches.all():
+                        if item_b.selling_price and item_b.selling_price > Decimal("0.00"):
+                            b = item_b
+                            break
+                if not b:
+                    b = product.batches.filter(selling_price__gt=0).order_by("-updated_at", "-id").first()
                 if b:
-                    return b.selling_price
-            return None
+                    res = {
+                        "purchase_price": b.purchase_price,
+                        "selling_price": b.selling_price,
+                        "wholesale_price": b.wholesale_price,
+                    }
+                else:
+                    res = {"purchase_price": None, "selling_price": None, "wholesale_price": None}
+
+        product._cached_latest_inbound_prices[store_id] = res
+        return res
+
+    def get_purchase_price(self, product):
+        return self._resolve_latest_inbound_prices(product).get("purchase_price")
+
+    def get_selling_price(self, product):
+        return self._resolve_latest_inbound_prices(product).get("selling_price")
+
+    def get_wholesale_price(self, product):
+        return self._resolve_latest_inbound_prices(product).get("wholesale_price")
 
     def get_batches(self, product):
         # Context dan barcha do'konlar olinadi (view da set qilinadi)

@@ -97,10 +97,12 @@ class ProductExportAPIView(BaseExcelExportAPIView):
                 qty = sum(b.quantity for b in batches)
                 # Ro'yxat sahifasi bilan bir xil: do'konlar orasida narx farq
                 # qilsa eng kichigi ko'rsatiladi (do'kon kesimida — o'zining narxi)
-                purchase = min((b.purchase_price for b in batches if b.purchase_price is not None), default=None)
+                annotated_purchase = getattr(product, "latest_purchase_price", None)
                 annotated_selling = getattr(product, "latest_selling_price", None)
+                annotated_wholesale = getattr(product, "latest_wholesale_price", None)
+                purchase = annotated_purchase if annotated_purchase is not None else min((b.purchase_price for b in batches if b.purchase_price is not None), default=None)
                 selling = annotated_selling if annotated_selling is not None else min((b.selling_price for b in batches if b.selling_price is not None), default=None)
-                wholesale = min((b.wholesale_price for b in batches if b.wholesale_price is not None), default=None)
+                wholesale = annotated_wholesale if annotated_wholesale is not None else min((b.wholesale_price for b in batches if b.wholesale_price is not None), default=None)
                 qty_by_store = {b.store_id: b.quantity for b in batches}
                 yield [
                     product.id,
