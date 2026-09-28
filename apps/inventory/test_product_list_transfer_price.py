@@ -121,6 +121,7 @@ class ProductListTransferPriceCasesTests(TestCase):
             from_store=from_store,
             to_store=to_store,
             status=StockTransfer.Status.APPROVED,
+            approved_at=timezone.now(),
             created_by=self.superuser,
         )
         from_batch = ProductBatch.objects.filter(store=from_store, product=product).first()
@@ -473,3 +474,441 @@ class ProductListTransferPriceCasesTests(TestCase):
         # Check Products List still shows 999
         list_data = self.get_product_list_data(product, store_id=self.store_b.id)
         self.assertEqual(Decimal(str(list_data["selling_price"])), Decimal("999.00"))
+
+    def get_api_product_list(self, store_id=None, search=None):
+        from rest_framework.test import force_authenticate
+        url = "/api/products/?page=1&limit=20"
+        if store_id is not None:
+            url += f"&store_id={store_id}"
+        if search:
+            url += f"&search={search}"
+        request = self.rf.get(url)
+        force_authenticate(request, user=self.superuser)
+        view = ProductListAPIView.as_view()
+        response = view(request)
+        self.assertEqual(response.status_code, 200)
+        return response.data
+
+    # =========================================================================
+    # MANDATORY BUSINESS VERIFICATION CASES 1 - 9
+    # =========================================================================
+
+    def test_mandatory_case_1_old_500_new_1111_same_store(self):
+        """
+        CASE 1:
+        old import 500
+        new import 1111
+        same store selected
+        -> Products List = 1111
+        """
+        product = self.create_product("Mandatory Case 1")
+
+        # Old import into Store B: 500
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("400.00"),
+            selling_price=Decimal("500.00"),
+        )
+
+        # New import into Store B: 1111
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("5.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+
+        # Store B selected via standalone serializer
+        data = self.get_product_list_data(product, store_id=self.store_b.id)
+        self.assertEqual(Decimal(str(data["selling_price"])), Decimal("1111.00"))
+
+        # Store B selected via full API view
+        api_data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item = next(p for p in api_data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("1111.00"))
+
+    def test_mandatory_case_2_all_stores_old_500_new_1111(self):
+        """
+        CASE 2:
+        All stores
+        old 500
+        new 1111
+        -> Products List = 1111
+        """
+        product = self.create_product("Mandatory Case 2")
+
+        # Old import: 500
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("400.00"),
+            selling_price=Decimal("500.00"),
+        )
+
+        # New import: 1111
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("5.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+
+        # All stores (store_id = None) via standalone serializer
+        data = self.get_product_list_data(product, store_id=None)
+        self.assertEqual(Decimal(str(data["selling_price"])), Decimal("1111.00"))
+
+        # All stores via full API view
+        api_data = self.get_api_product_list(store_id=None, search=product.name)
+        item = next(p for p in api_data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("1111.00"))
+
+    def test_mandatory_case_3_all_stores_multi_store_latest_global(self):
+        """
+        CASE 3:
+        A=999, B=1111, C=700
+        All stores
+        -> latest global import narxi (1111)
+        """
+        product = self.create_product("Mandatory Case 3")
+
+        self.create_entry_lot(
+            store=self.store_a,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("700.00"),
+            selling_price=Decimal("999.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_c,
+            product=product,
+            quantity=Decimal("15.00"),
+            purchase_price=Decimal("550.00"),
+            selling_price=Decimal("700.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("20.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+
+        # All stores: latest global import is Store B @ 1111
+        data = self.get_product_list_data(product, store_id=None)
+        self.assertEqual(Decimal(str(data["selling_price"])), Decimal("1111.00"))
+
+        api_data = self.get_api_product_list(store_id=None, search=product.name)
+        item = next(p for p in api_data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("1111.00"))
+
+    def test_mandatory_case_4_a_selected_shows_a_latest_price(self):
+        """
+        CASE 4:
+        A selected
+        -> A latest import price (999)
+        """
+        product = self.create_product("Mandatory Case 4")
+
+        self.create_entry_lot(
+            store=self.store_a,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("700.00"),
+            selling_price=Decimal("999.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("20.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_c,
+            product=product,
+            quantity=Decimal("15.00"),
+            purchase_price=Decimal("550.00"),
+            selling_price=Decimal("700.00"),
+        )
+
+        # Store A selected: 999
+        data_a = self.get_product_list_data(product, store_id=self.store_a.id)
+        self.assertEqual(Decimal(str(data_a["selling_price"])), Decimal("999.00"))
+
+        api_data_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_data_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("999.00"))
+
+    def test_mandatory_case_5_b_selected_shows_b_latest_price(self):
+        """
+        CASE 5:
+        B selected
+        -> B latest import price (1111)
+        """
+        product = self.create_product("Mandatory Case 5")
+
+        self.create_entry_lot(
+            store=self.store_a,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("700.00"),
+            selling_price=Decimal("999.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("20.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+        self.create_entry_lot(
+            store=self.store_c,
+            product=product,
+            quantity=Decimal("15.00"),
+            purchase_price=Decimal("550.00"),
+            selling_price=Decimal("700.00"),
+        )
+
+        # Store B selected: 1111
+        data_b = self.get_product_list_data(product, store_id=self.store_b.id)
+        self.assertEqual(Decimal(str(data_b["selling_price"])), Decimal("1111.00"))
+
+        api_data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("1111.00"))
+
+    def test_mandatory_case_6_old_stock_and_new_import_lot_integrity(self):
+        """
+        CASE 6:
+        old stock + new import
+        -> current display price new price
+        -> old lot/cost unchanged
+        """
+        product = self.create_product("Mandatory Case 6")
+
+        lot_old, _ = self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("20.00"),
+            purchase_price=Decimal("400.00"),
+            selling_price=Decimal("500.00"),
+        )
+
+        lot_new, _ = self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("5.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+
+        # Display price is new price 1111
+        data = self.get_product_list_data(product, store_id=self.store_b.id)
+        self.assertEqual(Decimal(str(data["selling_price"])), Decimal("1111.00"))
+
+        # Old lot cost and quantity untouched
+        lot_old.refresh_from_db()
+        self.assertEqual(lot_old.remaining_quantity, Decimal("20.00"))
+        self.assertEqual(lot_old.purchase_price, Decimal("400.00"))
+
+        # New lot intact
+        lot_new.refresh_from_db()
+        self.assertEqual(lot_new.remaining_quantity, Decimal("5.00"))
+        self.assertEqual(lot_new.purchase_price, Decimal("800.00"))
+
+    def test_mandatory_case_7_transfer_new_selling_price(self):
+        """
+        CASE 7:
+        A -> B transfer
+        -> B Products List = transferdagi yangi selling price
+        All stores -> agar A->B transfer eng oxirgi stock-in event bo'lsa: selling_price = 1500
+        """
+        product = self.create_product("Mandatory Case 7")
+
+        # B old selling_price = 1200
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("1000.00"),
+            selling_price=Decimal("1200.00"),
+        )
+
+        # A latest selling_price = 1500
+        self.create_entry_lot(
+            store=self.store_a,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("1250.00"),
+            selling_price=Decimal("1500.00"),
+        )
+
+        # A -> B transfer
+        self.transfer(self.store_a, self.store_b, product, Decimal("5.00"))
+
+        # B Products List = 1500
+        data_b = self.get_product_list_data(product, store_id=self.store_b.id)
+        self.assertEqual(Decimal(str(data_b["selling_price"])), Decimal("1500.00"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("1500.00"))
+
+        # All stores = 1500
+        data_all = self.get_product_list_data(product, store_id=None)
+        self.assertEqual(Decimal(str(data_all["selling_price"])), Decimal("1500.00"))
+
+        api_all = self.get_api_product_list(store_id=None, search=product.name)
+        item_all = next(p for p in api_all["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_all["selling_price"])), Decimal("1500.00"))
+
+    def test_mandatory_case_8_stock_entry_and_sales_matching_price(self):
+        """
+        CASE 8:
+        StockEntry -> Sales
+        -> ikkala joyda bir xil latest/current price
+        """
+        product = self.create_product("Mandatory Case 8")
+
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("400.00"),
+            selling_price=Decimal("500.00"),
+        )
+
+        # StockEntry via StockEntryService
+        items_data = [
+            {
+                "product": product,
+                "quantity": Decimal("15.00"),
+                "purchase_price": Decimal("800.00"),
+                "selling_price": Decimal("1111.00"),
+                "wholesale_price": Decimal("1000.00"),
+            }
+        ]
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_b,
+            items=items_data,
+            user=self.superuser,
+            cash_amount=Decimal("12000.00"),
+        )
+
+        # Check Sales resolved price
+        sales_price = StockAllocationService.resolve_selling_price(self.store_b, product)
+        self.assertEqual(sales_price, Decimal("1111.00"))
+
+        # Check Products List price
+        data = self.get_product_list_data(product, store_id=self.store_b.id)
+        self.assertEqual(Decimal(str(data["selling_price"])), Decimal("1111.00"))
+
+        # Sale uses 1111
+        sale_data = {
+            "store": self.store_b.id,
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 1,
+                    "price": sales_price,
+                }
+            ],
+            "payments": [{"type": "cash", "amount": Decimal("1111.00")}],
+        }
+        sale = SaleService.create_sale(user=self.superuser, data=sale_data)
+        sale_item = sale.items.get(product=product)
+        self.assertEqual(sale_item.unit_price, Decimal("1111.00"))
+
+    def test_mandatory_case_9_sale_and_return_price_consistency(self):
+        """
+        CASE 9:
+        Sale + return
+        -> price/refund consistency
+        """
+        product = self.create_product("Mandatory Case 9")
+
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("800.00"),
+            selling_price=Decimal("1111.00"),
+        )
+
+        current_price = StockAllocationService.resolve_selling_price(self.store_b, product)
+        self.assertEqual(current_price, Decimal("1111.00"))
+
+        # Sale 2 units @ 1111
+        sale_data = {
+            "store": self.store_b.id,
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 2,
+                    "price": current_price,
+                }
+            ],
+            "payments": [{"type": "cash", "amount": Decimal("2222.00")}],
+        }
+        sale = SaleService.create_sale(user=self.superuser, data=sale_data)
+        sale_item = sale.items.get(product=product)
+        self.assertEqual(sale_item.unit_price, Decimal("1111.00"))
+
+        # Return 1 unit
+        ret_data = {
+            "sale": sale.id,
+            "items": [
+                {
+                    "sale_item": sale_item.id,
+                    "quantity": 1,
+                }
+            ],
+            "payment_type": "cash",
+        }
+        ret_obj = SaleReturnService.create_return(user=self.superuser, data=ret_data)
+        self.assertEqual(ret_obj.total_refund, Decimal("1111.00"))
+
+    def test_performance_query_count(self):
+        """
+        Requirement 11:
+        Verify query count on ProductListAPIView is strictly bounded (O(1), <= 8 queries)
+        and has NO per-product N+1 queries.
+        """
+        from django.db import connection, reset_queries
+        from django.conf import settings
+
+        old_debug = settings.DEBUG
+        settings.DEBUG = True
+        try:
+            # Create a batch of 5 products
+            for i in range(5):
+                p = self.create_product(f"Perf Product {i}")
+                self.create_entry_lot(
+                    store=self.store_b,
+                    product=p,
+                    quantity=Decimal("5.00"),
+                    purchase_price=Decimal("400.00"),
+                    selling_price=Decimal("600.00"),
+                )
+
+            reset_queries()
+            url = "/api/products/?page=1&limit=20"
+            req = self.rf.get(url)
+            from rest_framework.test import force_authenticate
+            force_authenticate(req, user=self.superuser)
+            view = ProductListAPIView.as_view()
+            resp = view(req)
+            self.assertEqual(resp.status_code, 200)
+
+            # Max allowed queries: 8 (stats, archived count, pagination count, page products, images, batches, stores)
+            query_count = len(connection.queries)
+            self.assertLessEqual(query_count, 8, f"Query count too high ({query_count}), possible N+1 query!")
+        finally:
+            settings.DEBUG = old_debug
+

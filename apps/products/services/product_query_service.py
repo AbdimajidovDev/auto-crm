@@ -9,6 +9,7 @@ from django.db.models import (
     Case,
     DecimalField,
     Exists,
+    F,
     IntegerField,
     OuterRef,
     Q,
@@ -161,3 +162,135 @@ def stock_status_label(qty) -> str:
     if qty <= LOW_STOCK_THRESHOLD:
         return "Kam qolgan"
     return "Bor"
+
+
+def annotate_latest_selling_price(queryset, store_id=None):
+    """
+    Mahsulotning eng oxirgi kirim qilingan sotuv narxini (selling_price) aniqlab annotatsiya qiladi.
+
+    Semantika:
+    1. store_id berilsa:
+       shu do'kondagi eng oxirgi kirim (StockEntryItem yoki tasdiqlangan StockTransferItem)
+       bo'yicha selling_price aniqlanadi. Agar hech qaysi bo'lmasa, shu do'kon ProductBatch
+       selling_price olinadi.
+    2. store_id berilmasa ("Barcha do'konlar"):
+       barcha do'konlar bo'yicha eng oxirgi global kirim (StockEntryItem yoki tasdiqlangan
+       StockTransferItem) bo'yicha selling_price aniqlanadi. Agar hech qaysi kirim bo'lmasa,
+       eng oxirgi yangilangan faol ProductBatch narxi olinadi.
+    """
+    from apps.contract.models import StockEntryItem
+    from apps.transfer.models import StockTransferItem
+
+    target_store_id = int(store_id) if store_id is not None and str(store_id).isdigit() else None
+
+    if target_store_id:
+        e_price = Subquery(
+            StockEntryItem.objects.filter(
+                product_id=OuterRef("pk"),
+                entry__store_id=target_store_id,
+                selling_price__gt=0,
+            ).order_by("-entry__created_at", "-id").values("selling_price")[:1]
+        )
+        e_time = Subquery(
+            StockEntryItem.objects.filter(
+                product_id=OuterRef("pk"),
+                entry__store_id=target_store_id,
+                selling_price__gt=0,
+            ).order_by("-entry__created_at", "-id").values("entry__created_at")[:1]
+        )
+        t_price = Subquery(
+            StockTransferItem.objects.filter(
+                product_id=OuterRef("pk"),
+                stock_transfer__to_store_id=target_store_id,
+                stock_transfer__status="a",
+                selling_price__gt=0,
+            )
+            .annotate(
+                t_effective_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+            )
+            .order_by("-t_effective_time", "-id")
+            .values("selling_price")[:1]
+        )
+        t_time = Subquery(
+            StockTransferItem.objects.filter(
+                product_id=OuterRef("pk"),
+                stock_transfer__to_store_id=target_store_id,
+                stock_transfer__status="a",
+                selling_price__gt=0,
+            )
+            .annotate(
+                t_effective_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+            )
+            .order_by("-t_effective_time", "-id")
+            .values("t_effective_time")[:1]
+        )
+        b_price = Subquery(
+            ProductBatch.objects.filter(
+                product_id=OuterRef("pk"),
+                store_id=target_store_id,
+                is_active=True,
+                selling_price__gt=0,
+            ).values("selling_price")[:1]
+        )
+    else:
+        e_price = Subquery(
+            StockEntryItem.objects.filter(
+                product_id=OuterRef("pk"),
+                selling_price__gt=0,
+            ).order_by("-entry__created_at", "-id").values("selling_price")[:1]
+        )
+        e_time = Subquery(
+            StockEntryItem.objects.filter(
+                product_id=OuterRef("pk"),
+                selling_price__gt=0,
+            ).order_by("-entry__created_at", "-id").values("entry__created_at")[:1]
+        )
+        t_price = Subquery(
+            StockTransferItem.objects.filter(
+                product_id=OuterRef("pk"),
+                stock_transfer__status="a",
+                selling_price__gt=0,
+            )
+            .annotate(
+                t_effective_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+            )
+            .order_by("-t_effective_time", "-id")
+            .values("selling_price")[:1]
+        )
+        t_time = Subquery(
+            StockTransferItem.objects.filter(
+                product_id=OuterRef("pk"),
+                stock_transfer__status="a",
+                selling_price__gt=0,
+            )
+            .annotate(
+                t_effective_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+            )
+            .order_by("-t_effective_time", "-id")
+            .values("t_effective_time")[:1]
+        )
+        b_price = Subquery(
+            ProductBatch.objects.filter(
+                product_id=OuterRef("pk"),
+                is_active=True,
+                selling_price__gt=0,
+            ).order_by("-updated_at", "-id").values("selling_price")[:1]
+        )
+
+    return queryset.annotate(
+        _latest_e_price=e_price,
+        _latest_e_time=e_time,
+        _latest_t_price=t_price,
+        _latest_t_time=t_time,
+        _latest_b_price=b_price,
+    ).annotate(
+        latest_selling_price=Case(
+            When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_price")),
+            When(_latest_e_price__isnull=False, then=F("_latest_e_price")),
+            When(_latest_t_price__isnull=False, then=F("_latest_t_price")),
+            When(_latest_b_price__isnull=False, then=F("_latest_b_price")),
+            default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        )
+    )
+

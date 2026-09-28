@@ -161,9 +161,6 @@ class ProductListSerializer(serializers.ModelSerializer):
             raw_store = params.get("store_id") or params.get("store")
             if raw_store and str(raw_store).isdigit():
                 return int(raw_store)
-            user_store_id = getattr(getattr(request, "user", None), "store_id", None)
-            if user_store_id:
-                return user_store_id
         return None
 
     def _get_scoped_batch(self, product):
@@ -192,10 +189,95 @@ class ProductListSerializer(serializers.ModelSerializer):
         return chosen_batch
 
     def get_selling_price(self, product):
-        batch = self._get_scoped_batch(product)
-        if batch is not None and batch.selling_price is not None:
-            return batch.selling_price
-        return None
+        annotated_price = getattr(product, "latest_selling_price", None)
+        if annotated_price is not None:
+            return annotated_price
+
+        # Fallback if product queryset was not annotated (e.g. standalone serializer call in tests)
+        store_id = self._get_target_store_id()
+        if store_id is not None:
+            batch = self._get_scoped_batch(product)
+            if batch is not None and batch.selling_price is not None and batch.selling_price > Decimal("0.00"):
+                return batch.selling_price
+
+            from apps.contract.models import StockEntryItem
+            from apps.transfer.models import StockTransferItem
+
+            sei = (
+                StockEntryItem.objects.filter(
+                    product_id=product.id,
+                    entry__store_id=store_id,
+                    selling_price__gt=0,
+                )
+                .order_by("-entry__created_at", "-id")
+                .first()
+            )
+            sti = (
+                StockTransferItem.objects.filter(
+                    product_id=product.id,
+                    stock_transfer__to_store_id=store_id,
+                    stock_transfer__status="a",
+                    selling_price__gt=0,
+                )
+                .order_by("-stock_transfer__approved_at", "-id")
+                .first()
+            )
+
+            if sei and sti:
+                t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
+                e_time = sei.entry.created_at
+                if t_time and e_time and t_time > e_time:
+                    return sti.selling_price
+                return sei.selling_price
+            if sei:
+                return sei.selling_price
+            if sti:
+                return sti.selling_price
+            return None
+        else:
+            # All stores: find latest global stock-in event
+            from apps.contract.models import StockEntryItem
+            from apps.transfer.models import StockTransferItem
+
+            sei = (
+                StockEntryItem.objects.filter(
+                    product_id=product.id,
+                    selling_price__gt=0,
+                )
+                .order_by("-entry__created_at", "-id")
+                .first()
+            )
+            sti = (
+                StockTransferItem.objects.filter(
+                    product_id=product.id,
+                    stock_transfer__status="a",
+                    selling_price__gt=0,
+                )
+                .order_by("-stock_transfer__approved_at", "-id")
+                .first()
+            )
+
+            if sei and sti:
+                t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
+                e_time = sei.entry.created_at
+                if t_time and e_time and t_time > e_time:
+                    return sti.selling_price
+                return sei.selling_price
+            if sei:
+                return sei.selling_price
+            if sti:
+                return sti.selling_price
+
+            # Fallback to prefetched batches
+            if hasattr(product, "_prefetched_objects_cache") and "batches" in product._prefetched_objects_cache:
+                for b in product.batches.all():
+                    if b.selling_price and b.selling_price > Decimal("0.00"):
+                        return b.selling_price
+            else:
+                b = product.batches.filter(selling_price__gt=0).order_by("-updated_at", "-id").first()
+                if b:
+                    return b.selling_price
+            return None
 
     def get_batches(self, product):
         # Context dan barcha do'konlar olinadi (view da set qilinadi)

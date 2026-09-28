@@ -4,6 +4,7 @@ from drf_spectacular.utils import extend_schema
 from apps.common.excel_export import BaseExcelExportAPIView
 from apps.products.models import Category, Product, ProductBatch
 from apps.products.services.product_query_service import (
+    annotate_latest_selling_price,
     annotate_stock_qty,
     apply_stock_status,
     apply_token_search,
@@ -54,6 +55,7 @@ class ProductExportAPIView(BaseExcelExportAPIView):
         store_id = store_id if store_id and store_id.isdigit() else None
         qs = annotate_stock_qty(qs, store_id)
         qs = apply_stock_status(qs, request.query_params.get("stock_status"))
+        qs = annotate_latest_selling_price(qs, store_id=store_id)
 
         return qs
 
@@ -96,7 +98,8 @@ class ProductExportAPIView(BaseExcelExportAPIView):
                 # Ro'yxat sahifasi bilan bir xil: do'konlar orasida narx farq
                 # qilsa eng kichigi ko'rsatiladi (do'kon kesimida — o'zining narxi)
                 purchase = min((b.purchase_price for b in batches if b.purchase_price is not None), default=None)
-                selling = min((b.selling_price for b in batches if b.selling_price is not None), default=None)
+                annotated_selling = getattr(product, "latest_selling_price", None)
+                selling = annotated_selling if annotated_selling is not None else min((b.selling_price for b in batches if b.selling_price is not None), default=None)
                 wholesale = min((b.wholesale_price for b in batches if b.wholesale_price is not None), default=None)
                 qty_by_store = {b.store_id: b.quantity for b in batches}
                 yield [

@@ -35,6 +35,7 @@ from drf_spectacular.types import OpenApiTypes
 
 from apps.products.services.product_query_service import (
     LOW_STOCK_THRESHOLD,
+    annotate_latest_selling_price,
     annotate_stock_qty,
     apply_search_rank,
     apply_stock_status,
@@ -309,6 +310,10 @@ class ProductListAPIView(generics.ListAPIView):
         queryset = apply_stock_status(
             base_queryset, request.query_params.get("stock_status")
         )
+
+        raw_store = request.query_params.get("store_id")
+        store_id = int(raw_store) if raw_store and raw_store.isdigit() else None
+        queryset = annotate_latest_selling_price(queryset, store_id=store_id)
 
         page = self.paginate_queryset(queryset)
         if page is not None:
