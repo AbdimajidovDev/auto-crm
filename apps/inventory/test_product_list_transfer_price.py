@@ -916,8 +916,8 @@ class ProductListTransferPriceCasesTests(TestCase):
         """
         CASE 1 — StockEntry:
         old: purchase = 56, selling = 500, wholesale = 888
-        new: purchase = 333, selling = 555, wholesale = 444
-        Expected Products List: purchase = 333, selling = 555, wholesale = 444
+        new: purchase = 222, selling = 444, wholesale = 333
+        Expected Products List: purchase = 222, selling = 444, wholesale = 333
         """
         product = self.create_product("Unified Case 1")
         # Old entry
@@ -934,46 +934,46 @@ class ProductListTransferPriceCasesTests(TestCase):
             store=self.store_b,
             product=product,
             quantity=Decimal("11.00"),
-            purchase_price=Decimal("333.00"),
-            selling_price=Decimal("555.00"),
-            wholesale_price=Decimal("444.00"),
+            purchase_price=Decimal("222.00"),
+            selling_price=Decimal("444.00"),
+            wholesale_price=Decimal("333.00"),
         )
 
         api_data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
         item = next(p for p in api_data["results"] if p["id"] == product.id)
-        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("333.00"))
-        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("555.00"))
-        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("444.00"))
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("222.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("444.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("333.00"))
 
     def test_unified_case_2_second_stock_entry_3_prices(self):
         """
         CASE 2 — Ikkinchi kirim:
-        old: 333 / 555 / 444
-        new: 400 / 600 / 500
-        Expected: 400 / 600 / 500
+        old: 222 / 444 / 333
+        new: 250 / 555 / 400
+        Expected: 250 / 555 / 400
         """
         product = self.create_product("Unified Case 2")
         self.create_entry_lot(
             store=self.store_b,
             product=product,
             quantity=Decimal("10.00"),
-            purchase_price=Decimal("333.00"),
-            selling_price=Decimal("555.00"),
-            wholesale_price=Decimal("444.00"),
+            purchase_price=Decimal("222.00"),
+            selling_price=Decimal("444.00"),
+            wholesale_price=Decimal("333.00"),
         )
         self.create_entry_lot(
             store=self.store_b,
             product=product,
             quantity=Decimal("5.00"),
-            purchase_price=Decimal("400.00"),
-            selling_price=Decimal("600.00"),
-            wholesale_price=Decimal("500.00"),
+            purchase_price=Decimal("250.00"),
+            selling_price=Decimal("555.00"),
+            wholesale_price=Decimal("400.00"),
         )
         api_data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
         item = next(p for p in api_data["results"] if p["id"] == product.id)
-        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("400.00"))
-        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("600.00"))
-        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("555.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("400.00"))
 
     def test_unified_case_3_store_isolation_3_prices(self):
         """
@@ -1193,4 +1193,103 @@ class ProductListTransferPriceCasesTests(TestCase):
         self.assertEqual(Decimal(str(item_c["purchase_price"])), Decimal("700.00"))
         self.assertEqual(Decimal(str(item_c["selling_price"])), Decimal("1500.00"))
         self.assertEqual(Decimal(str(item_c["wholesale_price"])), Decimal("1200.00"))
+
+    def test_unified_case_10_old_historical_sale_cogs_and_profit(self):
+        """
+        CASE 10 — Old historical sale:
+        Old lot: purchase cost = 100
+        25 kundan keyin: new inbound cost = 150
+        Old sale: COGS = 100
+        New stock sale: COGS = 150
+        New inbound old SaleItem.purchase_price yoki old profitni o'zgartirmasligi kerak.
+        """
+        product = self.create_product("Unified Case 10")
+        # Old lot: 10 dona @ 100 cost, 200 selling
+        old_lot, _ = self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("100.00"),
+            selling_price=Decimal("200.00"),
+            wholesale_price=Decimal("150.00"),
+        )
+
+        # Old sale: 2 dona @ 200
+        sale_data_1 = {
+            "store": self.store_b.id,
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 2,
+                    "price": Decimal("200.00"),
+                }
+            ],
+            "payments": [{"type": "cash", "amount": Decimal("400.00")}],
+        }
+        sale_1 = SaleService.create_sale(user=self.superuser, data=sale_data_1)
+        sale_item_1 = sale_1.items.get(product=product)
+
+        # Old sale COGS = 100
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+        old_cogs = sale_item_1.purchase_price * sale_item_1.quantity
+        self.assertEqual(old_cogs, Decimal("200.00"))
+
+        # 25 kundan keyin: New inbound: 10 dona @ 150 cost, 300 selling, 250 wholesale
+        self.create_entry_lot(
+            store=self.store_b,
+            product=product,
+            quantity=Decimal("10.00"),
+            purchase_price=Decimal("150.00"),
+            selling_price=Decimal("300.00"),
+            wholesale_price=Decimal("250.00"),
+        )
+
+        # Products list current price should be latest inbound: 150 / 300 / 250
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("250.00"))
+
+        # Verify old SaleItem.purchase_price and COGS did NOT change
+        sale_item_1.refresh_from_db()
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+
+        # Sell remaining 8 units of old lot so old lot is completely exhausted
+        sale_data_2 = {
+            "store": self.store_b.id,
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 8,
+                    "price": Decimal("300.00"),
+                }
+            ],
+            "payments": [{"type": "cash", "amount": Decimal("2400.00")}],
+        }
+        sale_2 = SaleService.create_sale(user=self.superuser, data=sale_data_2)
+        sale_item_2 = sale_2.items.get(product=product)
+        self.assertEqual(sale_item_2.purchase_price, Decimal("100.00"))
+
+        # Now sell 5 units from new lot @ 150
+        sale_data_3 = {
+            "store": self.store_b.id,
+            "items": [
+                {
+                    "product": product.id,
+                    "quantity": 5,
+                    "price": Decimal("300.00"),
+                }
+            ],
+            "payments": [{"type": "cash", "amount": Decimal("1500.00")}],
+        }
+        sale_3 = SaleService.create_sale(user=self.superuser, data=sale_data_3)
+        sale_item_3 = sale_3.items.get(product=product)
+
+        # New stock sale COGS = 150
+        self.assertEqual(sale_item_3.purchase_price, Decimal("150.00"))
+
+        # Re-verify old sale item 1 is still untouched
+        sale_item_1.refresh_from_db()
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
 
