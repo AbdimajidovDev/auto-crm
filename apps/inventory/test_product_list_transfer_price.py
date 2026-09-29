@@ -256,9 +256,9 @@ class ProductListTransferPriceCasesTests(TestCase):
         # Check Products List price is 999
         list_data = self.get_product_list_data(product, store_id=self.store_b.id)
         self.assertEqual(Decimal(str(list_data["selling_price"])), Decimal("999.00"))
-        # Purchase price shown in Store B batches is active lot cost (400)
+        # Purchase price shown in Store B batches is transferred price (700)
         batch_b_data = next(b for b in list_data["batches"] if b["store"] == self.store_b.id)
-        self.assertEqual(Decimal(str(batch_b_data["purchase_price"])), Decimal("400.00"))
+        self.assertEqual(Decimal(str(batch_b_data["purchase_price"])), Decimal("700.00"))
 
         # Verify old lot is untouched
         lot_b_old.refresh_from_db()
@@ -1292,4 +1292,506 @@ class ProductListTransferPriceCasesTests(TestCase):
         # Re-verify old sale item 1 is still untouched
         sale_item_1.refresh_from_db()
         self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+
+    def test_strict_case_1_stock_entry_initial(self):
+        """
+        CASE 1:
+        A ga: 100 / 200 / 150
+        => A = 100 / 200 / 150
+        """
+        product = self.create_product("Strict Case 1")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("100.00"),
+                "selling_price": Decimal("200.00"),
+                "wholesale_price": Decimal("150.00"),
+            }],
+            user=self.superuser,
+        )
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("100.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("200.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("150.00"))
+
+    def test_strict_case_2_stock_entry_update(self):
+        """
+        CASE 2:
+        A ga yangi kirim: 300 / 500 / 400
+        => A = 300 / 500 / 400
+        """
+        product = self.create_product("Strict Case 2")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("100.00"),
+                "selling_price": Decimal("200.00"),
+                "wholesale_price": Decimal("150.00"),
+            }],
+            user=self.superuser,
+        )
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("300.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("400.00"),
+            }],
+            user=self.superuser,
+        )
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("400.00"))
+
+    def test_strict_case_3_zero_price_rule(self):
+        """
+        CASE 3:
+        old: 300 / 500 / 400
+        A ga: 0 / 600 / 0
+        => A = 300 / 600 / 400
+        """
+        product = self.create_product("Strict Case 3")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("300.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("400.00"),
+            }],
+            user=self.superuser,
+        )
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("0.00"),
+                "selling_price": Decimal("600.00"),
+                "wholesale_price": Decimal("0.00"),
+            }],
+            user=self.superuser,
+        )
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("600.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("400.00"))
+
+    def test_strict_case_4_transfer_carries_prices_to_b(self):
+        """
+        CASE 4:
+        A: 300 / 500 / 400
+        B: 100 / 200 / 150
+        A -> B transfer
+        => A = 300 / 500 / 400
+        => B = 300 / 500 / 400
+        """
+        product = self.create_product("Strict Case 4")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_b,
+            items=[{
+                "product": product,
+                "quantity": Decimal("5"),
+                "purchase_price": Decimal("100.00"),
+                "selling_price": Decimal("200.00"),
+                "wholesale_price": Decimal("150.00"),
+            }],
+            user=self.superuser,
+        )
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("20"),
+                "purchase_price": Decimal("300.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("400.00"),
+            }],
+            user=self.superuser,
+        )
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("5"))
+
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("400.00"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("400.00"))
+
+    def test_strict_case_5_old_888_wholesale_overwritten_by_transfer(self):
+        """
+        CASE 5:
+        B ga eski 888 wholesale bo'lgan batch mavjud.
+        A -> B: 300 / 500 / 400
+        => B wholesale = 400
+        888 QAT'IYAN chiqmasin.
+        """
+        product = self.create_product("Strict Case 5")
+        # Old entry in B with 888 wholesale
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_b,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("56.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("888.00"),
+            }],
+            user=self.superuser,
+        )
+        # Entry in A with 300 / 500 / 400
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("20"),
+                "purchase_price": Decimal("300.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("400.00"),
+            }],
+            user=self.superuser,
+        )
+        # Transfer A -> B
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("5"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("400.00"))
+        self.assertNotEqual(Decimal(str(item_b["wholesale_price"])), Decimal("888.00"))
+
+    def test_strict_case_6_ten_entries_latest_wins(self):
+        """
+        CASE 6:
+        A ga 10 marta yangi StockEntry qil.
+        Har safar boshqa 3 ta narx ber.
+        Oxirgi entry: 777 / 999 / 555
+        => A Product List: 777 / 999 / 555
+        """
+        product = self.create_product("Strict Case 6")
+        for i in range(1, 10):
+            StockEntryService.create_entry(
+                supplier=self.supplier,
+                store=self.store_a,
+                items=[{
+                    "product": product,
+                    "quantity": Decimal("5"),
+                    "purchase_price": Decimal(f"{100 + i * 10}.00"),
+                    "selling_price": Decimal(f"{200 + i * 10}.00"),
+                    "wholesale_price": Decimal(f"{150 + i * 10}.00"),
+                }],
+                user=self.superuser,
+            )
+        # 10th entry: 777 / 999 / 555
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("5"),
+                "purchase_price": Decimal("777.00"),
+                "selling_price": Decimal("999.00"),
+                "wholesale_price": Decimal("555.00"),
+            }],
+            user=self.superuser,
+        )
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("555.00"))
+
+    def test_strict_case_7_entry_then_transfer_both_correct(self):
+        """
+        CASE 7:
+        A ga yangi entry: 777 / 999 / 555
+        keyin A -> B transfer.
+        => A o'zgarmaydi (777 / 999 / 555)
+        => B = 777 / 999 / 555
+        """
+        product = self.create_product("Strict Case 7")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("20"),
+                "purchase_price": Decimal("777.00"),
+                "selling_price": Decimal("999.00"),
+                "wholesale_price": Decimal("555.00"),
+            }],
+            user=self.superuser,
+        )
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("5"))
+
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("555.00"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_strict_case_8_no_hybrid_pricing_on_transfer(self):
+        """
+        CASE 8:
+        B da boshqa eski batch: purchase=56, selling=500, wholesale=888
+        A dan yangi transfer: 777 / 999 / 555
+        => B = 777 / 999 / 555
+        => eski 56/500/888 hybrid bo'lmasin.
+        """
+        product = self.create_product("Strict Case 8")
+        # Old B entry: 56 / 500 / 888
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_b,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("56.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("888.00"),
+            }],
+            user=self.superuser,
+        )
+        # New A entry: 777 / 999 / 555
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("20"),
+                "purchase_price": Decimal("777.00"),
+                "selling_price": Decimal("999.00"),
+                "wholesale_price": Decimal("555.00"),
+            }],
+            user=self.superuser,
+        )
+        # Transfer A -> B
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("5"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_strict_case_9_historical_cogs_untouched(self):
+        """
+        CASE 9:
+        Tarixiy sale: COGS = 100
+        25 kundan keyin yangi entry: purchase=150
+        => eski SaleItem.purchase_price = 100 qolishi kerak.
+        => yangi sotuv 150 tannarx bilan hisoblanishi kerak.
+        """
+        product = self.create_product("Strict Case 9")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("100.00"),
+                "selling_price": Decimal("200.00"),
+                "wholesale_price": Decimal("150.00"),
+            }],
+            user=self.superuser,
+        )
+        sale_1 = SaleService.create_sale(
+            user=self.superuser,
+            data={
+                "store": self.store_a.id,
+                "items": [{"product": product.id, "quantity": 2, "price": Decimal("200.00")}],
+                "payments": [{"type": "cash", "amount": Decimal("400.00")}],
+            },
+        )
+        sale_item_1 = sale_1.items.get(product=product)
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+
+        # 25 kundan keyin yangi kirim: cost = 150
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("150.00"),
+                "selling_price": Decimal("300.00"),
+                "wholesale_price": Decimal("250.00"),
+            }],
+            user=self.superuser,
+        )
+        # Old sale item remains 100
+        sale_item_1.refresh_from_db()
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+
+        # Exhaust old 8 units
+        SaleService.create_sale(
+            user=self.superuser,
+            data={
+                "store": self.store_a.id,
+                "items": [{"product": product.id, "quantity": 8, "price": Decimal("300.00")}],
+                "payments": [{"type": "cash", "amount": Decimal("2400.00")}],
+            },
+        )
+        # New sale from new lot @ 150
+        sale_3 = SaleService.create_sale(
+            user=self.superuser,
+            data={
+                "store": self.store_a.id,
+                "items": [{"product": product.id, "quantity": 3, "price": Decimal("300.00")}],
+                "payments": [{"type": "cash", "amount": Decimal("900.00")}],
+            },
+        )
+        sale_item_3 = sale_3.items.get(product=product)
+        self.assertEqual(sale_item_3.purchase_price, Decimal("150.00"))
+        sale_item_1.refresh_from_db()
+        self.assertEqual(sale_item_1.purchase_price, Decimal("100.00"))
+
+    def test_strict_case_10_sale_after_transfer(self):
+        """
+        CASE 10:
+        Transferdan keyin sale.
+        Transfer orqali B ga: purchase=150, selling=300, wholesale=220
+        B da sale qil.
+        Tekshir:
+        - sale price = 300
+        - COGS tarixiy lot/source cost asosida
+        - Product List price = 150/300/220
+        - tarixiy old sale'lar o'zgarmasin.
+        """
+        product = self.create_product("Strict Case 10")
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("20"),
+                "purchase_price": Decimal("150.00"),
+                "selling_price": Decimal("300.00"),
+                "wholesale_price": Decimal("220.00"),
+            }],
+            user=self.superuser,
+        )
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("10"))
+
+        sale_b = SaleService.create_sale(
+            user=self.superuser,
+            data={
+                "store": self.store_b.id,
+                "items": [{"product": product.id, "quantity": 2, "price": Decimal("300.00")}],
+                "payments": [{"type": "cash", "amount": Decimal("600.00")}],
+            },
+        )
+        sale_item_b = sale_b.items.get(product=product)
+        self.assertEqual(sale_item_b.purchase_price, Decimal("150.00"))
+        self.assertEqual(sale_item_b.unit_price, Decimal("300.00"))
+
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("300.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("220.00"))
+
+    def test_strict_universal_zajim_regression(self):
+        """
+        REGRESSION TEST:
+        Universal zajim / A04647 simulation:
+        Old StockEntry: 2026-05-20 (purchase=56, selling=500, wholesale=0) in Warehouse A.
+        Later transfer: 2026-06-18 (56 / 500) to Retail B with old batch wholesale 888.
+        New StockEntry in A: 777 / 999 / 555.
+        Verify:
+        - All stores shows 777 / 999 / 555 (authoritative latest StockEntry, no 888 hybrid).
+        - Store A shows 777 / 999 / 555.
+        - Transfer to B updates B to 777 / 999 / 555 completely.
+        """
+        product = self.create_product("Universal Zajim Regression")
+        # Step 1: May 2026 old entry
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("10"),
+                "purchase_price": Decimal("56.00"),
+                "selling_price": Decimal("500.00"),
+                "wholesale_price": Decimal("0.00"),
+            }],
+            user=self.superuser,
+        )
+        # B had old batch with 888
+        batch_b = StockAllocationService._sync_product_batch(self.store_b, product)
+        batch_b.purchase_price = Decimal("56.00")
+        batch_b.selling_price = Decimal("500.00")
+        batch_b.wholesale_price = Decimal("888.00")
+        batch_b.save()
+
+        # Step 2: June 2026 transfer
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("10"))
+
+        # Step 3: New entry in A: 777 / 999 / 555
+        StockEntryService.create_entry(
+            supplier=self.supplier,
+            store=self.store_a,
+            items=[{
+                "product": product,
+                "quantity": Decimal("50"),
+                "purchase_price": Decimal("777.00"),
+                "selling_price": Decimal("999.00"),
+                "wholesale_price": Decimal("555.00"),
+            }],
+            user=self.superuser,
+        )
+
+        # Global (store_id=None) must be latest StockEntry: 777 / 999 / 555 (NOT old transfer or 888 batch)
+        api_all = self.get_api_product_list(store_id=None, search=product.name)
+        item_all = next(p for p in api_all["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_all["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_all["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_all["wholesale_price"])), Decimal("555.00"))
+
+        # Store A: 777 / 999 / 555
+        api_a = self.get_api_product_list(store_id=self.store_a.id, search=product.name)
+        item_a = next(p for p in api_a["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_a["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_a["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_a["wholesale_price"])), Decimal("555.00"))
+
+        # When new transfer is made A -> B:
+        self.transfer(from_store=self.store_a, to_store=self.store_b, product=product, quantity=Decimal("5"))
+        api_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in api_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+        self.assertNotEqual(Decimal(str(item_b["wholesale_price"])), Decimal("888.00"))
+
 

@@ -760,17 +760,46 @@ class StockAllocationService:
         # 2. Synchronize destination ProductBatch
         batch = cls._sync_product_batch(to_store, target_product)
 
-        # 3. Synchronize destination ProductBatch current retail selling price & wholesale price from transfer
+        # 3. Synchronize destination ProductBatch prices (purchase, selling, wholesale) from transfer source
         if created_in_allocations:
             latest_dest_lot = created_in_allocations[-1].lot
-            inherited_selling = latest_dest_lot.resolve_selling_price()
-            if not inherited_selling or inherited_selling <= Decimal("0.00"):
-                if transfer_item and transfer_item.selling_price and transfer_item.selling_price > Decimal("0.00"):
-                    inherited_selling = transfer_item.selling_price
+            from_store = transfer_item.stock_transfer.from_store if transfer_item and transfer_item.stock_transfer_id else None
+            from_batch = ProductBatch.objects.filter(store=from_store, product=target_product).first() if from_store else None
 
-            inherited_wholesale = latest_dest_lot.resolve_wholesale_price()
+            # Purchase display price: transfer_item -> source batch -> source lot
+            inherited_purchase = None
+            if transfer_item and transfer_item.purchase_price and transfer_item.purchase_price > Decimal("0.00"):
+                inherited_purchase = transfer_item.purchase_price
+            elif from_batch and from_batch.purchase_price and from_batch.purchase_price > Decimal("0.00"):
+                inherited_purchase = from_batch.purchase_price
+            elif latest_dest_lot.purchase_price and latest_dest_lot.purchase_price > Decimal("0.00"):
+                inherited_purchase = latest_dest_lot.purchase_price
+
+            # Selling display price: transfer_item -> source batch -> source lot
+            inherited_selling = None
+            if transfer_item and transfer_item.selling_price and transfer_item.selling_price > Decimal("0.00"):
+                inherited_selling = transfer_item.selling_price
+            elif from_batch and from_batch.selling_price and from_batch.selling_price > Decimal("0.00"):
+                inherited_selling = from_batch.selling_price
+            else:
+                inherited_selling = latest_dest_lot.resolve_selling_price()
+
+            # Wholesale display price: source batch -> source lot
+            inherited_wholesale = None
+            if from_batch and from_batch.wholesale_price and from_batch.wholesale_price > Decimal("0.00"):
+                inherited_wholesale = from_batch.wholesale_price
+            else:
+                inherited_wholesale = latest_dest_lot.resolve_wholesale_price()
+
+            if inherited_wholesale and inherited_wholesale > Decimal("0.00"):
+                latest_dest_lot._wholesale_price = inherited_wholesale
 
             up_fields = []
+            if inherited_purchase is not None and inherited_purchase > Decimal("0.00"):
+                if batch.purchase_price != inherited_purchase:
+                    batch.purchase_price = inherited_purchase
+                    up_fields.append("purchase_price")
+
             if inherited_selling is not None and inherited_selling > Decimal("0.00"):
                 if batch.selling_price != inherited_selling:
                     batch.selling_price = inherited_selling
@@ -780,13 +809,6 @@ class StockAllocationService:
                 if batch.wholesale_price != inherited_wholesale:
                     batch.wholesale_price = inherited_wholesale
                     up_fields.append("wholesale_price")
-
-            if not had_prior_active_stock:
-                inherited_purchase = latest_dest_lot.purchase_price
-                if inherited_purchase is not None and inherited_purchase > Decimal("0.00"):
-                    if batch.purchase_price != inherited_purchase:
-                        batch.purchase_price = inherited_purchase
-                        up_fields.append("purchase_price")
 
             if up_fields:
                 batch.save(update_fields=up_fields)

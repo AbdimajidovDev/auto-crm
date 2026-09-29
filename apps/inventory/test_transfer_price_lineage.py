@@ -298,12 +298,12 @@ class TransferPriceLineageTests(TestCase):
         self.assertEqual(dest_lot.purchase_price, Decimal("150000.00"))
         self.assertEqual(dest_lot.selling_price, Decimal("180000.00"))
 
-        # Batch in Store B
+        # Batch in Store B price state transitions to transferred lot prices (Rule #2)
+        # while old lot historical cost remains intact on lot_b_old (Rule #8)
         batch_b = ProductBatch.objects.get(store=self.store_b, product=product)
         self.assertEqual(batch_b.quantity, Decimal("25.00"))
-        # Crucial: Old lot historical cost must NOT be overwritten!
-        self.assertEqual(batch_b.purchase_price, Decimal("100000.00"))
-        # But current selling price in Store B transitions to new transfer selling price!
+        self.assertEqual(batch_b.purchase_price, Decimal("150000.00"))
+        # And current selling price in Store B transitions to new transfer selling price!
         self.assertEqual(batch_b.selling_price, Decimal("180000.00"))
 
         # Active price resolver in Store B returns the new active retail price

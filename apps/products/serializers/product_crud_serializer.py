@@ -278,7 +278,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                 else:
                     res = {"purchase_price": None, "selling_price": None, "wholesale_price": None}
         else:
-            # All stores: latest global stock-in event
+            # All stores: latest global stock-in event (authoritative StockEntry)
             sei = (
                 StockEntryItem.objects.filter(
                     product_id=product.id,
@@ -287,37 +287,7 @@ class ProductListSerializer(serializers.ModelSerializer):
                 .order_by("-entry__created_at", "-id")
                 .first()
             )
-            sti = (
-                StockTransferItem.objects.filter(
-                    product_id=product.id,
-                    stock_transfer__status="a",
-                    selling_price__gt=0,
-                )
-                .order_by("-stock_transfer__approved_at", "-id")
-                .first()
-            )
-
-            winner = None
-            if sei and sti:
-                t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
-                e_time = sei.entry.created_at
-                winner = sti if t_time and e_time and t_time > e_time else sei
-            elif sti:
-                winner = sti
-            elif sei:
-                winner = sei
-
-            if winner and winner == sti:
-                dest_batch = ProductBatch.objects.filter(
-                    product_id=product.id,
-                    store_id=sti.stock_transfer.to_store_id,
-                ).first()
-                res = {
-                    "purchase_price": sti.purchase_price,
-                    "selling_price": sti.selling_price,
-                    "wholesale_price": dest_batch.wholesale_price if dest_batch else None,
-                }
-            elif winner and winner == sei:
+            if sei:
                 res = {
                     "purchase_price": sei.purchase_price,
                     "selling_price": sei.selling_price,

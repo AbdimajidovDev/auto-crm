@@ -210,31 +210,74 @@ def annotate_latest_selling_price(queryset, store_id=None):
             store_id=target_store_id,
             is_active=True,
             selling_price__gt=0,
-        )
+        ).order_by("-updated_at", "-id")
 
         t_ws = Subquery(
             ProductBatch.objects.filter(
                 product_id=OuterRef("pk"),
                 store_id=target_store_id,
-            ).values("wholesale_price")[:1]
+            ).order_by("-updated_at", "-id").values("wholesale_price")[:1]
+        )
+
+        e_time = Subquery(sei_qs.values("entry__created_at")[:1])
+        e_purchase = Subquery(sei_qs.values("purchase_price")[:1])
+        e_selling = Subquery(sei_qs.values("selling_price")[:1])
+        e_wholesale = Subquery(sei_qs.values("wholesale_price")[:1])
+
+        t_time = Subquery(sti_qs.values("t_effective_time")[:1])
+        t_purchase = Subquery(sti_qs.values("purchase_price")[:1])
+        t_selling = Subquery(sti_qs.values("selling_price")[:1])
+
+        b_purchase = Subquery(b_qs.values("purchase_price")[:1])
+        b_selling = Subquery(b_qs.values("selling_price")[:1])
+        b_wholesale = Subquery(b_qs.values("wholesale_price")[:1])
+
+        return queryset.annotate(
+            _latest_e_time=e_time,
+            _latest_e_purchase=e_purchase,
+            _latest_e_selling=e_selling,
+            _latest_e_wholesale=e_wholesale,
+            _latest_t_time=t_time,
+            _latest_t_purchase=t_purchase,
+            _latest_t_selling=t_selling,
+            _latest_t_wholesale=t_ws,
+            _latest_b_purchase=b_purchase,
+            _latest_b_selling=b_selling,
+            _latest_b_wholesale=b_wholesale,
+        ).annotate(
+            latest_purchase_price=Case(
+                When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_purchase")),
+                When(_latest_e_time__isnull=False, then=F("_latest_e_purchase")),
+                When(_latest_t_time__isnull=False, then=F("_latest_t_purchase")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_purchase")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            latest_selling_price=Case(
+                When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_selling")),
+                When(_latest_e_time__isnull=False, then=F("_latest_e_selling")),
+                When(_latest_t_time__isnull=False, then=F("_latest_t_selling")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_selling")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            latest_wholesale_price=Case(
+                When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_wholesale")),
+                When(_latest_e_time__isnull=False, then=F("_latest_e_wholesale")),
+                When(_latest_t_time__isnull=False, then=F("_latest_t_wholesale")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_wholesale")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
         )
     else:
+        # All stores (store_id=None):
+        # Global narxlar uchun authoritative manba — yetkazib beruvchidan qilingan eng oxirgi StockEntryItem.
+        # Do'konlararo ichki transfer global narx ustidan ustun kelmasligi va uni buzmasligi kerak.
         sei_qs = StockEntryItem.objects.filter(
             product_id=OuterRef("pk"),
             selling_price__gt=0,
         ).order_by("-entry__created_at", "-id")
-
-        sti_qs = (
-            StockTransferItem.objects.filter(
-                product_id=OuterRef("pk"),
-                stock_transfer__status="a",
-                selling_price__gt=0,
-            )
-            .annotate(
-                t_effective_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
-            )
-            .order_by("-t_effective_time", "-id")
-        )
 
         b_qs = ProductBatch.objects.filter(
             product_id=OuterRef("pk"),
@@ -242,68 +285,43 @@ def annotate_latest_selling_price(queryset, store_id=None):
             selling_price__gt=0,
         ).order_by("-updated_at", "-id")
 
-        t_ws = Subquery(
-            sti_qs.annotate(
-                ws_price=Subquery(
-                    ProductBatch.objects.filter(
-                        product_id=OuterRef("product_id"),
-                        store_id=OuterRef("stock_transfer__to_store_id"),
-                    ).values("wholesale_price")[:1]
-                )
-            ).values("ws_price")[:1]
+        e_time = Subquery(sei_qs.values("entry__created_at")[:1])
+        e_purchase = Subquery(sei_qs.values("purchase_price")[:1])
+        e_selling = Subquery(sei_qs.values("selling_price")[:1])
+        e_wholesale = Subquery(sei_qs.values("wholesale_price")[:1])
+
+        b_purchase = Subquery(b_qs.values("purchase_price")[:1])
+        b_selling = Subquery(b_qs.values("selling_price")[:1])
+        b_wholesale = Subquery(b_qs.values("wholesale_price")[:1])
+
+        return queryset.annotate(
+            _latest_e_time=e_time,
+            _latest_e_purchase=e_purchase,
+            _latest_e_selling=e_selling,
+            _latest_e_wholesale=e_wholesale,
+            _latest_b_purchase=b_purchase,
+            _latest_b_selling=b_selling,
+            _latest_b_wholesale=b_wholesale,
+        ).annotate(
+            latest_purchase_price=Case(
+                When(_latest_e_time__isnull=False, then=F("_latest_e_purchase")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_purchase")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            latest_selling_price=Case(
+                When(_latest_e_time__isnull=False, then=F("_latest_e_selling")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_selling")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+            latest_wholesale_price=Case(
+                When(_latest_e_time__isnull=False, then=F("_latest_e_wholesale")),
+                When(_latest_b_selling__isnull=False, then=F("_latest_b_wholesale")),
+                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
         )
-
-    e_time = Subquery(sei_qs.values("entry__created_at")[:1])
-    e_purchase = Subquery(sei_qs.values("purchase_price")[:1])
-    e_selling = Subquery(sei_qs.values("selling_price")[:1])
-    e_wholesale = Subquery(sei_qs.values("wholesale_price")[:1])
-
-    t_time = Subquery(sti_qs.values("t_effective_time")[:1])
-    t_purchase = Subquery(sti_qs.values("purchase_price")[:1])
-    t_selling = Subquery(sti_qs.values("selling_price")[:1])
-
-    b_purchase = Subquery(b_qs.values("purchase_price")[:1])
-    b_selling = Subquery(b_qs.values("selling_price")[:1])
-    b_wholesale = Subquery(b_qs.values("wholesale_price")[:1])
-
-    return queryset.annotate(
-        _latest_e_time=e_time,
-        _latest_e_purchase=e_purchase,
-        _latest_e_selling=e_selling,
-        _latest_e_wholesale=e_wholesale,
-        _latest_t_time=t_time,
-        _latest_t_purchase=t_purchase,
-        _latest_t_selling=t_selling,
-        _latest_t_wholesale=t_ws,
-        _latest_b_purchase=b_purchase,
-        _latest_b_selling=b_selling,
-        _latest_b_wholesale=b_wholesale,
-    ).annotate(
-        latest_purchase_price=Case(
-            When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_purchase")),
-            When(_latest_e_time__isnull=False, then=F("_latest_e_purchase")),
-            When(_latest_t_time__isnull=False, then=F("_latest_t_purchase")),
-            When(_latest_b_selling__isnull=False, then=F("_latest_b_purchase")),
-            default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
-            output_field=DecimalField(max_digits=12, decimal_places=2),
-        ),
-        latest_selling_price=Case(
-            When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_selling")),
-            When(_latest_e_time__isnull=False, then=F("_latest_e_selling")),
-            When(_latest_t_time__isnull=False, then=F("_latest_t_selling")),
-            When(_latest_b_selling__isnull=False, then=F("_latest_b_selling")),
-            default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
-            output_field=DecimalField(max_digits=12, decimal_places=2),
-        ),
-        latest_wholesale_price=Case(
-            When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_wholesale")),
-            When(_latest_e_time__isnull=False, then=F("_latest_e_wholesale")),
-            When(_latest_t_time__isnull=False, then=F("_latest_t_wholesale")),
-            When(_latest_b_selling__isnull=False, then=F("_latest_b_wholesale")),
-            default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
-            output_field=DecimalField(max_digits=12, decimal_places=2),
-        ),
-    )
 
 
 annotate_latest_prices = annotate_latest_selling_price

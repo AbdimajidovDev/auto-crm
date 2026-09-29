@@ -104,9 +104,17 @@ class StockEntryService:
         for item in items:
             product = item["product"]
             qty = item["quantity"]
-            p_price = item["purchase_price"]
-            s_price = item["selling_price"]
-            w_price = item["wholesale_price"]
+            p_price = Decimal(str(item["purchase_price"])) if item.get("purchase_price") is not None else Decimal("0.00")
+            s_price = Decimal(str(item["selling_price"])) if item.get("selling_price") is not None else Decimal("0.00")
+            w_price = Decimal(str(item["wholesale_price"])) if item.get("wholesale_price") is not None else Decimal("0.00")
+
+            eb = existing_batches.get(product.id)
+            if p_price <= Decimal("0.00") and eb and eb.purchase_price and eb.purchase_price > Decimal("0.00"):
+                p_price = eb.purchase_price
+            if s_price <= Decimal("0.00") and eb and eb.selling_price and eb.selling_price > Decimal("0.00"):
+                s_price = eb.selling_price
+            if w_price <= Decimal("0.00") and eb and eb.wholesale_price and eb.wholesale_price > Decimal("0.00"):
+                w_price = eb.wholesale_price
 
             item_objs.append(
                 StockEntryItem(
@@ -121,10 +129,12 @@ class StockEntryService:
 
             if product.id in merged:
                 merged[product.id]["quantity"] += qty
-                # Narxlar oxirgi qator bo'yicha yangilanadi (avvalgi xatti-harakat)
-                merged[product.id].update(
-                    purchase_price=p_price, selling_price=s_price, wholesale_price=w_price
-                )
+                if p_price > Decimal("0.00"):
+                    merged[product.id]["purchase_price"] = p_price
+                if s_price > Decimal("0.00"):
+                    merged[product.id]["selling_price"] = s_price
+                if w_price > Decimal("0.00"):
+                    merged[product.id]["wholesale_price"] = w_price
             else:
                 merged[product.id] = {
                     "product": product,
@@ -157,13 +167,24 @@ class StockEntryService:
         ]
         StockLot.objects.bulk_create(stock_lots)
 
-        # 4. ProductBatch kesh agregatini sinxronlashtirish va narxlarni yangilash
+        # 4. ProductBatch kesh agregatini sinxronlashtirish va narxlarni yangilash (0 qoidasi bilan)
         for product_id, data in merged.items():
             batch = StockAllocationService._sync_product_batch(store, data["product"])
-            batch.purchase_price = data["purchase_price"]
-            batch.selling_price = data["selling_price"]
-            batch.wholesale_price = data["wholesale_price"]
-            batch.save(update_fields=["purchase_price", "selling_price", "wholesale_price"])
+            up_fields = []
+            if data["purchase_price"] is not None and data["purchase_price"] > Decimal("0.00"):
+                if batch.purchase_price != data["purchase_price"]:
+                    batch.purchase_price = data["purchase_price"]
+                    up_fields.append("purchase_price")
+            if data["selling_price"] is not None and data["selling_price"] > Decimal("0.00"):
+                if batch.selling_price != data["selling_price"]:
+                    batch.selling_price = data["selling_price"]
+                    up_fields.append("selling_price")
+            if data["wholesale_price"] is not None and data["wholesale_price"] > Decimal("0.00"):
+                if batch.wholesale_price != data["wholesale_price"]:
+                    batch.wholesale_price = data["wholesale_price"]
+                    up_fields.append("wholesale_price")
+            if up_fields:
+                batch.save(update_fields=up_fields)
 
         # Qarzdorlik — debt_amount endi entry.save() ichida hisoblangan
         if entry.debt_amount > 0:
