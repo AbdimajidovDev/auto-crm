@@ -133,9 +133,10 @@ class TransferPriceLineageTests(TestCase):
         )
         with transaction.atomic():
             batch = StockAllocationService._sync_product_batch(store, product)
+            batch.purchase_price = purchase_price
             batch.selling_price = selling_price
             batch.wholesale_price = wholesale_price or (selling_price * Decimal("0.9"))
-            batch.save(update_fields=["selling_price", "wholesale_price"])
+            batch.save(update_fields=["purchase_price", "selling_price", "wholesale_price"])
         return lot, item
 
     def create_transfer_item(self, from_store, to_store, product, quantity):
@@ -145,12 +146,13 @@ class TransferPriceLineageTests(TestCase):
             status=StockTransfer.Status.APPROVED,
             created_by=self.superuser,
         )
+        from_batch = ProductBatch.objects.filter(store=from_store, product=product).first()
         return StockTransferItem.objects.create(
             stock_transfer=transfer,
             product=product,
             quantity=quantity,
-            purchase_price=Decimal("0.00"),
-            selling_price=Decimal("0.00"),
+            purchase_price=from_batch.purchase_price if from_batch else Decimal("0.00"),
+            selling_price=from_batch.selling_price if from_batch else Decimal("0.00"),
         )
 
     # 1. source yangi narxdagi lot -> destination yangi lot narxni oladi
@@ -523,10 +525,10 @@ class TransferPriceLineageTests(TestCase):
             StockAllocationService.resolve_selling_price(self.store_a, product),
             Decimal("38000.00"),
         )
-        # Store B active price is 30 000
+        # Store B active price is 38 000 (transferred from Store A display selling price)
         self.assertEqual(
             StockAllocationService.resolve_selling_price(self.store_b, product),
-            Decimal("30000.00"),
+            Decimal("38000.00"),
         )
 
     # 8. destination sale uses correct price and FIFO cost

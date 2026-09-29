@@ -1740,7 +1740,7 @@ class ProductListTransferPriceCasesTests(TestCase):
             store=self.store_a,
             items=[{
                 "product": product,
-                "quantity": Decimal("10"),
+                "quantity": Decimal("100"),
                 "purchase_price": Decimal("56.00"),
                 "selling_price": Decimal("500.00"),
                 "wholesale_price": Decimal("0.00"),

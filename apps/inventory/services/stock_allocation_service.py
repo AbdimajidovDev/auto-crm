@@ -195,11 +195,8 @@ class StockAllocationService:
                     active_selling = active_lot.resolve_selling_price()
                     active_wholesale = active_lot.resolve_wholesale_price()
 
-                    if active_purchase is not None and active_purchase > Decimal("0.00"):
-                        if batch.purchase_price != active_purchase:
-                            batch.purchase_price = active_purchase
-                            update_fields.append("purchase_price")
-                    elif batch.purchase_price == Decimal("0.00") and active_purchase is not None:
+                    # Maintain existing positive current store purchase price; only initialize if 0.00
+                    if batch.purchase_price == Decimal("0.00") and active_purchase is not None and active_purchase > Decimal("0.00"):
                         batch.purchase_price = active_purchase
                         update_fields.append("purchase_price")
 
@@ -651,27 +648,11 @@ class StockAllocationService:
             item_kwargs={"transfer_item": transfer_item},
         )
 
-        # Synchronize transfer_item price snapshot to match actual allocated FIFO lots
-        if transfer_item and allocations:
-            total_qty = sum((a.quantity for a in allocations), Decimal("0.00"))
-            if total_qty > Decimal("0.00"):
-                total_cost = sum((a.quantity * a.unit_cost for a in allocations), Decimal("0.00"))
-                avg_cost = (total_cost / total_qty).quantize(Decimal("0.01"))
-                total_selling = sum((a.quantity * a.lot.resolve_selling_price() for a in allocations), Decimal("0.00"))
-                avg_selling = (total_selling / total_qty).quantize(Decimal("0.01"))
-                if avg_selling <= Decimal("0.00"):
-                    if transfer_item.selling_price and transfer_item.selling_price > Decimal("0.00"):
-                        avg_selling = transfer_item.selling_price
-                    else:
-                        from_batch = ProductBatch.objects.filter(store=source_store, product=target_product).first()
-                        if from_batch and from_batch.selling_price:
-                            avg_selling = from_batch.selling_price
-
-                if transfer_item.purchase_price != avg_cost or transfer_item.selling_price != avg_selling:
-                    transfer_item.purchase_price = avg_cost
-                    transfer_item.selling_price = avg_selling
-                    transfer_item.save(update_fields=["purchase_price", "selling_price"])
-
+        # Note: StockTransferItem.purchase_price and selling_price are display price snapshots
+        # captured at transfer creation from the source store's ProductBatch.
+        # They must NEVER be overwritten with FIFO lot acquisition costs.
+        # Actual accounting FIFO costs are authoritatively tracked on StockAllocation.unit_cost
+        # and destination StockLot.purchase_price.
         return allocations
 
     # =========================================================================
@@ -766,14 +747,12 @@ class StockAllocationService:
             from_store = transfer_item.stock_transfer.from_store if transfer_item and transfer_item.stock_transfer_id else None
             from_batch = ProductBatch.objects.filter(store=from_store, product=target_product).first() if from_store else None
 
-            # Purchase display price: transfer_item -> source batch -> source lot
+            # Purchase display price: transfer_item -> source batch (never from FIFO lot cost)
             inherited_purchase = None
             if transfer_item and transfer_item.purchase_price and transfer_item.purchase_price > Decimal("0.00"):
                 inherited_purchase = transfer_item.purchase_price
             elif from_batch and from_batch.purchase_price and from_batch.purchase_price > Decimal("0.00"):
                 inherited_purchase = from_batch.purchase_price
-            elif latest_dest_lot.purchase_price and latest_dest_lot.purchase_price > Decimal("0.00"):
-                inherited_purchase = latest_dest_lot.purchase_price
 
             # Selling display price: transfer_item -> source batch -> source lot
             inherited_selling = None
