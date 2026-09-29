@@ -262,10 +262,26 @@ class ProductListSerializer(serializers.ModelSerializer):
                     "wholesale_price": ws,
                 }
             elif winner and winner == sei:
+                ws = sei.wholesale_price
+                if not ws or ws <= Decimal("0.00"):
+                    ws_sei = (
+                        StockEntryItem.objects.filter(
+                            product_id=product.id,
+                            entry__store_id=store_id,
+                            wholesale_price__gt=0,
+                        )
+                        .order_by("-entry__created_at", "-id")
+                        .first()
+                    )
+                    if ws_sei:
+                        ws = ws_sei.wholesale_price
+                    else:
+                        dest_batch = self._get_scoped_batch(product)
+                        ws = dest_batch.wholesale_price if dest_batch and dest_batch.wholesale_price and dest_batch.wholesale_price > Decimal("0.00") else None
                 res = {
                     "purchase_price": sei.purchase_price,
                     "selling_price": sei.selling_price,
-                    "wholesale_price": sei.wholesale_price,
+                    "wholesale_price": ws,
                 }
             else:
                 batch = self._get_scoped_batch(product)
@@ -288,10 +304,25 @@ class ProductListSerializer(serializers.ModelSerializer):
                 .first()
             )
             if sei:
+                ws = sei.wholesale_price
+                if not ws or ws <= Decimal("0.00"):
+                    ws_sei = (
+                        StockEntryItem.objects.filter(
+                            product_id=product.id,
+                            wholesale_price__gt=0,
+                        )
+                        .order_by("-entry__created_at", "-id")
+                        .first()
+                    )
+                    if ws_sei:
+                        ws = ws_sei.wholesale_price
+                    else:
+                        ws_b = product.batches.filter(wholesale_price__gt=0).order_by("-updated_at", "-id").first() if hasattr(product, "batches") else None
+                        ws = ws_b.wholesale_price if ws_b else None
                 res = {
                     "purchase_price": sei.purchase_price,
                     "selling_price": sei.selling_price,
-                    "wholesale_price": sei.wholesale_price,
+                    "wholesale_price": ws,
                 }
             else:
                 b = None

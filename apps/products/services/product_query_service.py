@@ -192,6 +192,12 @@ def annotate_latest_selling_price(queryset, store_id=None):
             selling_price__gt=0,
         ).order_by("-entry__created_at", "-id")
 
+        sei_ws_qs = StockEntryItem.objects.filter(
+            product_id=OuterRef("pk"),
+            entry__store_id=target_store_id,
+            wholesale_price__gt=0,
+        ).order_by("-entry__created_at", "-id")
+
         sti_qs = (
             StockTransferItem.objects.filter(
                 product_id=OuterRef("pk"),
@@ -212,17 +218,19 @@ def annotate_latest_selling_price(queryset, store_id=None):
             selling_price__gt=0,
         ).order_by("-updated_at", "-id")
 
-        t_ws = Subquery(
-            ProductBatch.objects.filter(
-                product_id=OuterRef("pk"),
-                store_id=target_store_id,
-            ).order_by("-updated_at", "-id").values("wholesale_price")[:1]
-        )
+        b_ws_qs = ProductBatch.objects.filter(
+            product_id=OuterRef("pk"),
+            store_id=target_store_id,
+            is_active=True,
+            wholesale_price__gt=0,
+        ).order_by("-updated_at", "-id")
+
+        t_ws = Subquery(b_ws_qs.values("wholesale_price")[:1])
 
         e_time = Subquery(sei_qs.values("entry__created_at")[:1])
         e_purchase = Subquery(sei_qs.values("purchase_price")[:1])
         e_selling = Subquery(sei_qs.values("selling_price")[:1])
-        e_wholesale = Subquery(sei_qs.values("wholesale_price")[:1])
+        e_wholesale = Subquery(sei_ws_qs.values("wholesale_price")[:1])
 
         t_time = Subquery(sti_qs.values("t_effective_time")[:1])
         t_purchase = Subquery(sti_qs.values("purchase_price")[:1])
@@ -230,7 +238,7 @@ def annotate_latest_selling_price(queryset, store_id=None):
 
         b_purchase = Subquery(b_qs.values("purchase_price")[:1])
         b_selling = Subquery(b_qs.values("selling_price")[:1])
-        b_wholesale = Subquery(b_qs.values("wholesale_price")[:1])
+        b_wholesale = Subquery(b_ws_qs.values("wholesale_price")[:1])
 
         return queryset.annotate(
             _latest_e_time=e_time,
@@ -263,9 +271,9 @@ def annotate_latest_selling_price(queryset, store_id=None):
             ),
             latest_wholesale_price=Case(
                 When(_latest_t_time__isnull=False, _latest_e_time__isnull=False, _latest_t_time__gt=F("_latest_e_time"), then=F("_latest_t_wholesale")),
-                When(_latest_e_time__isnull=False, then=F("_latest_e_wholesale")),
-                When(_latest_t_time__isnull=False, then=F("_latest_t_wholesale")),
-                When(_latest_b_selling__isnull=False, then=F("_latest_b_wholesale")),
+                When(_latest_e_wholesale__isnull=False, then=F("_latest_e_wholesale")),
+                When(_latest_t_wholesale__isnull=False, then=F("_latest_t_wholesale")),
+                When(_latest_b_wholesale__isnull=False, then=F("_latest_b_wholesale")),
                 default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
@@ -279,20 +287,31 @@ def annotate_latest_selling_price(queryset, store_id=None):
             selling_price__gt=0,
         ).order_by("-entry__created_at", "-id")
 
+        sei_ws_qs = StockEntryItem.objects.filter(
+            product_id=OuterRef("pk"),
+            wholesale_price__gt=0,
+        ).order_by("-entry__created_at", "-id")
+
         b_qs = ProductBatch.objects.filter(
             product_id=OuterRef("pk"),
             is_active=True,
             selling_price__gt=0,
         ).order_by("-updated_at", "-id")
 
+        b_ws_qs = ProductBatch.objects.filter(
+            product_id=OuterRef("pk"),
+            is_active=True,
+            wholesale_price__gt=0,
+        ).order_by("-updated_at", "-id")
+
         e_time = Subquery(sei_qs.values("entry__created_at")[:1])
         e_purchase = Subquery(sei_qs.values("purchase_price")[:1])
         e_selling = Subquery(sei_qs.values("selling_price")[:1])
-        e_wholesale = Subquery(sei_qs.values("wholesale_price")[:1])
+        e_wholesale = Subquery(sei_ws_qs.values("wholesale_price")[:1])
 
         b_purchase = Subquery(b_qs.values("purchase_price")[:1])
         b_selling = Subquery(b_qs.values("selling_price")[:1])
-        b_wholesale = Subquery(b_qs.values("wholesale_price")[:1])
+        b_wholesale = Subquery(b_ws_qs.values("wholesale_price")[:1])
 
         return queryset.annotate(
             _latest_e_time=e_time,
@@ -316,8 +335,8 @@ def annotate_latest_selling_price(queryset, store_id=None):
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
             latest_wholesale_price=Case(
-                When(_latest_e_time__isnull=False, then=F("_latest_e_wholesale")),
-                When(_latest_b_selling__isnull=False, then=F("_latest_b_wholesale")),
+                When(_latest_e_wholesale__isnull=False, then=F("_latest_e_wholesale")),
+                When(_latest_b_wholesale__isnull=False, then=F("_latest_b_wholesale")),
                 default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),

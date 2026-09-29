@@ -109,12 +109,66 @@ class StockEntryService:
             w_price = Decimal(str(item["wholesale_price"])) if item.get("wholesale_price") is not None else Decimal("0.00")
 
             eb = existing_batches.get(product.id)
-            if p_price <= Decimal("0.00") and eb and eb.purchase_price and eb.purchase_price > Decimal("0.00"):
-                p_price = eb.purchase_price
-            if s_price <= Decimal("0.00") and eb and eb.selling_price and eb.selling_price > Decimal("0.00"):
-                s_price = eb.selling_price
-            if w_price <= Decimal("0.00") and eb and eb.wholesale_price and eb.wholesale_price > Decimal("0.00"):
-                w_price = eb.wholesale_price
+            if p_price <= Decimal("0.00"):
+                if eb and eb.purchase_price and eb.purchase_price > Decimal("0.00"):
+                    p_price = eb.purchase_price
+                else:
+                    prev_p = (
+                        StockEntryItem.objects.filter(
+                            product_id=product.id,
+                            purchase_price__gt=0,
+                        )
+                        .order_by("-entry__created_at", "-id")
+                        .values_list("purchase_price", flat=True)
+                        .first()
+                    )
+                    if prev_p and prev_p > Decimal("0.00"):
+                        p_price = prev_p
+
+            if s_price <= Decimal("0.00"):
+                if eb and eb.selling_price and eb.selling_price > Decimal("0.00"):
+                    s_price = eb.selling_price
+                else:
+                    prev_s = (
+                        StockEntryItem.objects.filter(
+                            product_id=product.id,
+                            selling_price__gt=0,
+                        )
+                        .order_by("-entry__created_at", "-id")
+                        .values_list("selling_price", flat=True)
+                        .first()
+                    )
+                    if prev_s and prev_s > Decimal("0.00"):
+                        s_price = prev_s
+
+            if w_price <= Decimal("0.00"):
+                if eb and eb.wholesale_price and eb.wholesale_price > Decimal("0.00"):
+                    w_price = eb.wholesale_price
+                else:
+                    prev_ws = (
+                        StockEntryItem.objects.filter(
+                            product_id=product.id,
+                            wholesale_price__gt=0,
+                        )
+                        .order_by("-entry__created_at", "-id")
+                        .values_list("wholesale_price", flat=True)
+                        .first()
+                    )
+                    if prev_ws and prev_ws > Decimal("0.00"):
+                        w_price = prev_ws
+                    else:
+                        prev_batch_ws = (
+                            ProductBatch.objects.filter(
+                                product_id=product.id,
+                                is_active=True,
+                                wholesale_price__gt=0,
+                            )
+                            .order_by("-updated_at", "-id")
+                            .values_list("wholesale_price", flat=True)
+                            .first()
+                        )
+                        if prev_batch_ws and prev_batch_ws > Decimal("0.00"):
+                            w_price = prev_batch_ws
 
             item_objs.append(
                 StockEntryItem(
