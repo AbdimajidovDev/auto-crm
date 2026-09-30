@@ -140,35 +140,65 @@ class StockEntryService:
                     )
                     if prev_s and prev_s > Decimal("0.00"):
                         s_price = prev_s
-
+            # yangi kod -------------------------------------------------------
             if w_price <= Decimal("0.00"):
-                if eb and eb.wholesale_price and eb.wholesale_price > Decimal("0.00"):
-                    w_price = eb.wholesale_price
-                else:
-                    prev_ws = (
-                        StockEntryItem.objects.filter(
+                previous_wholesale = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        entry__store_id=store.id,
+                        wholesale_price__gt=Decimal("0.00"),
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .values_list("wholesale_price", flat=True)
+                    .first()
+                )
+
+                if previous_wholesale is None:
+                    previous_wholesale = (
+                        ProductBatch.objects.filter(
                             product_id=product.id,
-                            wholesale_price__gt=0,
+                            store_id=store.id,
+                            is_active=True,
+                            wholesale_price__gt=Decimal("0.00"),
                         )
-                        .order_by("-entry__created_at", "-id")
+                        .order_by("-updated_at", "-id")
                         .values_list("wholesale_price", flat=True)
                         .first()
                     )
-                    if prev_ws and prev_ws > Decimal("0.00"):
-                        w_price = prev_ws
-                    else:
-                        prev_batch_ws = (
-                            ProductBatch.objects.filter(
-                                product_id=product.id,
-                                is_active=True,
-                                wholesale_price__gt=0,
-                            )
-                            .order_by("-updated_at", "-id")
-                            .values_list("wholesale_price", flat=True)
-                            .first()
-                        )
-                        if prev_batch_ws and prev_batch_ws > Decimal("0.00"):
-                            w_price = prev_batch_ws
+
+                if previous_wholesale is not None:
+                    w_price = previous_wholesale
+
+            # eski kod -------------------------------------------------------
+            # if w_price <= Decimal("0.00"):
+            #     if eb and eb.wholesale_price and eb.wholesale_price > Decimal("0.00"):
+            #         w_price = eb.wholesale_price
+            #     else:
+            #         prev_ws = (
+            #             StockEntryItem.objects.filter(
+            #                 product_id=product.id,
+            #                 wholesale_price__gt=0,
+            #             )
+            #             .order_by("-entry__created_at", "-id")
+            #             .values_list("wholesale_price", flat=True)
+            #             .first()
+            #         )
+            #         if prev_ws and prev_ws > Decimal("0.00"):
+            #             w_price = prev_ws
+            #         else:
+            #             prev_batch_ws = (
+            #                 ProductBatch.objects.filter(
+            #                     product_id=product.id,
+            #                     is_active=True,
+            #                     wholesale_price__gt=0,
+            #                 )
+            #                 .order_by("-updated_at", "-id")
+            #                 .values_list("wholesale_price", flat=True)
+            #                 .first()
+            #             )
+            #             if prev_batch_ws and prev_batch_ws > Decimal("0.00"):
+            #                 w_price = prev_batch_ws
+            # -------------------------------------------------------
 
             item_objs.append(
                 StockEntryItem(
