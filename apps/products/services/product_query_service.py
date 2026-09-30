@@ -335,7 +335,7 @@ def annotate_latest_selling_price(queryset, store_id=None):
             # yangi kod ---------------------------------------------------------
             latest_wholesale_price=Case(
                 When(
-                    _latest_e_ws_time__isnull=False,
+                    _latest_e_wholesale__isnull=False,
                     then=F("_latest_e_wholesale"),
                 ),
                 When(
@@ -347,7 +347,7 @@ def annotate_latest_selling_price(queryset, store_id=None):
                     output_field=DecimalField(max_digits=12, decimal_places=2),
                 ),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
-            )
+            ),
             # eski kod ---------------------------------------------------------
             # latest_wholesale_price=Case(
             #     When(
@@ -503,19 +503,35 @@ def annotate_latest_selling_price(queryset, store_id=None):
                 default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
+            # yangi kod ----------------------------------------------------------------
             latest_wholesale_price=Case(
                 When(
-                    _latest_t_any_time__isnull=False,
-                    _latest_e_ws_time__isnull=False,
-                    _latest_t_any_time__gt=F("_latest_e_ws_time"),
+                    _latest_e_wholesale__isnull=False,
+                    then=F("_latest_e_wholesale"),
+                ),
+                When(
                     _latest_b_wholesale__isnull=False,
                     then=F("_latest_b_wholesale"),
                 ),
-                When(_latest_e_ws_time__isnull=False, then=F("_latest_e_wholesale")),
-                When(_latest_b_wholesale__isnull=False, then=F("_latest_b_wholesale")),
-                default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+                default=Value(
+                    None,
+                    output_field=DecimalField(max_digits=12, decimal_places=2),
+                ),
                 output_field=DecimalField(max_digits=12, decimal_places=2),
             ),
+            # latest_wholesale_price=Case(
+            #     When(
+            #         _latest_t_any_time__isnull=False,
+            #         _latest_e_ws_time__isnull=False,
+            #         _latest_t_any_time__gt=F("_latest_e_ws_time"),
+            #         _latest_b_wholesale__isnull=False,
+            #         then=F("_latest_b_wholesale"),
+            #     ),
+            #     When(_latest_e_ws_time__isnull=False, then=F("_latest_e_wholesale")),
+            #     When(_latest_b_wholesale__isnull=False, then=F("_latest_b_wholesale")),
+            #     default=Value(None, output_field=DecimalField(max_digits=12, decimal_places=2)),
+            #     output_field=DecimalField(max_digits=12, decimal_places=2),
+            # ),
         )
 
 
