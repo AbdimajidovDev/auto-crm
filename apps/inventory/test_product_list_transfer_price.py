@@ -83,7 +83,7 @@ class ProductListTransferPriceCasesTests(TestCase):
         )
 
     def create_entry_lot(self, store, product, quantity, purchase_price, selling_price, wholesale_price=None):
-        ws_price = wholesale_price or (selling_price * Decimal("0.9"))
+        ws_price = wholesale_price if wholesale_price is not None else (selling_price * Decimal("0.9"))
         entry = StockEntry.objects.create(
             supplier=self.supplier,
             store=store,
@@ -1793,5 +1793,239 @@ class ProductListTransferPriceCasesTests(TestCase):
         self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
         self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
         self.assertNotEqual(Decimal(str(item_b["wholesale_price"])), Decimal("888.00"))
+
+    # =========================================================================
+    # AUDIT VERIFICATION CASES 1 - 11
+    # =========================================================================
+
+    def test_audit_case_1_all_new_prices(self):
+        """
+        CASE 1:
+        Old 100/200/300
+        New 150/250/350
+        Expected: 150/250/350
+        """
+        product = self.create_product("Audit Case 1")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("100"), Decimal("200"), Decimal("300"))
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("150"), Decimal("250"), Decimal("350"))
+
+        data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item = next(p for p in data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("350.00"))
+
+    def test_audit_case_2_wholesale_zero_preserves_old_wholesale(self):
+        """
+        CASE 2:
+        Old 100/200/300
+        New 150/250/0
+        Expected: 150/250/300
+        """
+        product = self.create_product("Audit Case 2")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("100"), Decimal("200"), Decimal("300"))
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("150"), Decimal("250"), Decimal("0.00"))
+
+        data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item = next(p for p in data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("300.00"))
+
+    def test_audit_case_3_old_wholesale_zero_new_wholesale_positive(self):
+        """
+        CASE 3:
+        Old 100/200/0
+        New 150/250/350
+        Expected: 150/250/350
+        """
+        product = self.create_product("Audit Case 3")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("100"), Decimal("200"), Decimal("0.00"))
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("150"), Decimal("250"), Decimal("350.00"))
+
+        data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item = next(p for p in data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("350.00"))
+
+    def test_audit_case_4_new_selling_and_wholesale_zero_preserves_old(self):
+        """
+        CASE 4:
+        Old 100/200/300
+        New 150/0/0
+        Expected: 150/200/300
+        """
+        product = self.create_product("Audit Case 4")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("100"), Decimal("200"), Decimal("300"))
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("150"), Decimal("0.00"), Decimal("0.00"))
+
+        data = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item = next(p for p in data["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item["selling_price"])), Decimal("200.00"))
+        self.assertEqual(Decimal(str(item["wholesale_price"])), Decimal("300.00"))
+
+    def test_audit_case_5_store_isolation_vs_all_stores(self):
+        """
+        CASE 5:
+        Warehouse A: 777/999/555
+        112 (B): 56/500/222
+        No transfer.
+        All: 777/999/555
+        112: 56/500/222
+        """
+        product = self.create_product("Audit Case 5")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("56"), Decimal("500"), Decimal("222"))
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("777"), Decimal("999"), Decimal("555"))
+
+        data_all = self.get_api_product_list(store_id=None, search=product.name)
+        item_all = next(p for p in data_all["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_all["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_all["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_all["wholesale_price"])), Decimal("555.00"))
+
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("56.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("222.00"))
+
+    def test_audit_case_6_transfer_updates_display_prices(self):
+        """
+        CASE 6:
+        Warehouse 777/999/555
+        Transfer -> 112
+        112: 777/999/555
+        """
+        product = self.create_product("Audit Case 6")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("56"), Decimal("500"), Decimal("222"))
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("777"), Decimal("999"), Decimal("555"))
+        self.transfer(self.store_a, self.store_b, product, Decimal("5"))
+
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_audit_case_7_transfer_display_price_vs_cogs(self):
+        """
+        CASE 7:
+        Transfer display price changes (A has display purchase=777, source lot COGS=56)
+        Destination: display purchase=777, COGS=56
+        """
+        product = self.create_product("Audit Case 7")
+        # Store A has stock with acquisition cost = 56
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("56"), Decimal("500"), Decimal("222"))
+        # But Store A's batch display purchase price is updated to 777
+        batch_a = ProductBatch.objects.get(store=self.store_a, product=product)
+        batch_a.purchase_price = Decimal("777.00")
+        batch_a.selling_price = Decimal("999.00")
+        batch_a.wholesale_price = Decimal("555.00")
+        batch_a.save()
+
+        # Transfer A -> B
+        transfer_item, out_allocs, in_allocs = self.transfer(self.store_a, self.store_b, product, Decimal("5"))
+
+        # Verify destination lot COGS = 56 (FIFO unchanged)
+        dest_alloc = in_allocs[0]
+        self.assertEqual(dest_alloc.unit_cost, Decimal("56.00"))
+        dest_lot = dest_alloc.lot
+        self.assertEqual(dest_lot.purchase_price, Decimal("56.00"))
+
+        # Verify destination display price = 777
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_audit_case_8_multi_hop_transfer_cogs_lineage(self):
+        """
+        CASE 8:
+        A -> B -> C transfer.
+        Display lineage: 777/999/555
+        COGS: 56
+        """
+        product = self.create_product("Audit Case 8")
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("56"), Decimal("500"), Decimal("222"))
+        batch_a = ProductBatch.objects.get(store=self.store_a, product=product)
+        batch_a.purchase_price = Decimal("777.00")
+        batch_a.selling_price = Decimal("999.00")
+        batch_a.wholesale_price = Decimal("555.00")
+        batch_a.save()
+
+        # A -> B
+        self.transfer(self.store_a, self.store_b, product, Decimal("5"))
+        # B -> C
+        _, _, in_c = self.transfer(self.store_b, self.store_c, product, Decimal("3"))
+
+        # COGS in C must be 56
+        self.assertEqual(in_c[0].unit_cost, Decimal("56.00"))
+
+        # Display prices in C must be 777 / 999 / 555
+        data_c = self.get_api_product_list(store_id=self.store_c.id, search=product.name)
+        item_c = next(p for p in data_c["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_c["purchase_price"])), Decimal("777.00"))
+        self.assertEqual(Decimal(str(item_c["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_c["wholesale_price"])), Decimal("555.00"))
+
+    def test_audit_case_9_transfer_wholesale_zero_preserves_previous(self):
+        """
+        CASE 9:
+        Latest transfer has wholesale=0, previous valid wholesale=555.
+        Expected: wholesale=555
+        """
+        product = self.create_product("Audit Case 9")
+        # Store B has old stock with wholesale 555
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("100"), Decimal("200"), Decimal("555"))
+        # Store A has stock with wholesale 0
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("150"), Decimal("250"), Decimal("0.00"))
+
+        # Transfer A -> B
+        self.transfer(self.store_a, self.store_b, product, Decimal("5"))
+
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("150.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("250.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_audit_case_10_new_entry_purchase_only_preserves_old_selling_wholesale(self):
+        """
+        CASE 10:
+        New StockEntry: purchase=888, selling=0, wholesale=0
+        Previous: 777/999/555
+        Expected: 888/999/555
+        """
+        product = self.create_product("Audit Case 10")
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("777"), Decimal("999"), Decimal("555"))
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("888"), Decimal("0.00"), Decimal("0.00"))
+
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("888.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("999.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("555.00"))
+
+    def test_audit_case_11_no_direct_entry_store_isolated_without_transfer(self):
+        """
+        CASE 11:
+        Store 43 (B) has no direct StockEntry, but Store 45 (A) has newer inbound.
+        Without transfer: Store 43 MUST NOT show Store 45 price.
+        """
+        product = self.create_product("Audit Case 11")
+        # Store B has old stock @ 56 / 500 / 222
+        self.create_entry_lot(self.store_b, product, Decimal("10"), Decimal("56"), Decimal("500"), Decimal("222"))
+        # Store A has newer inbound @ 777 / 999 / 555
+        self.create_entry_lot(self.store_a, product, Decimal("10"), Decimal("777"), Decimal("999"), Decimal("555"))
+
+        # Store B must remain 56 / 500 / 222 (isolated)
+        data_b = self.get_api_product_list(store_id=self.store_b.id, search=product.name)
+        item_b = next(p for p in data_b["results"] if p["id"] == product.id)
+        self.assertEqual(Decimal(str(item_b["purchase_price"])), Decimal("56.00"))
+        self.assertEqual(Decimal(str(item_b["selling_price"])), Decimal("500.00"))
+        self.assertEqual(Decimal(str(item_b["wholesale_price"])), Decimal("222.00"))
 
 

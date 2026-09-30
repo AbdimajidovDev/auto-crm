@@ -344,6 +344,9 @@ class ProductListAPIView(generics.ListAPIView):
         )
 
         context["all_stores"] = stores
+        params = getattr(self.request, "query_params", getattr(self.request, "GET", {}))
+        raw_store = params.get("store_id") or params.get("store")
+        context["store_id"] = int(raw_store) if raw_store and str(raw_store).isdigit() else None
 
         return context
 

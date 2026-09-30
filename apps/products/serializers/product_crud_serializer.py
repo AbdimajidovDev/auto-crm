@@ -194,8 +194,8 @@ class ProductListSerializer(serializers.ModelSerializer):
 
     def _resolve_latest_inbound_prices(self, product):
         """
-        Annotatsiya qilingan yoki eng oxirgi kirim (StockEntryItem / StockTransferItem / ProductBatch)
-        orqali mahsulotning barcha 3 ta narxini (purchase, selling, wholesale) bitta yagona eventdan oladi.
+        Annotatsiya qilingan yoki eng oxirgi kirim/transfer/batch orqali mahsulotning barcha 3 ta narxini
+        (purchase_price, selling_price, wholesale_price) mustaqil ravishda resolve qiladi.
         """
         store_id = self._get_target_store_id()
         if not hasattr(product, "_cached_latest_inbound_prices") or not isinstance(product._cached_latest_inbound_prices, dict):
@@ -204,11 +204,19 @@ class ProductListSerializer(serializers.ModelSerializer):
         if store_id in product._cached_latest_inbound_prices:
             return product._cached_latest_inbound_prices[store_id]
 
-        # 1. Annotated qiymatlar mavjud bo'lsa darhol O(1) qaytarish
         ann_purchase = getattr(product, "latest_purchase_price", None)
         ann_selling = getattr(product, "latest_selling_price", None)
         ann_wholesale = getattr(product, "latest_wholesale_price", None)
-        if ann_selling is not None or ann_purchase is not None or ann_wholesale is not None:
+
+        # Agar queryset annotate_latest_selling_price orqali annotatsiya qilingan bo'lsa,
+        # SQL darajasida barcha jadvallar (entry, transfer, batch) allaqachon O(1) da tekshirilgan.
+        # Takroriy per-product fallback so'rovlariga hojat yo'q (N+1 oldini olish).
+        is_annotated = (
+            hasattr(product, "latest_purchase_price")
+            or hasattr(product, "latest_selling_price")
+            or hasattr(product, "latest_wholesale_price")
+        )
+        if is_annotated:
             res = {
                 "purchase_price": ann_purchase,
                 "selling_price": ann_selling,
@@ -217,131 +225,215 @@ class ProductListSerializer(serializers.ModelSerializer):
             product._cached_latest_inbound_prices[store_id] = res
             return res
 
-        # 2. Standalone serializer chaqiruvlari uchun (annotatsiya bo'lmaganda) fallback
+        # Standalone yoki partial fallback (har bir narx MUSTAQIL tekshiriladi)
         from apps.contract.models import StockEntryItem
         from apps.transfer.models import StockTransferItem
-        from apps.products.models import ProductBatch
+        from django.db.models.functions import Coalesce
+
+        resolved_purchase = ann_purchase
+        resolved_selling = ann_selling
+        resolved_wholesale = ann_wholesale
 
         if store_id is not None:
-            sei = (
-                StockEntryItem.objects.filter(
-                    product_id=product.id,
-                    entry__store_id=store_id,
-                    selling_price__gt=0,
+            # 1. Purchase price fallback
+            if resolved_purchase is None:
+                sei_pur = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        entry__store_id=store_id,
+                        purchase_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
                 )
-                .order_by("-entry__created_at", "-id")
-                .first()
-            )
-            sti = (
-                StockTransferItem.objects.filter(
-                    product_id=product.id,
-                    stock_transfer__to_store_id=store_id,
-                    stock_transfer__status="a",
-                    selling_price__gt=0,
+                sti_pur = (
+                    StockTransferItem.objects.filter(
+                        product_id=product.id,
+                        stock_transfer__to_store_id=store_id,
+                        stock_transfer__status="a",
+                        purchase_price__gt=0,
+                    )
+                    .annotate(
+                        t_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+                    )
+                    .order_by("-t_time", "-id")
+                    .first()
                 )
-                .order_by("-stock_transfer__approved_at", "-id")
-                .first()
-            )
+                if sei_pur and sti_pur:
+                    t_time = sti_pur.t_time
+                    e_time = sei_pur.entry.created_at
+                    resolved_purchase = sti_pur.purchase_price if t_time and e_time and t_time > e_time else sei_pur.purchase_price
+                elif sti_pur:
+                    resolved_purchase = sti_pur.purchase_price
+                elif sei_pur:
+                    resolved_purchase = sei_pur.purchase_price
+                else:
+                    batch = self._get_scoped_batch(product)
+                    resolved_purchase = batch.purchase_price if batch and batch.purchase_price and batch.purchase_price > Decimal("0.00") else None
 
-            winner = None
-            if sei and sti:
-                t_time = sti.stock_transfer.approved_at or sti.stock_transfer.created_at
-                e_time = sei.entry.created_at
-                winner = sti if t_time and e_time and t_time > e_time else sei
-            elif sti:
-                winner = sti
-            elif sei:
-                winner = sei
+            # 2. Selling price fallback
+            if resolved_selling is None:
+                sei_sel = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        entry__store_id=store_id,
+                        selling_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
+                )
+                sti_sel = (
+                    StockTransferItem.objects.filter(
+                        product_id=product.id,
+                        stock_transfer__to_store_id=store_id,
+                        stock_transfer__status="a",
+                        selling_price__gt=0,
+                    )
+                    .annotate(
+                        t_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+                    )
+                    .order_by("-t_time", "-id")
+                    .first()
+                )
+                if sei_sel and sti_sel:
+                    t_time = sti_sel.t_time
+                    e_time = sei_sel.entry.created_at
+                    resolved_selling = sti_sel.selling_price if t_time and e_time and t_time > e_time else sei_sel.selling_price
+                elif sti_sel:
+                    resolved_selling = sti_sel.selling_price
+                elif sei_sel:
+                    resolved_selling = sei_sel.selling_price
+                else:
+                    batch = self._get_scoped_batch(product)
+                    resolved_selling = batch.selling_price if batch and batch.selling_price and batch.selling_price > Decimal("0.00") else None
 
-            if winner and winner == sti:
+            # 3. Wholesale price fallback
+            if resolved_wholesale is None:
+                sei_ws = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        entry__store_id=store_id,
+                        wholesale_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
+                )
+                sti_any = (
+                    StockTransferItem.objects.filter(
+                        product_id=product.id,
+                        stock_transfer__to_store_id=store_id,
+                        stock_transfer__status="a",
+                    )
+                    .annotate(
+                        t_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+                    )
+                    .order_by("-t_time", "-id")
+                    .first()
+                )
                 dest_batch = self._get_scoped_batch(product)
-                ws = dest_batch.wholesale_price if dest_batch else None
-                res = {
-                    "purchase_price": sti.purchase_price,
-                    "selling_price": sti.selling_price,
-                    "wholesale_price": ws,
-                }
-            elif winner and winner == sei:
-                ws = sei.wholesale_price
-                if not ws or ws <= Decimal("0.00"):
-                    ws_sei = (
-                        StockEntryItem.objects.filter(
-                            product_id=product.id,
-                            entry__store_id=store_id,
-                            wholesale_price__gt=0,
-                        )
-                        .order_by("-entry__created_at", "-id")
-                        .first()
-                    )
-                    if ws_sei:
-                        ws = ws_sei.wholesale_price
-                    else:
-                        dest_batch = self._get_scoped_batch(product)
-                        ws = dest_batch.wholesale_price if dest_batch and dest_batch.wholesale_price and dest_batch.wholesale_price > Decimal("0.00") else None
-                res = {
-                    "purchase_price": sei.purchase_price,
-                    "selling_price": sei.selling_price,
-                    "wholesale_price": ws,
-                }
-            else:
-                batch = self._get_scoped_batch(product)
-                if batch:
-                    res = {
-                        "purchase_price": batch.purchase_price,
-                        "selling_price": batch.selling_price,
-                        "wholesale_price": batch.wholesale_price,
-                    }
-                else:
-                    res = {"purchase_price": None, "selling_price": None, "wholesale_price": None}
-        else:
-            # All stores: latest global stock-in event (authoritative StockEntry)
-            sei = (
-                StockEntryItem.objects.filter(
-                    product_id=product.id,
-                    selling_price__gt=0,
-                )
-                .order_by("-entry__created_at", "-id")
-                .first()
-            )
-            if sei:
-                ws = sei.wholesale_price
-                if not ws or ws <= Decimal("0.00"):
-                    ws_sei = (
-                        StockEntryItem.objects.filter(
-                            product_id=product.id,
-                            wholesale_price__gt=0,
-                        )
-                        .order_by("-entry__created_at", "-id")
-                        .first()
-                    )
-                    if ws_sei:
-                        ws = ws_sei.wholesale_price
-                    else:
-                        ws_b = product.batches.filter(wholesale_price__gt=0).order_by("-updated_at", "-id").first() if hasattr(product, "batches") else None
-                        ws = ws_b.wholesale_price if ws_b else None
-                res = {
-                    "purchase_price": sei.purchase_price,
-                    "selling_price": sei.selling_price,
-                    "wholesale_price": ws,
-                }
-            else:
-                b = None
-                if hasattr(product, "_prefetched_objects_cache") and "batches" in product._prefetched_objects_cache:
-                    for item_b in product.batches.all():
-                        if item_b.selling_price and item_b.selling_price > Decimal("0.00"):
-                            b = item_b
-                            break
-                if not b:
-                    b = product.batches.filter(selling_price__gt=0).order_by("-updated_at", "-id").first()
-                if b:
-                    res = {
-                        "purchase_price": b.purchase_price,
-                        "selling_price": b.selling_price,
-                        "wholesale_price": b.wholesale_price,
-                    }
-                else:
-                    res = {"purchase_price": None, "selling_price": None, "wholesale_price": None}
+                b_ws = dest_batch.wholesale_price if dest_batch and dest_batch.wholesale_price and dest_batch.wholesale_price > Decimal("0.00") else None
 
+                if sti_any and sei_ws:
+                    t_time = sti_any.t_time
+                    e_time = sei_ws.entry.created_at
+                    if t_time and e_time and t_time > e_time and b_ws:
+                        resolved_wholesale = b_ws
+                    else:
+                        resolved_wholesale = sei_ws.wholesale_price
+                elif sei_ws:
+                    resolved_wholesale = sei_ws.wholesale_price
+                elif b_ws:
+                    resolved_wholesale = b_ws
+                else:
+                    resolved_wholesale = None
+        else:
+            # All stores: standalone fallback
+            if resolved_purchase is None:
+                sei_pur = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        purchase_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
+                )
+                sti_pur = (
+                    StockTransferItem.objects.filter(
+                        product_id=product.id,
+                        stock_transfer__status="a",
+                        purchase_price__gt=0,
+                    )
+                    .annotate(
+                        t_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+                    )
+                    .order_by("-t_time", "-id")
+                    .first()
+                )
+                if sei_pur and sti_pur:
+                    t_time = sti_pur.t_time
+                    e_time = sei_pur.entry.created_at
+                    resolved_purchase = sti_pur.purchase_price if t_time and e_time and t_time > e_time else sei_pur.purchase_price
+                elif sti_pur:
+                    resolved_purchase = sti_pur.purchase_price
+                elif sei_pur:
+                    resolved_purchase = sei_pur.purchase_price
+                else:
+                    b = product.batches.filter(is_active=True, purchase_price__gt=0).order_by("-updated_at", "-id").first() if hasattr(product, "batches") else None
+                    resolved_purchase = b.purchase_price if b else None
+
+            if resolved_selling is None:
+                sei_sel = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        selling_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
+                )
+                sti_sel = (
+                    StockTransferItem.objects.filter(
+                        product_id=product.id,
+                        stock_transfer__status="a",
+                        selling_price__gt=0,
+                    )
+                    .annotate(
+                        t_time=Coalesce("stock_transfer__approved_at", "stock_transfer__created_at")
+                    )
+                    .order_by("-t_time", "-id")
+                    .first()
+                )
+                if sei_sel and sti_sel:
+                    t_time = sti_sel.t_time
+                    e_time = sei_sel.entry.created_at
+                    resolved_selling = sti_sel.selling_price if t_time and e_time and t_time > e_time else sei_sel.selling_price
+                elif sti_sel:
+                    resolved_selling = sti_sel.selling_price
+                elif sei_sel:
+                    resolved_selling = sei_sel.selling_price
+                else:
+                    b = product.batches.filter(is_active=True, selling_price__gt=0).order_by("-updated_at", "-id").first() if hasattr(product, "batches") else None
+                    resolved_selling = b.selling_price if b else None
+
+            if resolved_wholesale is None:
+                sei_ws = (
+                    StockEntryItem.objects.filter(
+                        product_id=product.id,
+                        wholesale_price__gt=0,
+                    )
+                    .order_by("-entry__created_at", "-id")
+                    .first()
+                )
+                if sei_ws:
+                    resolved_wholesale = sei_ws.wholesale_price
+                else:
+                    b = product.batches.filter(is_active=True, wholesale_price__gt=0).order_by("-updated_at", "-id").first() if hasattr(product, "batches") else None
+                    resolved_wholesale = b.wholesale_price if b else None
+
+        res = {
+            "purchase_price": resolved_purchase,
+            "selling_price": resolved_selling,
+            "wholesale_price": resolved_wholesale,
+        }
         product._cached_latest_inbound_prices[store_id] = res
         return res
 
