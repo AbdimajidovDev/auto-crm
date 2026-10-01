@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from django.db.models import (
     Case,
+    Count,
     DecimalField,
     ExpressionWrapper,
     F,
@@ -29,6 +30,7 @@ from django.utils import timezone
 
 from apps.contract.models import SupplierTransaction
 from apps.products.models import Product, ProductBatch
+from apps.reports.services.reporting_foundation import ReportingFoundationService
 from apps.sales.models import Sale, SaleItem
 from apps.store.models import Store
 
@@ -181,22 +183,27 @@ class KPIService:
         # aggregate uchun sana oralig'ini topishda range scan og'irlashadi.
         # ✅ YECHIM: Sale modeliga index qo'yish, masalan:
         #   class Meta: indexes = [models.Index(fields=["store", "created_at"])]
+        sales_qs      = ReportingFoundationService.annotate_sale_net_fields(sales_qs)
+        prev_sales_qs = ReportingFoundationService.annotate_sale_net_fields(prev_sales_qs)
+
         cur  = sales_qs.aggregate(
-            revenue=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()),
-            paid   =Coalesce(Sum("paid_amount"),  Value(Decimal("0")), output_field=DecimalField()),
-            orders =Coalesce(Sum(Value(1), output_field=IntegerField()), Value(0)),
+            revenue=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()),
+            paid   =Coalesce(Sum("net_paid"),  Value(Decimal("0")), output_field=DecimalField()),
+            debt   =Coalesce(Sum("net_debt"),  Value(Decimal("0")), output_field=DecimalField()),
+            orders =Coalesce(Count("id", filter=~Q(status=Sale.Status.RETURNED)), Value(0)),
         )
         prev = prev_sales_qs.aggregate(
-            revenue=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()),
-            paid   =Coalesce(Sum("paid_amount"),  Value(Decimal("0")), output_field=DecimalField()),
-            orders =Coalesce(Sum(Value(1), output_field=IntegerField()), Value(0)),
+            revenue=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()),
+            paid   =Coalesce(Sum("net_paid"),  Value(Decimal("0")), output_field=DecimalField()),
+            debt   =Coalesce(Sum("net_debt"),  Value(Decimal("0")), output_field=DecimalField()),
+            orders =Coalesce(Count("id", filter=~Q(status=Sale.Status.RETURNED)), Value(0)),
         )
 
         cur_revenue  = cur["revenue"]
-        cur_debt     = cur["revenue"] - cur["paid"]
+        cur_debt     = cur["debt"]
         cur_orders   = cur["orders"]
         prev_revenue = prev["revenue"]
-        prev_debt    = prev["revenue"] - prev["paid"]
+        prev_debt    = prev["debt"]
         prev_orders  = prev["orders"]
 
         # lowStockCount — ProductBatch.quantity < threshold
@@ -215,6 +222,7 @@ class KPIService:
         return {
             "revenue":        cur_revenue,
             "revenueGrowth":  _growth(cur_revenue,  prev_revenue),
+            "paid":           cur["paid"],
             "debt":           cur_debt,
             "debtGrowth":     _growth(cur_debt,     prev_debt),
             "orders":         cur_orders,
@@ -253,6 +261,7 @@ class TopPartsService:
         qs = (
             SaleItem.objects
             .filter(sale__created_at__range=(dr.current_from, dr.current_to))
+            .exclude(sale__status=Sale.Status.RETURNED)
             .select_related("product")
         )
         qs = _apply_store_filter(qs, store_id, store_field="sale__store_id")
@@ -262,9 +271,21 @@ class TopPartsService:
             .values("product_id", "product__name")
             .annotate(
                 # DecimalField: quantity kasr bo'lishi mumkin (juft mahsulotda 0.5 qadam)
-                sold=Coalesce(Sum("quantity"),   Value(0), output_field=DecimalField()),
-                rev =Coalesce(Sum("total_price"), Value(Decimal("0")), output_field=DecimalField()),
+                sold=Coalesce(
+                    Sum(F("quantity") - Coalesce(F("returned_quantity"), Value(Decimal("0")))),
+                    Value(0),
+                    output_field=DecimalField(),
+                ),
+                rev=Coalesce(
+                    Sum(ExpressionWrapper(
+                        (F("quantity") - Coalesce(F("returned_quantity"), Value(Decimal("0")))) * F("unit_price"),
+                        output_field=DecimalField(),
+                    )),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
             )
+            .filter(sold__gt=0)
             .order_by("-sold")
             [:TOP_PARTS_LIMIT]
         )
@@ -384,6 +405,7 @@ class ChartService:
             created_at__range=(dr.current_from, dr.current_to)
         )
         qs = _apply_store_filter(qs, store_id)
+        qs = ReportingFoundationService.annotate_sale_net_fields(qs)
 
         if period == "daily":
             return ChartService._daily(qs, dr)
@@ -402,7 +424,7 @@ class ChartService:
         rows = (
             qs.annotate(period=TruncHour("created_at"))
             .values("period")
-            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
         data_map = {timezone.localtime(row["period"]).hour: row["total"] for row in rows}
@@ -428,7 +450,7 @@ class ChartService:
             rows = (
                 qs.annotate(period=TruncDay("created_at"))
                 .values("period")
-                .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+                .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
                 .order_by("period")
             )
             data_map = {timezone.localtime(row["period"]).date(): row["total"] for row in rows}
@@ -442,7 +464,7 @@ class ChartService:
         rows = (
             qs.annotate(period=TruncMonth("created_at"))
             .values("period")
-            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
         data_map = {
@@ -468,7 +490,7 @@ class ChartService:
         rows = (
             qs.annotate(period=TruncDay("created_at"))
             .values("period")
-            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
         data_map = {row["period"].date(): row["total"] for row in rows}
@@ -491,7 +513,7 @@ class ChartService:
         rows = (
             qs.annotate(period=TruncWeek("created_at"))
             .values("period")
-            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
         # Haftalarni tartib bo'yicha 1-hafta, 2-hafta ... ga moslaymiz
@@ -515,7 +537,7 @@ class ChartService:
         rows = (
             qs.annotate(period=TruncMonth("created_at"))
             .values("period")
-            .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
+            .annotate(total=Coalesce(Sum("net_total"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
         data_map = {}
