@@ -91,10 +91,16 @@ class DateRangeResolver:
             prev_from    = current_from - delta
             prev_to      = current_from
         else:                           # yearly
-            delta        = timedelta(days=365)
-            current_from = now - delta
+            current_from = now.replace(
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
             current_to   = now
-            prev_from    = current_from - delta
+            prev_from    = current_from.replace(year=current_from.year - 1)
             prev_to      = current_from
 
         return DateRange(
@@ -502,17 +508,32 @@ class ChartService:
     # ── yearly ──
     @staticmethod
     def _yearly(qs, dr: DateRange) -> dict:
+        now_dt = timezone.localtime(dr.current_to) if timezone.is_aware(dr.current_to) else dr.current_to
+        current_year = now_dt.year
+        now_month = now_dt.month
+
         rows = (
             qs.annotate(period=TruncMonth("created_at"))
             .values("period")
             .annotate(total=Coalesce(Sum("total_amount"), Value(Decimal("0")), output_field=DecimalField()))
             .order_by("period")
         )
-        data_map = {row["period"].month: row["total"] for row in rows}
+        data_map = {}
+        for row in rows:
+            period = row["period"]
+            if hasattr(period, "tzinfo") and period.tzinfo and timezone.is_aware(period):
+                period = timezone.localtime(period)
+            if period.year == current_year and period.month <= now_month:
+                data_map[period.month] = row["total"]
 
         labels = UZ_MONTHS[:]
-        values = [data_map.get(m, Decimal("0")) for m in range(1, 13)]
+        values = [
+            data_map.get(m, Decimal("0")) if m <= now_month else None
+            for m in range(1, 13)
+        ]
         return {"labels": labels, "data": values}
+
+    yearly = _yearly
 
 
 # ═══════════════════════════════
