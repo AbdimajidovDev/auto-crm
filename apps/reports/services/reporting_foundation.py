@@ -61,7 +61,6 @@ from apps.inventory.models import (
 )
 from apps.products.models import Product, ProductBatch
 from apps.sales.models import Payment, Sale, SaleItem, SaleReturn, SaleReturnItem
-from apps.sales.profit import sum_item_profit
 from apps.writeoff.models import WriteOff, WriteOffItem
 
 EFFICIENCY_STATUS_LABELS = {
@@ -261,81 +260,7 @@ class ReportingFoundationService:
         return result
 
     # ─────────────────────────────────────────────────────────────
-    # 2. Cheklar ro'yxati (Sale queryset) uchun Net annotatsiyalar
-    # ─────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def annotate_sale_net_fields(qs: QuerySet[Sale]) -> QuerySet[Sale]:
-        """
-        Sale querysetiga qaytarimlarni inobatga oluvchi sof maydonlarni bog'laydi:
-          - refunded_total: Chek bo'yicha qaytarilgan jami summa (SaleReturn orqali)
-          - net_total: Haqiqiy sof tushum (to'liq qaytarilgan bo'lsa 0, qisman bo'lsa total - refunded)
-          - refunded_payments: Mijozga pul shaklida qaytarilgan to'lovlar summasi (Payment.is_refund)
-          - net_paid: Haqiqiy to'langan summa (paid_amount - refunded_payments)
-          - net_debt: Haqiqiy qolgan qarz (max(0, net_total - net_paid))
-          - net_profit: Sof foyda (sum_item_profit orqali chegirmalar va qaytarilgan donalar chegirilgan)
-        """
-        # Chek bo'yicha barcha qaytarimlar (SaleReturn) summasi
-        returns_sq = (
-            SaleReturn.objects
-            .filter(sale=OuterRef("pk"))
-            .values("sale")
-            .annotate(total=Coalesce(Sum("total_refund"), ZERO_MONEY))
-            .values("total")[:1]
-        )
-
-        # Chek bo'yicha mijozga pul shaklida qaytarilgan to'lovlar
-        refund_payments_sq = (
-            Payment.objects
-            .filter(sale=OuterRef("pk"), is_refund=True)
-            .values("sale")
-            .annotate(total=Coalesce(Sum("amount"), ZERO_MONEY))
-            .values("total")[:1]
-        )
-
-        # Har chek uchun sof foyda
-        profit_sq = (
-            SaleItem.objects
-            .filter(sale=OuterRef("pk"))
-            .values("sale")
-            .annotate(total=sum_item_profit())
-            .values("total")[:1]
-        )
-
-        return (
-            qs
-            .annotate(
-                _refunded_total=Coalesce(Subquery(returns_sq, output_field=MONEY_FIELD), ZERO_MONEY),
-                _refunded_paid=Coalesce(Subquery(refund_payments_sq, output_field=MONEY_FIELD), ZERO_MONEY),
-                net_profit=Coalesce(Subquery(profit_sq, output_field=MONEY_FIELD), ZERO_MONEY),
-            )
-            .annotate(
-                # To'liq qaytarilgan bo'lsa (status='r') sof summa = 0
-                net_total=Case(
-                    When(status=Sale.Status.RETURNED, then=ZERO_MONEY),
-                    When(total_amount__gt=F("_refunded_total"), then=F("total_amount") - F("_refunded_total")),
-                    default=ZERO_MONEY,
-                    output_field=MONEY_FIELD,
-                ),
-                net_paid=Case(
-                    When(status=Sale.Status.RETURNED, then=ZERO_MONEY),
-                    When(paid_amount__gt=F("_refunded_paid"), then=F("paid_amount") - F("_refunded_paid")),
-                    default=ZERO_MONEY,
-                    output_field=MONEY_FIELD,
-                ),
-            )
-            .annotate(
-                net_debt=Case(
-                    When(status=Sale.Status.RETURNED, then=ZERO_MONEY),
-                    When(net_total__gt=F("net_paid"), then=F("net_total") - F("net_paid")),
-                    default=ZERO_MONEY,
-                    output_field=MONEY_FIELD,
-                ),
-            )
-        )
-
-    # ─────────────────────────────────────────────────────────────
-    # 3. Davriy savdo va qaytarim ko'rsatkichlari (Period Metrics)
+    # 2. Davriy savdo va qaytarim ko'rsatkichlari (Period Metrics)
     # ─────────────────────────────────────────────────────────────
 
     @staticmethod
@@ -355,15 +280,18 @@ class ReportingFoundationService:
             ayirilishini va o'tgan oy hisoboti buzilmasligini kafolatlaydi.
         """
         # 1. Davrdagi sotuvlar
-        sales_filter = Q(created_at__gte=start, created_at__lt=end)
+        sales_filter = Q(
+            created_at__gte=start,
+            created_at__lt=end,
+            deleted_at__isnull=True,
+        )
         if store_id:
             sales_filter &= Q(store_id=store_id)
 
         sales_qs = Sale.objects.filter(sales_filter)
-        active_sales_qs = sales_qs.exclude(status=Sale.Status.RETURNED)
 
-        # Sotuv qatorlari (faqat faol sotuvlar)
-        sale_items = SaleItem.objects.filter(sale__in=active_sales_qs)
+        # Sotuv qatorlari (barcha haqiqiy sotuvlar)
+        sale_items = SaleItem.objects.filter(sale__in=sales_qs)
         sales_agg = sale_items.aggregate(
             gross_qty=Coalesce(Sum("quantity"), ZERO_QTY),
             gross_rev=Coalesce(Sum("total_price"), ZERO_MONEY),
@@ -377,13 +305,17 @@ class ReportingFoundationService:
             all_n=Count("id"),
             active_n=Count("id", filter=~Q(status=Sale.Status.RETURNED)),
             total_discount=Coalesce(
-                Sum("discount_amount", filter=~Q(status=Sale.Status.RETURNED)),
+                Sum("discount_amount"),
                 ZERO_MONEY,
             ),
         )
 
         # 2. Davrdagi qaytarimlar (AYNAN shu davrda rasmiylashtirilgan SaleReturn)
-        returns_filter = Q(created_at__gte=start, created_at__lt=end)
+        returns_filter = Q(
+            created_at__gte=start,
+            created_at__lt=end,
+            sale__deleted_at__isnull=True,
+        )
         if store_id:
             returns_filter &= Q(store_id=store_id)
 
@@ -406,20 +338,20 @@ class ReportingFoundationService:
         # 3. Yig'ma ko'rsatkichlar
         gross_sold_qty = Decimal(str(sales_agg["gross_qty"] or 0))
         returned_qty = Decimal(str(returns_agg["ret_qty"] or 0))
-        net_sold_qty = max(Decimal("0.00"), gross_sold_qty - returned_qty)
+        net_sold_qty = gross_sold_qty - returned_qty
 
         gross_revenue = Decimal(str(sales_agg["gross_rev"] or 0))
         total_discount = Decimal(str(sale_counts["total_discount"] or 0))
         return_amount = Decimal(str(returns_agg["ret_amount"] or 0))
 
         # Chegirma chegirilgan sotuv summasi
-        revenue_after_discount = max(Decimal("0.00"), gross_revenue - total_discount)
+        revenue_after_discount = gross_revenue - total_discount
         # Sof tushum = Chegirmali sotuv - Davrdagi qaytarimlar
-        net_revenue = max(Decimal("0.00"), revenue_after_discount - return_amount)
+        net_revenue = revenue_after_discount - return_amount
 
         gross_cost = Decimal(str(sales_agg["gross_cost"] or 0))
         returned_cost = Decimal(str(returns_agg["ret_cost"] or 0))
-        net_purchase_cost = max(Decimal("0.00"), gross_cost - returned_cost)
+        net_purchase_cost = gross_cost - returned_cost
 
         # Sof foyda = Sof tushum - Sof tannarx
         net_profit = net_revenue - net_purchase_cost

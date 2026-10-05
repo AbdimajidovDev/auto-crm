@@ -42,21 +42,25 @@ HEADER_MAP = {
 
 class ProductImportService:
 
+    MAX_SYNC_ROWS = 2500
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
     @classmethod
-    def import_from_excel(cls, file) -> dict:
+    def import_from_excel(cls, file, max_rows=None) -> dict:
         try:
             wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
         except Exception:
             raise ValidationError("Excel faylni o'qib bo'lmadi. Fayl .xlsx formatida bo'lishi kerak.")
 
         ws = wb.active
-        rows = list(ws.iter_rows(values_only=True))
-
-        if not rows:
+        row_iter = ws.iter_rows(values_only=True)
+        try:
+            header_row = next(row_iter)
+        except StopIteration:
             raise ValidationError("Excel fayl bo'sh.")
 
         # Header normalize
-        raw_headers    = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
+        raw_headers    = [str(h).strip().lower() if h is not None else "" for h in header_row]
         mapped_headers = [HEADER_MAP.get(h, h) for h in raw_headers]
 
         missing = REQUIRED_COLUMNS - set(mapped_headers)
@@ -64,7 +68,14 @@ class ProductImportService:
             raise ValidationError(f"Ustunlar topilmadi: {', '.join(missing)}")
 
         col       = {name: idx for idx, name in enumerate(mapped_headers)}
-        data_rows = rows[1:]
+        data_rows = []
+        for idx, r in enumerate(row_iter, start=1):
+            if max_rows is not None and idx > max_rows:
+                raise ValidationError(
+                    f"Fayl satrlari soni {max_rows} tadan oshmasligi kerak. "
+                    f"Katta hajmli fayllarni import qilish uchun fon rejimini ishlating (?async=true)."
+                )
+            data_rows.append(r)
 
         if not data_rows:
             raise ValidationError("Shablon bo'sh — ma'lumot qatorlari yo'q.")

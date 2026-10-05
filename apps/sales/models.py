@@ -135,8 +135,9 @@ class Sale(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     # Soft delete (arxiv): superadmin o'chirganda darhol yo'qolmaydi — deleted_at
-    # belgilanadi va sotuv ro'yxat/hisobotlardan yashiriladi. 30 kundan keyin
-    # purge (_purge_expired_deleted_sales / purge_deleted_sales buyrug'i) butunlay o'chiradi.
+    # belgilanadi va sotuv ro'yxat/hisobotlardan yashiriladi. Indefinite soft-delete
+    # retention siyosati bo'yicha tarixiy buxgalteriya va StockAllocation daxlsizligi
+    # uchun sotuv bazadan fizik o'chirilmaydi, faqat arxivda saqlanadi.
     deleted_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     # Birinchi manager default: barcha Sale.objects so'rovlari arxivni chiqarib tashlaydi.

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, time
 from decimal import Decimal
 
-from django.db.models import Count, DecimalField, F, Q, Sum
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Q, Sum
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
@@ -260,17 +260,40 @@ class ProductMovementReportService:
             ),
             sale_count=Count("id"),
         )
-        returned_amount = self.sale_return_items().aggregate(
-            amount=Coalesce(Sum("total_price"), ZERO, output_field=MONEY)
-        )["amount"]
+        return_agg = self.sale_return_items().aggregate(
+            amount=Coalesce(Sum("total_price"), ZERO, output_field=MONEY),
+            cost=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("quantity") * Coalesce(F("sale_item__purchase_price"), ZERO),
+                        output_field=MONEY,
+                    ),
+                    output_field=MONEY,
+                ),
+                ZERO,
+                output_field=MONEY,
+            ),
+            costed_qty=Coalesce(
+                Sum("quantity", filter=Q(sale_item__purchase_price__isnull=False)),
+                0,
+                output_field=DecimalField(max_digits=12, decimal_places=2),
+            ),
+        )
+        returned_amount = return_agg["amount"] or ZERO
+        returned_cost = return_agg["cost"] or ZERO
 
         totals["sale_returned_amount"] = returned_amount
+        totals["sale_returned_cost_amount"] = returned_cost
         totals["net_sold_amount"] = totals["sold_amount"] - returned_amount
         totals["net_sold_qty"] = totals["sold_qty"] - totals["sale_returned_qty"]
         totals["cost_amount"] = sale_agg["cost"] or ZERO
-        totals["profit"] = totals["sold_amount"] - totals["cost_amount"]
+        totals["net_cost_amount"] = totals["cost_amount"] - returned_cost
+        totals["profit"] = totals["net_sold_amount"] - totals["net_cost_amount"]
         totals["costed_qty"] = sale_agg["costed_qty"] or 0
-        totals["profit_partial"] = totals["costed_qty"] < totals["sold_qty"]
+        totals["profit_partial"] = (
+            totals["costed_qty"] < totals["sold_qty"]
+            or (return_agg["costed_qty"] or 0) < totals["sale_returned_qty"]
+        )
         totals["sale_line_count"] = sale_agg["sale_count"] or 0
 
         transfers = self.transfer_items()

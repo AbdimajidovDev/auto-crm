@@ -25,7 +25,7 @@ from django.db.models import (
     Value,
     When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -35,8 +35,7 @@ from apps.contract.models import (
     StockEntryPayment,
     SupplierTransaction,
 )
-from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn
-from apps.sales.profit import sum_item_profit
+from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn, SaleReturnItem
 from apps.store.models import Store
 from ...debts.models import CustomerDebt
 
@@ -132,43 +131,6 @@ def _dt_bounds(date_from: date, date_to: date) -> tuple[datetime, datetime]:
     return start, end
 
 
-# ─────────────────────────────────────────────
-#  Returns subquery — ikki joyda takrorlanmaslik uchun
-# ─────────────────────────────────────────────
-def _returns_subquery():
-    """
-    Har bir Sale uchun qaytarilgan summani hisoblaydi.
-    SummaryService va BranchService ikkalasi ishlatadi.
-    """
-    return (
-        SaleReturn.objects
-        .filter(sale_id=OuterRef("id"))
-        .values("sale")
-        .annotate(total=Sum("total_refund"))
-        .values("total")[:1]
-    )
-
-
-def _base_sales_qs(date_from: date, date_to: date, store_id: int | None):
-    """
-    Qaytarilgan sotuvlarni chiqarib tashlagan, annotate qilingan asosiy Sales QS.
-    SummaryService, BranchService va boshqalar uchun umumiy base.
-    """
-    # Sargable filtr: xom datetime chegaralar bilan `created_at` indeksi to'liq ishlaydi
-    # (avvalgi `__date__gte/lte` DATE(created_at) o'ramasi indeksni o'chirib qo'yardi).
-    start, end = _dt_bounds(date_from, date_to)
-    return (
-        Sale.objects
-        .filter(created_at__gte=start, created_at__lt=end)
-        .filter(_store_q(store_id))
-        .exclude(status=Sale.Status.RETURNED)
-        .annotate(
-            refunded=Coalesce(
-                Subquery(_returns_subquery(), output_field=DecimalField()),
-                Value(Decimal("0"), output_field=DecimalField()),
-            )
-        )
-    )
 
 
 # ─────────────────────────────────────────────
@@ -176,48 +138,153 @@ def _base_sales_qs(date_from: date, date_to: date, store_id: int | None):
 # ─────────────────────────────────────────────
 class SummaryService:
     """
-    Umumiy moliyaviy ko'rsatkichlar.
-    2 ta SQL: sales aggregate + items profit aggregate.
+    Umumiy moliyaviy ko'rsatkichlar — Period Transactional Accounting.
+
+    1. Sotuvlar oqimi (Sale & SaleItem): Sale.created_at ∈ [start, end)
+       - sold_revenue = Sum(Sale.total_amount)
+       - sold_cogs = Sum(SaleItem.quantity * SaleItem.purchase_price)
+       - sold_profit = sold_revenue - sold_cogs
+       - total_orders = Count(Sale.id) (RETURNED status exclude qilinmaydi)
+       - total_customers = Count(distinct customer)
+
+    2. Qaytarimlar oqimi (SaleReturn & SaleReturnItem): SaleReturn.created_at ∈ [start, end)
+       - return_revenue = Sum(SaleReturn.total_refund) (yoki SaleReturnItem.total_price)
+       - return_cogs = Sum(SaleReturnItem.quantity * SaleReturnItem.sale_item.purchase_price)
+       - return_profit = return_revenue - return_cogs
+
+    3. Period Transactional Netting:
+       - totalRevenue = sold_revenue - return_revenue
+       - totalProfit = sold_profit - return_profit
+       - totalExpenses = totalRevenue - totalProfit (Net COGS)
+       - averageOrderValue = round(totalRevenue / totalOrders, 2) if totalOrders else Decimal("0")
+
+    Cross-period qaytarimlar o'tmishdagi sotuv davrini o'zgartirmaydi;
+    qaytarim sodir bo'lgan davrda manfiy tranzaksiya sifatida aks etadi.
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> dict:
-        sales_qs = _base_sales_qs(date_from, date_to, store_id)
+        start, end = _dt_bounds(date_from, date_to)
 
-        agg = sales_qs.aggregate(
-            total_revenue=Coalesce(
-                Sum(F("total_amount") - F("refunded")),
-                Value(Decimal("0")), output_field=DecimalField(),
+        # 1. Sale stream (sotuvlar daromadi, buyurtmalar va mijozlar soni)
+        sales_qs = (
+            Sale.objects
+            .filter(
+                created_at__gte=start,
+                created_at__lt=end,
+                deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "store_id"))
+        )
+        sales_agg = sales_qs.aggregate(
+            sold_revenue=Coalesce(
+                Sum("total_amount"),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
             ),
             total_orders=Count("id"),
             total_customers=Count(
-                "customer", distinct=True,
+                "customer",
+                distinct=True,
                 filter=Q(customer__isnull=False),
             ),
         )
 
-        # Sof foyda — apps.sales.profit dagi YAGONA formula:
-        # (sotuv narxi - tannarx) × (miqdor - qaytarilgan) - chekdagi chegirma ulushi.
-        # Barcha hisobot/statistika sahifalarida aynan shu hisob ishlatiladi.
-        start, end = _dt_bounds(date_from, date_to)
+        sold_revenue = sales_agg["sold_revenue"]
+        orders = sales_agg["total_orders"] or 0
+        customers = sales_agg["total_customers"] or 0
+
+        # 2. SaleItem stream (sotilgan tovarlar tannarxi / COGS)
         items_qs = (
             SaleItem.objects
-            .filter(sale__created_at__gte=start, sale__created_at__lt=end)
-            .exclude(sale__status=Sale.Status.RETURNED)
+            .filter(
+                sale__created_at__gte=start,
+                sale__created_at__lt=end,
+                sale__deleted_at__isnull=True,
+            )
             .filter(_store_q(store_id, "sale__store_id"))
         )
-        total_profit = items_qs.aggregate(profit=sum_item_profit())["profit"]
+        sold_cogs_agg = items_qs.aggregate(
+            sold_cogs=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("quantity") * Coalesce(F("purchase_price"), Value(Decimal("0")), output_field=DecimalField()),
+                        output_field=DecimalField(),
+                    )
+                ),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
+            )
+        )
+        sold_cogs = sold_cogs_agg["sold_cogs"]
+        sold_profit = sold_revenue - sold_cogs
 
-        revenue = agg["total_revenue"]
-        orders  = agg["total_orders"] or 0
+        # 3. Return stream (qaytarimlar daromadi va tannarxi)
+        returns_qs = (
+            SaleReturn.objects
+            .filter(
+                created_at__gte=start,
+                created_at__lt=end,
+                sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "store_id"))
+        )
+        return_rev_agg = returns_qs.aggregate(
+            return_revenue=Coalesce(
+                Sum("total_refund"),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
+            )
+        )
+        return_revenue = return_rev_agg["return_revenue"]
+
+        return_items_qs = (
+            SaleReturnItem.objects
+            .filter(
+                sale_return__created_at__gte=start,
+                sale_return__created_at__lt=end,
+                sale_return__sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "sale_return__store_id"))
+        )
+        return_items_agg = return_items_qs.aggregate(
+            return_item_rev=Coalesce(
+                Sum("total_price"),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
+            ),
+            return_cogs=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("quantity") * Coalesce(F("sale_item__purchase_price"), Value(Decimal("0")), output_field=DecimalField()),
+                        output_field=DecimalField(),
+                    )
+                ),
+                Value(Decimal("0")),
+                output_field=DecimalField(),
+            ),
+        )
+
+        # Agar SaleReturn.total_refund 0 bo'lsa, SaleReturnItem.total_price yig'indisini olamiz
+        if return_revenue == Decimal("0") and return_items_agg["return_item_rev"] > Decimal("0"):
+            return_revenue = return_items_agg["return_item_rev"]
+
+        return_cogs = return_items_agg["return_cogs"]
+        return_profit = return_revenue - return_cogs
+
+        # 4. Period Transactional hisob-kitob
+        total_revenue = sold_revenue - return_revenue
+        total_profit = sold_profit - return_profit
+        total_expenses = total_revenue - total_profit
+        average_order_value = round(total_revenue / orders, 2) if orders else Decimal("0")
 
         return {
-            "totalRevenue":      revenue,
+            "totalRevenue":      total_revenue,
             "totalProfit":       total_profit,
-            "totalExpenses":     revenue - total_profit,
+            "totalExpenses":     total_expenses,
             "totalOrders":       orders,
-            "averageOrderValue": round(revenue / orders, 2) if orders else Decimal("0"),
-            "totalCustomers":    agg["total_customers"] or 0,
+            "averageOrderValue": average_order_value,
+            "totalCustomers":    customers,
         }
 
 
@@ -226,28 +293,137 @@ class SummaryService:
 # ─────────────────────────────────────────────
 class BranchService:
     """
-    Har bir do'kon uchun daromat, buyurtmalar va mijozlar soni.
-    1 ta SQL.
+    Har bir do'kon uchun daromad, buyurtmalar va mijozlar soni — Period Transactional Accounting.
+
+    Zero Cartesian Multiplication:
+    1. Sotuvlar oqimi (sales_qs): Sale.created_at ∈ [start, end), deleted_at IS NULL
+       - do'konlar bo'yicha guruhlanadi: store_id, store__name
+       - sold_revenue = Sum(Sale.total_amount)
+       - orders = Count(Sale.id) (Status.RETURNED chetlatilmaydi)
+       - customers = Count(distinct Sale.customer)
+    2. Qaytarimlar oqimi (returns_qs): SaleReturn.created_at ∈ [start, end), sale__deleted_at IS NULL
+       - do'konlar bo'yicha guruhlanadi: store_id, store__name
+       - return_revenue = Sum(SaleReturn.total_refund)
+    3. Python merge:
+       - Har bir do'kon bo'yicha revenue = sold_revenue - return_revenue
+       - Return-only do'konlar (sold = 0, return > 0) ham ro'yxatda manfiy daromad bilan chiqadi
+       - Natija -revenue bo'yicha saralanadi
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
-        return list(
-            _base_sales_qs(date_from, date_to, store_id)
+        start, end = _dt_bounds(date_from, date_to)
+
+        # 1. Sotuvlar oqimi
+        sales_qs = (
+            Sale.objects
+            .filter(
+                created_at__gte=start,
+                created_at__lt=end,
+                deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "store_id"))
             .values("store_id", "store__name")
             .annotate(
-                revenue=Coalesce(
-                    Sum(F("total_amount") - F("refunded")),
-                    Value(Decimal("0")), output_field=DecimalField(),
+                sold_revenue=Coalesce(
+                    Sum("total_amount"),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
                 ),
                 orders=Count("id"),
                 customers=Count(
-                    "customer", distinct=True,
+                    "customer",
+                    distinct=True,
                     filter=Q(customer__isnull=False),
                 ),
             )
-            .order_by("-revenue")
         )
+
+        # 2. Qaytarimlar oqimi
+        returns_qs = (
+            SaleReturn.objects
+            .filter(
+                created_at__gte=start,
+                created_at__lt=end,
+                sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "store_id"))
+            .values("store_id", "store__name")
+            .annotate(
+                return_revenue=Coalesce(
+                    Sum("total_refund"),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+            )
+        )
+
+        return_items_qs = (
+            SaleReturnItem.objects
+            .filter(
+                sale_return__created_at__gte=start,
+                sale_return__created_at__lt=end,
+                sale_return__sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "sale_return__store_id"))
+            .values("sale_return__store_id")
+            .annotate(
+                item_refund=Coalesce(
+                    Sum("total_price"),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                )
+            )
+        )
+        return_items_map = {row["sale_return__store_id"]: row["item_refund"] for row in return_items_qs}
+
+        # 3. Python darajasida birlashtirish (Store Merge)
+        store_map: dict[int, dict] = {}
+
+        for row in sales_qs:
+            sid = row["store_id"]
+            store_map[sid] = {
+                "store_id":    sid,
+                "store__name": row["store__name"] or "",
+                "revenue":     row["sold_revenue"],
+                "orders":      row["orders"] or 0,
+                "customers":   row["customers"] or 0,
+            }
+
+        for row in returns_qs:
+            sid = row["store_id"]
+            ret_rev = row["return_revenue"]
+            item_rev = return_items_map.get(sid, Decimal("0"))
+            if ret_rev == Decimal("0") and item_rev > Decimal("0"):
+                ret_rev = item_rev
+
+            if sid in store_map:
+                store_map[sid]["revenue"] -= ret_rev
+            else:
+                store_map[sid] = {
+                    "store_id":    sid,
+                    "store__name": row["store__name"] or "",
+                    "revenue":     -ret_rev,
+                    "orders":      0,
+                    "customers":   0,
+                }
+
+        for sid, item_rev in return_items_map.items():
+            if sid not in store_map and item_rev > Decimal("0"):
+                store_obj = Store.objects.filter(id=sid).first()
+                store_name = store_obj.name if store_obj else ""
+                store_map[sid] = {
+                    "store_id":    sid,
+                    "store__name": store_name,
+                    "revenue":     -item_rev,
+                    "orders":      0,
+                    "customers":   0,
+                }
+
+        # 4. -revenue bo'yicha saralash
+        result = list(store_map.values())
+        result.sort(key=lambda x: (x["revenue"], x["orders"]), reverse=True)
+        return result
 
 
 # ─────────────────────────────────────────────
@@ -255,33 +431,70 @@ class BranchService:
 # ─────────────────────────────────────────────
 class CategoryStatisticsService:
     """
-    Kategoriya bo'yicha sotuv ulushi (%).
-    SaleItem → product → category JOIN — 1 ta SQL.
+    Kategoriya bo'yicha sotuv ulushi (%) — Period Transactional Accounting.
+    SaleItem va SaleReturnItem skalyar subquery orqali yagona SQL so'rovda hisoblanadi (Zero Cartesian Multiplication).
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
         start, end = _dt_bounds(date_from, date_to)
-        qs = (
+
+        # 1. SaleReturnItem subquery (kategoriya bo'yicha qaytarim tushumi)
+        returns_base = (
+            SaleReturnItem.objects
+            .filter(
+                sale_return__created_at__gte=start,
+                sale_return__created_at__lt=end,
+                sale_return__sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "sale_return__store_id"))
+            .annotate(ret_cat_id=Coalesce("product__category_id", Value(0)))
+            .filter(ret_cat_id=OuterRef("cat_id"))
+        )
+
+        ret_rev_subquery = (
+            returns_base
+            .annotate(dummy=Value(1))
+            .values("dummy")
+            .annotate(total=Sum("total_price"))
+            .values("total")[:1]
+        )
+
+        # 2. SaleItem so'rovi (sotuvlar)
+        sales_qs = (
             SaleItem.objects
             .filter(
                 sale__created_at__gte=start,
                 sale__created_at__lt=end,
-                sale__status__in=[Sale.Status.PAID, Sale.Status.PARTIAL],
+                sale__deleted_at__isnull=True,
             )
             .filter(_store_q(store_id, "sale__store_id"))
-            .values("product__category__name")
+            .annotate(cat_id=Coalesce("product__category_id", Value(0)))
+            .values("cat_id", "product__category__name")
             .annotate(
-                revenue=Coalesce(
+                sold_rev=Coalesce(
                     Sum("total_price"),
-                    Value(Decimal("0")), output_field=DecimalField(),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+                ret_rev=Coalesce(
+                    Subquery(ret_rev_subquery, output_field=DecimalField()),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+            )
+            .annotate(
+                revenue=ExpressionWrapper(
+                    F("sold_rev") - F("ret_rev"),
+                    output_field=DecimalField(),
                 )
             )
+            .filter(revenue__gt=0)
             .order_by("-revenue")
         )
 
-        rows     = list(qs)
-        total    = sum(r["revenue"] for r in rows) or Decimal("1")  # 0 ga bo'lishdan saqlanish
+        rows = list(sales_qs)
+        total = sum(r["revenue"] for r in rows) or Decimal("1")  # 0 ga bo'lishdan saqlanish
 
         return [
             {
@@ -298,30 +511,87 @@ class CategoryStatisticsService:
 # ─────────────────────────────────────────────
 class TopProductsService:
     """
-    Eng ko'p sotilgan TOP_PRODUCTS_LIMIT ta mahsulot.
-    SaleItem → product → category JOIN — 1 ta SQL.
+    Eng ko'p sotilgan TOP_PRODUCTS_LIMIT ta mahsulot (Period Transactional Accounting).
+    SaleItem va SaleReturnItem skalyar subquerylar orqali yagona SQL so'rovda hisoblanadi.
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
         start, end = _dt_bounds(date_from, date_to)
-        rows = (
+
+        # 1. SaleReturnItem subquerylari (quantity va revenue)
+        returns_base = SaleReturnItem.objects.filter(
+            product_id=OuterRef("product_id"),
+            sale_return__created_at__gte=start,
+            sale_return__created_at__lt=end,
+            sale_return__sale__deleted_at__isnull=True,
+        ).filter(_store_q(store_id, "sale_return__store_id"))
+
+        ret_qty_subquery = (
+            returns_base
+            .annotate(dummy=Value(1))
+            .values("dummy")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
+        )
+
+        ret_rev_subquery = (
+            returns_base
+            .annotate(dummy=Value(1))
+            .values("dummy")
+            .annotate(total=Sum("total_price"))
+            .values("total")[:1]
+        )
+
+        # 2. SaleItem so'rovi (sotuvlar)
+        sales_qs = (
             SaleItem.objects
             .filter(
                 sale__created_at__gte=start,
                 sale__created_at__lt=end,
+                sale__deleted_at__isnull=True,
             )
             .filter(_store_q(store_id, "sale__store_id"))
+        )
+
+        # 3. Yagona SQL da agregatsiya, ayirish, filtrlash (totalSold > 0), saralash va LIMIT
+        rows = (
+            sales_qs
             .values("product_id", "product__name", "product__category__name")
             .annotate(
-                # output_field majburiy: quantity endi Decimal (0.5 qadam), 0 esa butun son
-                totalSold=Coalesce(Sum("quantity"), Value(0), output_field=DecimalField()),
-                totalRevenue=Coalesce(
+                sold_qty=Coalesce(
+                    Sum("quantity"),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+                ret_qty=Coalesce(
+                    Subquery(ret_qty_subquery, output_field=DecimalField()),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+                sold_rev=Coalesce(
                     Sum("total_price"),
-                    Value(Decimal("0")), output_field=DecimalField(),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+                ret_rev=Coalesce(
+                    Subquery(ret_rev_subquery, output_field=DecimalField()),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
                 ),
             )
-            .order_by("-totalSold")
+            .annotate(
+                totalSold=ExpressionWrapper(
+                    F("sold_qty") - F("ret_qty"),
+                    output_field=DecimalField(),
+                ),
+                totalRevenue=ExpressionWrapper(
+                    F("sold_rev") - F("ret_rev"),
+                    output_field=DecimalField(),
+                ),
+            )
+            .filter(totalSold__gt=0)
+            .order_by("-totalSold", "product_id")
             [:TOP_PRODUCTS_LIMIT]
         )
 
@@ -343,26 +613,45 @@ class TopProductsService:
 # ─────────────────────────────────────────────
 class PaymentStructureService:
     """
-    To'lov turlari bo'yicha taqsimot: Naqd / Karta / Aralash / Qarz.
+    To'lov turlari bo'yicha taqsimot: Naqd / Karta / Qarz.
 
-    Sale.payment_type (backend avtomatik hisoblaydigan maydon) bo'yicha guruhlanadi —
-    shu tufayli ARALASH (naqd + karta) sotuvlar alohida qatorda ko'rinadi.
-    Amount sifatida real tushgan pul (paid_amount) olinadi. 1 ta SQL + qarz uchun 1 ta.
+    Period Transactional Accounting:
+    1. Cash / Card payments (Payment stream):
+       - Payment.is_refund=False -> +Payment.amount
+       - Payment.is_refund=True  -> -Payment.amount
+       - Payment.created_at bo'yicha hisoblanadi (tranzaksion oqim).
+
+    2. Qarz oqimi (Debt stream):
+       - Davr sotuvlaridan hosil bo'lgan qarz (CustomerDebt type='i').
+         Fallback: CustomerDebt bo'lmagan test/legacy sotuvlar uchun (total_amount - initial_payments).
+       - Davr ichidagi shu sotuvlarga qilingan qarz to'lovlari (Payment is_debt_payment=True, created_at in [start, end))
+         qarzdan ayiriladi (chunki ular Cash/Card oqimida allaqachon hisoblangan).
+       - Davr ichidagi qaytarimlar hisobiga qarzning kamayishi (CustomerDebt type='d' minus is_debt_payment payments)
+         net qarzdan ayiriladi.
+       - Cross-period qarz to'lovlari o'tmishdagi sotuv davrini o'zgartirmaydi;
+         to'lov sodir bo'lgan davrda sof Cash/Card tranzaksiyasi sifatida aks etadi (qarz qatori qo'shilmaydi).
+       - Cross-period qaytarimlar esa qaytarim davrida manfiy qarz tranzaksiyasi sifatida hisoblanadi.
     """
 
     @staticmethod
     def get(date_from: date, date_to: date, store_id: int | None) -> list[dict]:
         start, end = _dt_bounds(date_from, date_to)
         qs = (
-            Sale.objects
+            Payment.objects
             .filter(created_at__gte=start, created_at__lt=end)
-            .filter(_store_q(store_id))
-            .exclude(payment_type=Sale.PaymentType.DEBT)  # pulsiz sotuvlar Qarz qatorida
-            .values("payment_type")
+            .filter(_store_q(store_id, "sale__store_id"))
+            .filter(Q(sale__isnull=True) | Q(sale__deleted_at__isnull=True))
+            .values("type")
             .annotate(
                 count=Count("id"),
                 amount=Coalesce(
-                    Sum("paid_amount"),
+                    Sum(
+                        Case(
+                            When(is_refund=True, then=-F("amount")),
+                            default=F("amount"),
+                            output_field=DecimalField(),
+                        )
+                    ),
                     Value(Decimal("0")), output_field=DecimalField(),
                 ),
             )
@@ -371,23 +660,121 @@ class PaymentStructureService:
 
         rows = list(qs)
 
-        # Qarz — to'lanmagan qoldiq (to'liq qarzdagi va qisman to'langan sotuvlar)
-        debt_agg = (
+        # Qarz — Period Transactional Accounting
+        # 1. Davr sotuvlaridan hosil bo'lgan qarz (same-period to'lovlar ayirilgan holda)
+        debt_inc_sq = (
+            CustomerDebt.objects
+            .filter(sale=OuterRef("id"), type=CustomerDebt.Type.INCREASE)
+            .values("sale")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1]
+        )
+
+        initial_pmts_sq = (
+            Payment.objects
+            .filter(sale=OuterRef("id"), is_debt_payment=False, is_refund=False)
+            .values("sale")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1]
+        )
+
+        fallback_debt = Greatest(
+            Value(Decimal("0"), output_field=DecimalField()),
+            F("total_amount") - Coalesce(Subquery(initial_pmts_sq, output_field=DecimalField()), Value(Decimal("0")), output_field=DecimalField()),
+            output_field=DecimalField(),
+        )
+
+        initial_debt = Coalesce(
+            Subquery(debt_inc_sq, output_field=DecimalField()),
+            Case(
+                When(status__in=[Sale.Status.DEBT, Sale.Status.PARTIAL], then=fallback_debt),
+                default=Value(Decimal("0")),
+                output_field=DecimalField(),
+            ),
+            output_field=DecimalField(),
+        )
+
+        same_period_pmts_sq = (
+            Payment.objects
+            .filter(
+                sale=OuterRef("id"),
+                is_debt_payment=True,
+                is_refund=False,
+                created_at__gte=start,
+                created_at__lt=end,
+            )
+            .values("sale")
+            .annotate(total=Sum("amount"))
+            .values("total")[:1]
+        )
+
+        sale_period_debt = Greatest(
+            Value(Decimal("0"), output_field=DecimalField()),
+            initial_debt - Coalesce(Subquery(same_period_pmts_sq, output_field=DecimalField()), Value(Decimal("0")), output_field=DecimalField()),
+            output_field=DecimalField(),
+        )
+
+        sales_agg = (
             Sale.objects
             .filter(
                 created_at__gte=start,
                 created_at__lt=end,
-                status__in=[Sale.Status.DEBT, Sale.Status.PARTIAL],
+                deleted_at__isnull=True,
             )
             .filter(_store_q(store_id))
+            .annotate(period_debt=sale_period_debt)
             .aggregate(
-                count=Count("id"),
-                amount=Coalesce(
-                    Sum(F("total_amount") - F("paid_amount")),
-                    Value(Decimal("0")), output_field=DecimalField(),
-                ),
+                total=Coalesce(Sum("period_debt"), Value(Decimal("0")), output_field=DecimalField()),
+                count=Count("id", filter=Q(period_debt__gt=0)),
             )
         )
+
+        # 2. Davr ichidagi qaytarimlar hisobiga qarzning kamayishi (return debt reductions)
+        debt_dec_agg = (
+            CustomerDebt.objects
+            .filter(
+                type=CustomerDebt.Type.DECREASE,
+                created_at__gte=start,
+                created_at__lt=end,
+                sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "sale__store_id"))
+            .aggregate(
+                total=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
+                count=Count("id"),
+            )
+        )
+
+        debt_pmts_agg = (
+            Payment.objects
+            .filter(
+                is_debt_payment=True,
+                is_refund=False,
+                created_at__gte=start,
+                created_at__lt=end,
+                sale__deleted_at__isnull=True,
+            )
+            .filter(_store_q(store_id, "sale__store_id"))
+            .aggregate(
+                total=Coalesce(Sum("amount"), Value(Decimal("0")), output_field=DecimalField()),
+            )
+        )
+
+        return_debt_reductions = max(Decimal("0"), debt_dec_agg["total"] - debt_pmts_agg["total"])
+
+        period_net_debt = sales_agg["total"] - return_debt_reductions
+
+        if sales_agg["count"] > 0:
+            debt_count = sales_agg["count"]
+        elif period_net_debt < 0:
+            debt_count = debt_dec_agg["count"] or 1
+        else:
+            debt_count = 0
+
+        debt_agg = {
+            "count":  debt_count,
+            "amount": period_net_debt,
+        }
 
         total_amount = (
             sum(r["amount"] for r in rows) + (debt_agg["amount"] or Decimal("0"))
@@ -395,8 +782,8 @@ class PaymentStructureService:
 
         result = [
             {
-                "method":  PAYMENT_METHOD_LABELS.get(r["payment_type"], r["payment_type"]),
-                "type":    r["payment_type"],
+                "method":  PAYMENT_METHOD_LABELS.get(r["type"], r["type"]),
+                "type":    r["type"],
                 "count":   r["count"],
                 "amount":  r["amount"],
                 "percent": f"{round(float(r['amount'] / total_amount * 100), 1)}%",
@@ -684,17 +1071,18 @@ class DebtService:
             SupplierTransaction.objects
             .values("supplier__name")
             .annotate(
-                inc=Coalesce(Sum("amount", filter=Q(type="in")),  Value(Decimal("0")), output_field=DecimalField()),
-                dec=Coalesce(Sum("amount", filter=Q(type="pay")), Value(Decimal("0")), output_field=DecimalField()),
+                inc=Coalesce(Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.INVENTORY_IN)),  Value(Decimal("0")), output_field=DecimalField()),
+                dec=Coalesce(Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.PAYMENT)), Value(Decimal("0")), output_field=DecimalField()),
+                ret=Coalesce(Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.RETURN)),  Value(Decimal("0")), output_field=DecimalField()),
             )
         )
         return [
             {
                 "supplierName": r["supplier__name"],
-                "debt":         r["inc"] - r["dec"],
+                "debt":         r["inc"] - r["dec"] - r["ret"],
             }
             for r in qs
-            if r["inc"] - r["dec"] > 0
+            if r["inc"] - r["dec"] - r["ret"] > 0
         ]
 
 
@@ -709,7 +1097,7 @@ class SupplierStatisticsService:
       • supplierCount        — davrda kirim qilingan noyob ta'minotchilar soni
       • distinctProductCount — davrda olingan noyob (xil) mahsulotlar soni
       • totalPurchaseAmount  — davrda olingan tovarlar umumiy summasi (kirim summasi)
-      • totalDebt            — davr ichidagi SOF qarz: SUM(in) − SUM(pay)
+      • totalDebt            — davr ichidagi SOF qarz: SUM(in) − SUM(pay) − SUM(ret)
 
     3 ta SQL: StockEntry, StockEntryItem, SupplierTransaction aggregate.
     """
@@ -742,7 +1130,7 @@ class SupplierStatisticsService:
             .aggregate(count=Count("product", distinct=True))
         )["count"]
 
-        # Qarz (SupplierTransaction): davr ichidagi sof qarz = kirim − to'lov.
+        # Qarz (SupplierTransaction): davr ichidagi sof qarz = kirim − to'lov − qaytim.
         # store filtri entry__store_id orqali (DebtService.supplier_debts bilan bir xil
         # naqsh) — store_id=None bo'lganda barcha tranzaksiyalar hisobga olinadi.
         debt_agg = (
@@ -758,6 +1146,10 @@ class SupplierStatisticsService:
                     Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.PAYMENT)),
                     Value(Decimal("0")), output_field=DecimalField(),
                 ),
+                ret=Coalesce(
+                    Sum("amount", filter=Q(type=SupplierTransaction.TransactionType.RETURN)),
+                    Value(Decimal("0")), output_field=DecimalField(),
+                ),
             )
         )
 
@@ -765,8 +1157,19 @@ class SupplierStatisticsService:
             "supplierCount":        entry_agg["supplier_count"] or 0,
             "distinctProductCount": distinct_products or 0,
             "totalPurchaseAmount":  entry_agg["total_purchase"],
-            "totalDebt":            debt_agg["inc"] - debt_agg["dec"],
+            "totalDebt":            debt_agg["inc"] - debt_agg["dec"] - debt_agg["ret"],
         }
+
+
+class SupplierReportService(SupplierStatisticsService):
+    """
+    Supplier Report Service facade.
+    Provides period transactional statistics and debt metrics for suppliers.
+    """
+
+    @staticmethod
+    def debts() -> list[dict]:
+        return DebtService.supplier_debts()
 
 
 # ─────────────────────────────────────────────

@@ -24,11 +24,24 @@ TEMPLATE_PATH = os.path.join(
 )
 
 
+def _async_product_import_worker(job):
+    with job.input_file.open("rb") as f:
+        return ProductImportService.import_from_excel(f, max_rows=None)
+
+
 @extend_schema(
     tags=["Product"],
     summary="Mahsulotlarni Excel orqali import qilish",
-    request={"multipart/form-data": {"type": "object", "properties": {"file": {"type": "string", "format": "binary"}}}},
-    responses={200: OpenApiTypes.OBJECT},
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "file": {"type": "string", "format": "binary"},
+                "async": {"type": "boolean", "description": "Fon rejimida qayta ishlash"},
+            },
+        }
+    },
+    responses={200: OpenApiTypes.OBJECT, 202: OpenApiTypes.OBJECT},
 )
 class ProductImportAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -42,8 +55,40 @@ class ProductImportAPIView(APIView):
         if not file.name.endswith(".xlsx"):
             return Response({"detail": "Faqat .xlsx fayl qabul qilinadi."}, status=400)
 
+        if file.size > ProductImportService.MAX_FILE_SIZE:
+            return Response(
+                {"detail": f"Fayl hajmi {ProductImportService.MAX_FILE_SIZE // (1024*1024)}MB dan oshmasligi kerak."},
+                status=400,
+            )
+
+        is_async = (
+            request.query_params.get("async") in ("true", "1")
+            or request.headers.get("X-Async") in ("true", "1")
+            or str(request.data.get("async", "")).lower() in ("true", "1")
+        )
+
+        if is_async:
+            from apps.common.models import AsyncJob
+            from apps.common.services.async_job_service import AsyncJobService
+            job = AsyncJobService.create_and_submit(
+                job_type=AsyncJob.JobType.PRODUCT_IMPORT,
+                user=request.user,
+                payload={"filename": file.name},
+                input_file=file,
+                task_func=_async_product_import_worker,
+            )
+            return Response(
+                {
+                    "job_id": str(job.id),
+                    "status": job.status,
+                    "message": "Mahsulotlar fayli fon rejimida qayta ishlanmoqda. Holatni /api/jobs/<job_id>/status/ orqali kuzatib boring.",
+                    "status_url": f"/api/jobs/{job.id}/status/",
+                },
+                status=202,
+            )
+
         try:
-            result = ProductImportService.import_from_excel(file)
+            result = ProductImportService.import_from_excel(file, max_rows=ProductImportService.MAX_SYNC_ROWS)
         except ValidationError as e:
             return Response({"detail": str(e)}, status=400)
 
