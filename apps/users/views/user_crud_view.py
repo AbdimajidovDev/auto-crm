@@ -1,4 +1,5 @@
-# users/views.py
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
+from django.db.models import ProtectedError
 from drf_spectacular.utils import extend_schema
 from rest_framework.generics import ListAPIView, get_object_or_404
 from rest_framework.views import APIView
@@ -93,9 +94,21 @@ class UsersDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        user = UserSelector.get_user_by_id(user_id=pk)
-        user.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        try:
+            UserService.delete_user(user_id=pk, requesting_user=request.user)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        except ObjectDoesNotExist as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_404_NOT_FOUND)
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as exc:
+            msg = exc.message if hasattr(exc, "message") and exc.message else (exc.messages[0] if hasattr(exc, "messages") and exc.messages else str(exc))
+            return Response({"detail": msg}, status=status.HTTP_400_BAD_REQUEST)
+        except ProtectedError:
+            return Response(
+                {"detail": "Ushbu foydalanuvchiga bog'langan sotuvlar yoki boshqa ma'lumotlar mavjud, o'chirib bo'lmaydi."},
+                status=status.HTTP_409_CONFLICT,
+            )
 
 
 

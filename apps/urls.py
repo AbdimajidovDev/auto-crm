@@ -12,4 +12,5 @@ urlpatterns = [
     path('reports/', include('apps.reports.urls')),
     path('inventory/', include('apps.inventory.urls')),
     path('writeoff/', include('apps.writeoff.urls')),
+    path('jobs/', include('apps.common.urls')),
 ]

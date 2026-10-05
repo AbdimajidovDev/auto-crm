@@ -529,7 +529,8 @@ class SupplierSalesReportTests(TestCase):
         for _ in range(5):
             SaleService.create_sale(user=self.admin, data={"store": self.store1.id, "customer": self.customer.id, "items": [{"product": self.product1.id, "quantity": Decimal("1.00"), "price": Decimal("150.00")}], "payment_type": "cash", "payments": [{"type": "cash", "amount": Decimal("150.00")}]})
 
-        with self.assertNumQueries(4):
+        # 5 bounded queries: sales allocations, return allocations, unalloc sales, unalloc returns, batch prices
+        with self.assertNumQueries(5):
             cols, rows, _, _ = SupplierSalesReportService.build_report({"report_type": "supplier_sales", "store_id": self.store1.id})
             self.assertEqual(len(rows), 1)
 

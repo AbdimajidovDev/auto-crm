@@ -1,92 +1,151 @@
-from django.db.models import Sum
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+
+from django.db.models import (
+    DecimalField,
+    ExpressionWrapper,
+    F,
+    OuterRef,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce
+from django.utils import timezone
 
 from apps.reports.services.store_scope_service import StoreScopeService
-from apps.sales.models import SaleItem
+from apps.sales.models import SaleItem, SaleReturnItem
 
+
+def _normalize_bounds(date_from, date_to) -> tuple[datetime, datetime]:
+    """
+    Sana oralig'ini [start, end) yarim-ochiq datetime chegaralarga aylantiradi.
+    DateValidator, DateRangeResolver, va ISO date obyektlari bilan bir xil ishlaydi.
+    """
+    if isinstance(date_from, datetime):
+        start = date_from
+    elif isinstance(date_from, date):
+        start = datetime.combine(date_from, time.min)
+    else:
+        start = timezone.now() - timedelta(days=30)
+
+    if isinstance(date_to, datetime):
+        if date_to.hour == 23 and date_to.minute == 59:
+            end = datetime.combine(date_to.date() + timedelta(days=1), time.min)
+        else:
+            end = date_to
+    elif isinstance(date_to, date):
+        end = datetime.combine(date_to + timedelta(days=1), time.min)
+    else:
+        end = timezone.now()
+
+    if timezone.is_naive(start):
+        start = timezone.make_aware(start)
+    if timezone.is_naive(end):
+        end = timezone.make_aware(end)
+
+    return start, end
 
 
 class TopProductsService:
 
     @staticmethod
     def get_top_products(*, user, date_from, date_to, limit=5, store_id=None):
+        start, end = _normalize_bounds(date_from, date_to)
+        safe_limit = max(1, min(int(limit or 5), 100))
 
-        # ⚠️ MUAMMO [PERF]: filter SaleItem(65k) -> Sale JOIN orqali sale__created_at__range
-        # bo'yicha boradi. Sale.created_at indekssiz — katta oraliqda range scan sekin.
-        qs = SaleItem.objects.filter(
-            sale__created_at__range=(date_from, date_to)
+        # 1. SaleReturnItem skalyar subquery (bitta mahsulot bo'yicha davr qaytarimlari)
+        returns_qs = SaleReturnItem.objects.filter(
+            product_id=OuterRef("product_id"),
+            sale_return__created_at__gte=start,
+            sale_return__created_at__lt=end,
+            sale_return__sale__deleted_at__isnull=True,
+        )
+        returns_qs = StoreFilterService.apply_store_filter(
+            returns_qs, user, store_id, store_field="sale_return__store_id"
+        )
+        ret_subquery = (
+            returns_qs
+            .annotate(dummy=Value(1))
+            .values("dummy")
+            .annotate(total=Sum("quantity"))
+            .values("total")[:1]
         )
 
-        # 🔥 YANGI QISM
-        qs = StoreFilterService.apply_store_filter(
-            qs,
-            user,
-            store_id
+        # 2. SaleItem so'rovi (barcha sotilgan tovarlar)
+        sales_qs = SaleItem.objects.filter(
+            sale__created_at__gte=start,
+            sale__created_at__lt=end,
+            sale__deleted_at__isnull=True,
+        )
+        sales_qs = StoreFilterService.apply_store_filter(
+            sales_qs, user, store_id, store_field="sale__store_id"
         )
 
-        # ⚠️ MUAMMO [PERF]: select_related("product","sale") + only(...) bu yerda BEHUDA —
-        # pastda .values("product_id", "product__name") + aggregate ishlatiladi. .values() bu
-        # select_related/only'ni bekor qiladi va o'zi kerakli ustunlarni tanlaydi. Bu qatorlar
-        # chalkashlik keltiradi, real optimizatsiya bermaydi (o'chirib tashlash mumkin).
-        qs = qs.select_related("product", "sale").only(
-            "product__id",
-            "product__name",
-            "quantity",
-            "sale__store_id",
-            "sale__created_at"
-        )
-
-
-        # ⚠️ MUAMMO [PERF]: limit view'dan cheklanmagan holda keladi (yuqori chegara yo'q).
-        # Katta limit'da SaleItem bo'yicha guruhlangan natija cheklanmay qaytishi mumkin.
-        # ✅ YECHIM: limit'ni view yoki shu yerda min(limit, 50) bilan cheklash.
+        # 3. Yagona SQL da agregatsiya, ayirish, filtrlash (net > 0), saralash va LIMIT
         data = (
-            qs.values("product_id", "product__name")
-            .annotate(total_sold=Sum("quantity"))
-            .order_by("-total_sold", "product_id")
-        )[:limit]
+            sales_qs
+            .values("product_id", "product__name")
+            .annotate(
+                sold_qty=Coalesce(
+                    Sum("quantity"),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+                ret_qty=Coalesce(
+                    Subquery(ret_subquery, output_field=DecimalField()),
+                    Value(Decimal("0")),
+                    output_field=DecimalField(),
+                ),
+            )
+            .annotate(
+                net_sold_qty=ExpressionWrapper(
+                    F("sold_qty") - F("ret_qty"),
+                    output_field=DecimalField(),
+                )
+            )
+            .filter(net_sold_qty__gt=0)
+            .order_by("-net_sold_qty", "product_id")
+            [:safe_limit]
+        )
 
         return [
             {
                 "product_id": i["product_id"],
                 "name": i["product__name"],
-                "total_sold": i["total_sold"],
+                "total_sold": i["net_sold_qty"],
             }
             for i in data
         ]
 
 
-
 class StoreFilterService:
 
     @staticmethod
-    def apply_store_filter(qs, user, store_id=None):
+    def get_permitted_store_id(user, store_id=None) -> int | list[int] | None:
+        clean_store = None
+        if store_id is not None and str(store_id).strip().lower() not in ("", "all", "none"):
+            clean_store = int(store_id)
 
-        # 🔥 superuser
         if user.is_superuser:
-            if store_id:
-                return qs.filter(sale__store_id=store_id)
-            return qs  # hammasi
+            return clean_store
 
-        # 🔥 oddiy user
-        user_store_ids = StoreScopeService.get_user_stores(user)
-
-        qs = qs.filter(sale__store_id__in=user_store_ids)
-
-        # 🔥 agar store_id berilgan bo‘lsa
-        if store_id:
-            # ❗ VALIDATION
-            # ⚠️ MUAMMO [PERF]: `int(store_id) not in user_store_ids` — user_store_ids bu
-            # baholanmagan QuerySet (values_list). `in` operatori uni Python xotirasiga to'liq
-            # yuklab, chiziqli qidiradi (har chaqiruvda alohida SQL + list materializatsiya).
-            # ✅ YECHIM: yuqorida bir marta ro'yxatga aylantirib olish
-            #   user_store_ids = list(StoreScopeService.get_user_stores(user))
-            # va tekshiruvni set(user_store_ids) bilan qilish.
-            if int(store_id) not in user_store_ids:
+        user_store_ids = set(StoreScopeService.get_user_stores(user))
+        if clean_store is not None:
+            if clean_store not in user_store_ids:
                 raise PermissionError("Sizda bu storega access yo‘q")
+            return clean_store
 
-            qs = qs.filter(sale__store_id=store_id)
+        return list(user_store_ids)
 
-        return qs
+    @staticmethod
+    def apply_store_filter(qs, user, store_id=None, store_field="sale__store_id"):
+        target = StoreFilterService.get_permitted_store_id(user, store_id)
+        if target is None:
+            return qs
+        if isinstance(target, list):
+            return qs.filter(**{f"{store_field}__in": target})
+        return qs.filter(**{store_field: target})
 
 
 # ═══════════════════════════════

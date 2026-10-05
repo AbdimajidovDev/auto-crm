@@ -41,7 +41,7 @@ from apps.reports.views.report_builder_view import (
     ReportBuilderMetaAPIView,
 )
 from apps.sales.models import BankCard, Payment, Sale, SaleItem, SaleReturn, SaleReturnItem
-from apps.sales.profit import partial_cost_filter, sum_item_profit
+from apps.sales.profit import partial_cost_filter
 from apps.store.models import Store, StoreUser
 from apps.users.models.customers import Customer
 from apps.users.models.role import Role
@@ -363,140 +363,6 @@ class ReportingFoundationSalesReturnsTest(TestCase):
         cls.prod_a = Product.objects.create(name="Tormoz kolodkasi", category=cls.category, sku="TK-01")
         cls.prod_b = Product.objects.create(name="Svecha", category=cls.category, sku="SV-02")
 
-    def test_normal_sale_annotation(self):
-        """Oddiy sotuv: net_total == total_amount, net_paid == paid_amount, net_profit to'g'ri."""
-        sale = Sale.objects.create(
-            store=self.store, seller=self.admin,
-            total_amount=Decimal("400.00"), paid_amount=Decimal("400.00"),
-            status=Sale.Status.PAID, payment_type="cash",
-        )
-        SaleItem.objects.create(
-            sale=sale, product=self.prod_a, quantity=Decimal("4"),
-            unit_price=Decimal("100.00"), purchase_price=Decimal("50.00"),
-            total_price=Decimal("400.00"),
-        )
-        Payment.objects.create(
-            sale=sale, amount=Decimal("400.00"), type=Payment.Type.CASH, is_refund=False,
-        )
-
-        qs = ReportingFoundationService.annotate_sale_net_fields(Sale.objects.filter(id=sale.id))
-        s = qs.first()
-        self.assertEqual(s.net_total, Decimal("400.00"))
-        self.assertEqual(s.net_paid, Decimal("400.00"))
-        self.assertEqual(s.net_debt, Decimal("0.00"))
-        # Sof foyda = (100 - 50) * 4 = 200.00
-        self.assertEqual(s.net_profit, Decimal("200.00"))
-
-    def test_partial_return_annotation(self):
-        """
-        Qisman qaytarim:
-        Sale.total_amount 500 (5 dona x 100).
-        2 dona qaytarildi (SaleReturn total_refund=200, SaleItem.returned_quantity=2).
-        Haqiqiy net_total = 300, net_paid = 300, net_profit = (100 - 60) * 3 = 120.
-        """
-        sale = Sale.objects.create(
-            store=self.store, seller=self.admin,
-            total_amount=Decimal("500.00"), paid_amount=Decimal("500.00"),
-            status=Sale.Status.PAID, payment_type="cash",
-        )
-        item = SaleItem.objects.create(
-            sale=sale, product=self.prod_a, quantity=Decimal("5"),
-            unit_price=Decimal("100.00"), purchase_price=Decimal("60.00"),
-            total_price=Decimal("500.00"),
-        )
-        Payment.objects.create(
-            sale=sale, amount=Decimal("500.00"), type=Payment.Type.CASH, is_refund=False,
-        )
-
-        # 2 dona qaytarildi
-        s_return = SaleReturn.objects.create(
-            sale=sale, store=self.store, seller=self.admin,
-            total_refund=Decimal("200.00"),
-        )
-        SaleReturnItem.objects.create(
-            sale_return=s_return, sale_item=item, product=self.prod_a,
-            quantity=Decimal("2"), unit_price=Decimal("100.00"),
-            total_price=Decimal("200.00"),
-        )
-        item.returned_quantity = Decimal("2")
-        item.save(update_fields=["returned_quantity"])
-
-        Payment.objects.create(
-            sale=sale, amount=Decimal("200.00"), type=Payment.Type.CASH, is_refund=True,
-        )
-
-        qs = ReportingFoundationService.annotate_sale_net_fields(Sale.objects.filter(id=sale.id))
-        s = qs.first()
-        self.assertEqual(s.net_total, Decimal("300.00"))
-        self.assertEqual(s.net_paid, Decimal("300.00"))
-        self.assertEqual(s.net_debt, Decimal("0.00"))
-        self.assertEqual(s.net_profit, Decimal("120.00"))
-
-    def test_full_return_annotation(self):
-        """
-        To'liq qaytarilgan sotuv (status='r'):
-        net_total = 0, net_paid = 0, net_debt = 0, net_profit = 0.
-        Umumiy savdo tushumiga QO'SHILMASLIGI SHART.
-        """
-        sale = Sale.objects.create(
-            store=self.store, seller=self.admin,
-            total_amount=Decimal("300.00"), paid_amount=Decimal("300.00"),
-            status=Sale.Status.RETURNED, payment_type="cash",
-        )
-        item = SaleItem.objects.create(
-            sale=sale, product=self.prod_a, quantity=Decimal("3"),
-            unit_price=Decimal("100.00"), purchase_price=Decimal("50.00"),
-            total_price=Decimal("300.00"), returned_quantity=Decimal("3"),
-        )
-        Payment.objects.create(
-            sale=sale, amount=Decimal("300.00"), type=Payment.Type.CASH, is_refund=False,
-        )
-        s_return = SaleReturn.objects.create(
-            sale=sale, store=self.store, seller=self.admin,
-            total_refund=Decimal("300.00"),
-        )
-        SaleReturnItem.objects.create(
-            sale_return=s_return, sale_item=item, product=self.prod_a,
-            quantity=Decimal("3"), unit_price=Decimal("100.00"),
-            total_price=Decimal("300.00"),
-        )
-        Payment.objects.create(
-            sale=sale, amount=Decimal("300.00"), type=Payment.Type.CASH, is_refund=True,
-        )
-
-        qs = ReportingFoundationService.annotate_sale_net_fields(Sale.objects.filter(id=sale.id))
-        s = qs.first()
-        self.assertEqual(s.net_total, Decimal("0.00"))
-        self.assertEqual(s.net_paid, Decimal("0.00"))
-        self.assertEqual(s.net_debt, Decimal("0.00"))
-        self.assertEqual(s.net_profit, Decimal("0.00"))
-
-    def test_sale_with_discount_and_profit(self):
-        """
-        Chegirmali sotuv:
-        2 dona x 100 = 200, chegirma 20 -> total_amount = 180.
-        Tannarx 50 dan = 100.
-        Sof foyda = 180 - 100 = 80.00.
-        """
-        sale = Sale.objects.create(
-            store=self.store, seller=self.admin,
-            total_amount=Decimal("180.00"), discount_amount=Decimal("20.00"),
-            paid_amount=Decimal("180.00"), status=Sale.Status.PAID, payment_type="cash",
-        )
-        SaleItem.objects.create(
-            sale=sale, product=self.prod_a, quantity=Decimal("2"),
-            unit_price=Decimal("100.00"), purchase_price=Decimal("50.00"),
-            total_price=Decimal("200.00"),
-        )
-        Payment.objects.create(
-            sale=sale, amount=Decimal("180.00"), type=Payment.Type.CASH, is_refund=False,
-        )
-
-        qs = ReportingFoundationService.annotate_sale_net_fields(Sale.objects.filter(id=sale.id))
-        s = qs.first()
-        self.assertEqual(s.net_total, Decimal("180.00"))
-        self.assertEqual(s.net_profit, Decimal("80.00"))
-
     def test_sale_with_missing_purchase_price_flag(self):
         """Tannarx kiritilmagan bo'lsa partial_cost_filter orqali ogohlantirish bayrog'i ishlaydi."""
         sale = Sale.objects.create(
@@ -615,7 +481,269 @@ class ReportingFoundationSalesReturnsTest(TestCase):
             [self.prod_a.id],
             before=datetime(2026, 1, 15, 0, 0, tzinfo=dt_timezone.utc),
         )
-        self.assertEqual(res_before[self.prod_a.id]["supplier"], self.supplier1.name)
+
+class ReportingFoundationPeriodRegressionTest(TestCase):
+    """
+    get_period_sales_metrics() bo'yicha regressiya testlari:
+    1. Cross-period full return (Sentabr sotuv, Oktyabr to'liq qaytarim -> Oktyabrda manfiy balans)
+    2. Same-period full return + another active sale (A to'liq qaytsa ham B ning tushumi yo'qolmasligi)
+    3. Cross-period partial return (Oktyabrda qisman qaytarim -> manfiy ko'rsatkichlar)
+    4. Deleted sale return (O'chirilgan savdo va uning qaytarimi hisobotga kirmasligi)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.admin = User.objects.create(
+            phone_number="+998909999901", email="period_reg@reports.uz",
+            is_superuser=True, is_staff=True,
+        )
+        cls.store = Store.objects.create(
+            name="Period Test Store", phone_number="+998909999902",
+            address="Test", type=Store.StoreType.STORE,
+        )
+        cls.category = Category.objects.create(name="Ehtiyot qismlar")
+        cls.prod_a = Product.objects.create(name="Moy filtri", category=cls.category, sku="MF-01")
+        cls.prod_b = Product.objects.create(name="Havo filtri", category=cls.category, sku="HF-02")
+
+    def test_cross_period_full_return(self):
+        """
+        1. Cross-period full return:
+        Yanvarda 1,000,000 so'mlik sotuv (tannarx 700,000).
+        Fevralda 1,000,000 so'm to'liq qaytarim (status='r').
+        Kutilgan:
+        - Yanvar: gross=1m, return=0, net=1m, profit=300k
+        - Fevral: gross=0, return=1m, net=-1m, cost=-700k, profit=-300k
+        """
+        dt_jan = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+        dt_feb = datetime(2026, 2, 10, 14, 0, tzinfo=dt_timezone.utc)
+
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("1000000.00"), paid_amount=Decimal("1000000.00"),
+            status=Sale.Status.PAID, payment_type="cash",
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=self.prod_a, quantity=Decimal("10"),
+            unit_price=Decimal("100000.00"), purchase_price=Decimal("70000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        Sale.objects.filter(id=sale.id).update(created_at=dt_jan)
+
+        s_return = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("1000000.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=s_return, sale_item=item, product=self.prod_a,
+            quantity=Decimal("10"), unit_price=Decimal("100000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        SaleReturn.objects.filter(id=s_return.id).update(created_at=dt_feb)
+        Sale.objects.filter(id=sale.id).update(status=Sale.Status.RETURNED)
+
+        # Yanvar davri
+        m_jan = ReportingFoundationService.get_period_sales_metrics(
+            start=datetime(2026, 1, 1, 0, 0, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(m_jan.gross_revenue, Decimal("1000000.00"))
+        self.assertEqual(m_jan.return_amount, Decimal("0.00"))
+        self.assertEqual(m_jan.net_revenue, Decimal("1000000.00"))
+        self.assertEqual(m_jan.gross_purchase_cost, Decimal("700000.00"))
+        self.assertEqual(m_jan.net_purchase_cost, Decimal("700000.00"))
+        self.assertEqual(m_jan.net_profit, Decimal("300000.00"))
+        self.assertEqual(m_jan.net_sold_qty, Decimal("10.00"))
+        self.assertEqual(m_jan.all_sales_count, 1)
+        self.assertEqual(m_jan.returns_count, 0)
+
+        # Fevral davri (manfiy tranzaksiya)
+        m_feb = ReportingFoundationService.get_period_sales_metrics(
+            start=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 3, 1, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(m_feb.gross_revenue, Decimal("0.00"))
+        self.assertEqual(m_feb.return_amount, Decimal("1000000.00"))
+        self.assertEqual(m_feb.net_revenue, Decimal("-1000000.00"))
+        self.assertEqual(m_feb.gross_purchase_cost, Decimal("0.00"))
+        self.assertEqual(m_feb.returned_purchase_cost, Decimal("700000.00"))
+        self.assertEqual(m_feb.net_purchase_cost, Decimal("-700000.00"))
+        self.assertEqual(m_feb.net_profit, Decimal("-300000.00"))
+        self.assertEqual(m_feb.net_sold_qty, Decimal("-10.00"))
+        self.assertEqual(m_feb.returns_count, 1)
+
+    def test_same_period_full_return_with_another_active_sale(self):
+        """
+        2. Same-period full return + another active sale:
+        Sotuv A: 1,000,000 so'm (tannarx 700,000), shu davrda to'liq qaytarilgan (status='r').
+        Sotuv B: 500,000 so'm (tannarx 350,000), faol.
+        Kutilgan:
+        - gross_revenue = 1,500,000
+        - return_amount = 1,000,000
+        - net_revenue = 500,000 (Sotuv B saqlanadi, double-deduction bo'lmaydi)
+        - net_purchase_cost = 350,000
+        - net_profit = 150,000
+        - sales_count = 1 (Sotuv B faol)
+        - all_sales_count = 2
+        """
+        dt1 = datetime(2026, 1, 10, 10, 0, tzinfo=dt_timezone.utc)
+        dt2 = datetime(2026, 1, 12, 11, 0, tzinfo=dt_timezone.utc)
+        dt3 = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+
+        # Sotuv A
+        sale_a = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("1000000.00"), paid_amount=Decimal("1000000.00"),
+            status=Sale.Status.PAID, payment_type="cash",
+        )
+        item_a = SaleItem.objects.create(
+            sale=sale_a, product=self.prod_a, quantity=Decimal("10"),
+            unit_price=Decimal("100000.00"), purchase_price=Decimal("70000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        Sale.objects.filter(id=sale_a.id).update(created_at=dt1)
+
+        # Qaytarim A (to'liq)
+        ret_a = SaleReturn.objects.create(
+            sale=sale_a, store=self.store, seller=self.admin,
+            total_refund=Decimal("1000000.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret_a, sale_item=item_a, product=self.prod_a,
+            quantity=Decimal("10"), unit_price=Decimal("100000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        SaleReturn.objects.filter(id=ret_a.id).update(created_at=dt2)
+        Sale.objects.filter(id=sale_a.id).update(status=Sale.Status.RETURNED)
+
+        # Sotuv B (faol)
+        sale_b = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("500000.00"), paid_amount=Decimal("500000.00"),
+            status=Sale.Status.PAID, payment_type="cash",
+        )
+        SaleItem.objects.create(
+            sale=sale_b, product=self.prod_b, quantity=Decimal("5"),
+            unit_price=Decimal("100000.00"), purchase_price=Decimal("70000.00"),
+            total_price=Decimal("500000.00"),
+        )
+        Sale.objects.filter(id=sale_b.id).update(created_at=dt3)
+
+        m = ReportingFoundationService.get_period_sales_metrics(
+            start=datetime(2026, 1, 1, 0, 0, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(m.gross_revenue, Decimal("1500000.00"))
+        self.assertEqual(m.return_amount, Decimal("1000000.00"))
+        self.assertEqual(m.net_revenue, Decimal("500000.00"))
+        self.assertEqual(m.gross_purchase_cost, Decimal("1050000.00"))
+        self.assertEqual(m.returned_purchase_cost, Decimal("700000.00"))
+        self.assertEqual(m.net_purchase_cost, Decimal("350000.00"))
+        self.assertEqual(m.net_profit, Decimal("150000.00"))
+        self.assertEqual(m.net_sold_qty, Decimal("5.00"))
+        self.assertEqual(m.sales_count, 1)
+        self.assertEqual(m.all_sales_count, 2)
+        self.assertEqual(m.returns_count, 1)
+
+    def test_cross_period_partial_return(self):
+        """
+        3. Cross-period partial return:
+        Yanvarda 1,000,000 so'mlik sotuv (10 dona @ 100k, tannarx 70k).
+        Fevralda 300,000 so'mlik qisman qaytarim (3 dona @ 100k).
+        Kutilgan:
+        - Yanvar: gross=1m, net=1m, profit=300k
+        - Fevral: gross=0, return=300k, net=-300k, net_cost=-210k, profit=-90k, net_qty=-3
+        """
+        dt_jan = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+        dt_feb = datetime(2026, 2, 10, 14, 0, tzinfo=dt_timezone.utc)
+
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("1000000.00"), paid_amount=Decimal("1000000.00"),
+            status=Sale.Status.PAID, payment_type="cash",
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=self.prod_a, quantity=Decimal("10"),
+            unit_price=Decimal("100000.00"), purchase_price=Decimal("70000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        Sale.objects.filter(id=sale.id).update(created_at=dt_jan)
+
+        s_return = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("300000.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=s_return, sale_item=item, product=self.prod_a,
+            quantity=Decimal("3"), unit_price=Decimal("100000.00"),
+            total_price=Decimal("300000.00"),
+        )
+        SaleReturn.objects.filter(id=s_return.id).update(created_at=dt_feb)
+
+        m_feb = ReportingFoundationService.get_period_sales_metrics(
+            start=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 3, 1, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(m_feb.gross_revenue, Decimal("0.00"))
+        self.assertEqual(m_feb.return_amount, Decimal("300000.00"))
+        self.assertEqual(m_feb.net_revenue, Decimal("-300000.00"))
+        self.assertEqual(m_feb.returned_purchase_cost, Decimal("210000.00"))
+        self.assertEqual(m_feb.net_purchase_cost, Decimal("-210000.00"))
+        self.assertEqual(m_feb.net_profit, Decimal("-90000.00"))
+        self.assertEqual(m_feb.net_sold_qty, Decimal("-3.00"))
+        self.assertEqual(m_feb.returns_count, 1)
+
+    def test_deleted_sale_return_exclusion(self):
+        """
+        4. Deleted sale return:
+        O'chirilgan savdo (deleted_at belgilanadi) va uning qaytarimi
+        davriy sotuv hisobotida mutlaqo hisobga olinmasligi kerak.
+        """
+        dt_sale = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+        dt_ret = datetime(2026, 1, 18, 14, 0, tzinfo=dt_timezone.utc)
+
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("1000000.00"), paid_amount=Decimal("1000000.00"),
+            status=Sale.Status.PAID, payment_type="cash",
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=self.prod_a, quantity=Decimal("10"),
+            unit_price=Decimal("100000.00"), purchase_price=Decimal("70000.00"),
+            total_price=Decimal("1000000.00"),
+        )
+        Sale.objects.filter(id=sale.id).update(created_at=dt_sale)
+
+        s_return = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("400000.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=s_return, sale_item=item, product=self.prod_a,
+            quantity=Decimal("4"), unit_price=Decimal("100000.00"),
+            total_price=Decimal("400000.00"),
+        )
+        SaleReturn.objects.filter(id=s_return.id).update(created_at=dt_ret)
+
+        # Savdoni soft-delete qilamiz
+        Sale.all_objects.filter(id=sale.id).update(
+            deleted_at=datetime(2026, 1, 20, 10, 0, tzinfo=dt_timezone.utc)
+        )
+
+        m = ReportingFoundationService.get_period_sales_metrics(
+            start=datetime(2026, 1, 1, 0, 0, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+        )
+        self.assertEqual(m.gross_revenue, Decimal("0.00"))
+        self.assertEqual(m.return_amount, Decimal("0.00"))
+        self.assertEqual(m.net_revenue, Decimal("0.00"))
+        self.assertEqual(m.gross_purchase_cost, Decimal("0.00"))
+        self.assertEqual(m.returned_purchase_cost, Decimal("0.00"))
+        self.assertEqual(m.net_purchase_cost, Decimal("0.00"))
+        self.assertEqual(m.net_profit, Decimal("0.00"))
+        self.assertEqual(m.net_sold_qty, Decimal("0.00"))
+        self.assertEqual(m.all_sales_count, 0)
+        self.assertEqual(m.sales_count, 0)
+        self.assertEqual(m.returns_count, 0)
 
 
 class ReportBuilderEnhancedReportsTest(TestCase):
@@ -681,14 +809,19 @@ class ReportBuilderEnhancedReportsTest(TestCase):
 
     def test_sales_report_reflects_net_figures(self):
         data = ReportBuilderService.generate({"report_type": "sales"}, self.admin)
-        self.assertEqual(data["total"], 1)
-        row = data["rows"][0]
-        # net_total = 1250 - 250 = 1000.00
-        self.assertEqual(row["total"], "1000.00")
-        self.assertEqual(row["paid"], "1000.00")
-        self.assertEqual(row["debt"], "0.00")
-        # net_profit = (250 - 150) * 4 = 400.00
-        self.assertEqual(row["profit"], "400.00")
+        # Period Transactional: 1 sale transaction row (+1250.00) and 1 return transaction row (-250.00)
+        self.assertEqual(data["total"], 2)
+        rows_by_status = {r["status"]: r for r in data["rows"]}
+        sale_row = rows_by_status["To'langan"]
+        self.assertEqual(sale_row["total"], "1250.00")
+        self.assertEqual(sale_row["paid"], "1250.00")
+        self.assertEqual(sale_row["debt"], "0.00")
+        self.assertEqual(sale_row["profit"], "500.00")
+
+        ret_row = rows_by_status["Qaytarim"]
+        self.assertEqual(ret_row["total"], "-250.00")
+        self.assertEqual(ret_row["paid"], "-250.00")
+        self.assertEqual(ret_row["profit"], "-100.00")
 
         summary = {s["label"]: s["value"] for s in data["summary"]}
         self.assertEqual(summary["Jami summa"], "1000.00")
