@@ -19,14 +19,17 @@ REST_FRAMEWORK = {
         "apps.users.authentication.CookieJWTAuthentication",
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ),
-    # 'DEFAULT_THROTTLE_CLASSES': [
-    #     'rest_framework.throttling.AnonRateThrottle',
-    #     'rest_framework.throttling.UserRateThrottle',
-    # ],
-    # # 'DEFAULT_THROTTLE_RATES': {
-    # #     'anon': '3/min',  # Anon users: 3 requests per minute
-    # #     'user': '5/min',  # Auth users: 5 requests per minute
-    # # },
+    # Throttling global tarzda yoqilmaydi (biznes API'lariga xalal bermaslik uchun).
+    # Faqat auth endpointlar (login, forgot-password, reset-password) o'z view'larida
+    # throttle_classes orqali cheklanadi.
+    'DEFAULT_THROTTLE_RATES': {
+        'login_ip': '10/min',
+        'login_identifier': '5/min',
+        'password_reset_request_ip': '10/hour',
+        'password_reset_request_email': '3/hour',
+        'password_reset_confirm': '5/min',
+        'otp_resend': '3/min',
+    },
 }
 
 

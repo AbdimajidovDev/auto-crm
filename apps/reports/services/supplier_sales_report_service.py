@@ -11,7 +11,7 @@ from rest_framework.exceptions import ValidationError
 from apps.contract.permissions import allowed_store_ids
 from apps.inventory.models import StockAllocation
 from apps.products.models import ProductBatch
-from apps.sales.models import Sale, SaleItem
+from apps.sales.models import Sale, SaleItem, SaleReturnItem
 
 ALL_TIME_START = date(2000, 1, 1)
 
@@ -177,8 +177,9 @@ class SupplierSalesReportService:
             elif raw_supplier.lower() in ("unknown", "none", "legacy"):
                 returns_qs = returns_qs.filter(lot__supplier__isnull=True)
 
-        # 5. Query Historical Unallocated Sales (only if not filtering for a specific supplier)
+        # 5. Query Historical Unallocated Sales and Returns (only if not filtering for a specific supplier)
         unalloc_items = []
+        unalloc_return_items = []
         if not (raw_supplier and raw_supplier.isdigit()):
             unalloc_qs = (
                 SaleItem.objects
@@ -187,7 +188,6 @@ class SupplierSalesReportService:
                     sale__created_at__lt=end,
                     stock_allocations__isnull=True,
                 )
-                .exclude(sale__status=Sale.Status.RETURNED)
                 .exclude(sale__deleted_at__isnull=False)
                 .select_related(
                     "sale__store",
@@ -203,6 +203,29 @@ class SupplierSalesReportService:
 
             unalloc_items = list(unalloc_qs)
 
+            unalloc_returns_qs = (
+                SaleReturnItem.objects
+                .filter(
+                    sale_return__created_at__gte=start,
+                    sale_return__created_at__lt=end,
+                    stock_allocations__isnull=True,
+                )
+                .exclude(sale_return__sale__deleted_at__isnull=False)
+                .select_related(
+                    "sale_return__store",
+                    "sale_return__sale",
+                    "product__category",
+                    "product__brand",
+                    "sale_item__sale",
+                )
+            )
+            if target_store_id:
+                unalloc_returns_qs = unalloc_returns_qs.filter(sale_return__store_id=target_store_id)
+            elif allowed is not None:
+                unalloc_returns_qs = unalloc_returns_qs.filter(sale_return__store_id__in=allowed)
+
+            unalloc_return_items = list(unalloc_returns_qs)
+
         sale_allocations = list(sales_qs)
         return_allocations = list(returns_qs)
 
@@ -214,6 +237,8 @@ class SupplierSalesReportService:
             store_prod_pairs.add((a.lot.store_id, a.lot.product_id))
         for it in unalloc_items:
             store_prod_pairs.add((it.sale.store_id, it.product_id))
+        for rit in unalloc_return_items:
+            store_prod_pairs.add((rit.sale_return.store_id, rit.product_id))
 
         batches_map = {}
         if store_prod_pairs:
@@ -429,8 +454,49 @@ class SupplierSalesReportService:
 
             eff_price = calc_effective_unit_price(it.sale, it)
             bucket["sold_qty"] += it.quantity
-            bucket["returned_qty"] += it.returned_quantity
-            bucket["revenue"] += (it.quantity - it.returned_quantity) * eff_price
+            bucket["revenue"] += it.quantity * eff_price
+
+            if is_fr:
+                bucket["free_price_flag"] = True
+            if is_ws:
+                bucket["wholesale_price_flag"] = True
+
+        # Process Historical Unallocated Returns (before lot cut-over or without stock allocations)
+        for rit in unalloc_return_items:
+            store = rit.sale_return.store
+            product = rit.product
+            sup_name = "Tarixiy (Aniqlanmagan)"
+            sup_id = None
+            cat_name = product.category.name if product.category else None
+            day_val = timezone.localdate(rit.sale_return.created_at) if by_day else None
+
+            raw_item_price = rit.sale_item.unit_price if rit.sale_item else rit.unit_price
+            is_ret, is_ws, is_fr = determine_price_flags(store.id, product.id, raw_item_price)
+            if not matches_price_filter(is_ret, is_ws, is_fr):
+                continue
+
+            bucket = get_or_create_bucket(
+                store.id,
+                store.name,
+                day_val,
+                sup_id,
+                sup_name,
+                product.id,
+                product.name,
+                product.sku,
+                product.barcode,
+                cat_name,
+            )
+
+            eff_price = Decimal("0.00")
+            if rit.sale_item:
+                eff_price = calc_effective_unit_price(rit.sale_item.sale, rit.sale_item)
+            if eff_price == Decimal("0.00"):
+                eff_price = rit.unit_price
+
+            bucket["returned_qty"] += rit.quantity
+            return_revenue = rit.quantity * eff_price
+            bucket["revenue"] -= return_revenue
 
             if is_fr:
                 bucket["free_price_flag"] = True

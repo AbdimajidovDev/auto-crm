@@ -68,10 +68,15 @@ class StockEntryImportService:
     MAX_NAME_LEN = 100
     MAX_SKU_LEN = 64
 
+    # Himoya chegaralari (DoS / Timeout oldini olish)
+    MAX_SYNC_ROWS = 2500
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
     @classmethod
-    def analyze_from_excel(cls, *, file) -> dict:
+    def analyze_from_excel(cls, *, file, max_rows=None) -> dict:
         """
         Excel faylni import qilmasdan tahlil qiladi.
+
 
         Qaytaradi:
             {
@@ -83,7 +88,7 @@ class StockEntryImportService:
               "skipped": [ {"row", "reason"} ],
             }
         """
-        col, data_rows = cls._read_sheet(file)
+        col, data_rows = cls._read_sheet(file, max_rows=max_rows)
         parsed, skipped = cls._parse_rows(col, data_rows)
         product_maps = cls._build_product_maps(parsed)
         resolved, candidates, split_skipped = cls._split_rows(parsed, product_maps)
@@ -109,9 +114,10 @@ class StockEntryImportService:
 
     @classmethod
     def import_from_excel(cls, *, file, supplier, store, cash_amount, card_amount, user,
-                          create_products=False) -> dict:
+                          create_products=False, max_rows=None) -> dict:
         """
         Excel fayldan kirim yaratadi.
+
 
         create_products=True bo'lsa bazada topilmagan mahsulotlar avval Product
         sifatida yaratiladi (kirim bilan bitta tranzaksiyada), aks holda bunday
@@ -129,7 +135,7 @@ class StockEntryImportService:
               "payment_type": str | None,
             }
         """
-        col, data_rows = cls._read_sheet(file)
+        col, data_rows = cls._read_sheet(file, max_rows=max_rows)
         parsed, skipped = cls._parse_rows(col, data_rows)
         product_maps = cls._build_product_maps(parsed)
         resolved, candidates, split_skipped = cls._split_rows(parsed, product_maps)
@@ -211,7 +217,7 @@ class StockEntryImportService:
     # ── Excel o'qish ──────────────────────────────────────────────────────────
 
     @classmethod
-    def _read_sheet(cls, file):
+    def _read_sheet(cls, file, max_rows=None):
         try:
             wb = openpyxl.load_workbook(file, read_only=True, data_only=True)
         except Exception:
@@ -221,17 +227,14 @@ class StockEntryImportService:
         if ws is None:
             raise ValidationError("Excel faylda ishchi varaq topilmadi.")
 
-        # YAXSHI: read_only=True + data_only=True - openpyxl formulalarni hisoblamaydi va lazy o'qiydi.
-        # MUAMMO [KRITIK]: list(ws.iter_rows(...)) BARCHA satrlarni bir zumda xotiraga materializatsiya qiladi.
-        #   ~48k qatorli faylda bu katta RAM va sekin request demak. iter_rows generatorining afzalligi yo'qoladi.
-        # YECHIM: satr sonini oldindan cheklash yoki chunk-lab ishlash:
-        #   MAX_ROWS = 5000; ws.max_row tekshiruvi yoki enumerate(ws.iter_rows(...)) ni generator sifatida uzatish.
-        rows = list(ws.iter_rows(values_only=True))
-        if not rows:
+        row_iter = ws.iter_rows(values_only=True)
+        try:
+            header_row = next(row_iter)
+        except StopIteration:
             raise ValidationError("Excel fayl bo'sh.")
 
         # Sarlavhalarni normallashtiramiz: majburiylik belgisi "*" va ortiqcha bo'shliqlar olib tashlanadi.
-        raw_headers    = [str(h).strip().lower().rstrip("*").strip() if h is not None else "" for h in rows[0]]
+        raw_headers    = [str(h).strip().lower().rstrip("*").strip() if h is not None else "" for h in header_row]
         mapped_headers = [HEADER_MAP.get(h, h) for h in raw_headers]
         col = {name: idx for idx, name in enumerate(mapped_headers)}
 
@@ -244,7 +247,15 @@ class StockEntryImportService:
                 "Kamida bitta mahsulot identifikatori ustuni kerak: 'Barcode', 'SKU' yoki 'Mahsulot nomi'."
             )
 
-        data_rows = rows[1:]
+        data_rows = []
+        for idx, row in enumerate(row_iter, start=1):
+            if max_rows is not None and idx > max_rows:
+                raise ValidationError(
+                    f"Fayl satrlari soni {max_rows} tadan oshmasligi kerak. "
+                    f"Katta hajmli fayllarni import qilish uchun fon rejimini ishlating (?async=true)."
+                )
+            data_rows.append(row)
+
         if not data_rows:
             raise ValidationError("Shablon bo'sh — ma'lumot qatorlari yo'q.")
 

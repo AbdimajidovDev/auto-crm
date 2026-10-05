@@ -67,21 +67,63 @@ def _extract_xlsx(request):
     },
     responses={201: OpenApiTypes.OBJECT},
 )
+def _async_stock_entry_import_worker(job, supplier_id, store_id, cash_amount, card_amount, user_id, create_products):
+    from decimal import Decimal
+    from apps.contract.models import Supplier
+    from apps.store.models import Store
+    from apps.users.models import User
+
+    supplier = Supplier.objects.get(id=supplier_id)
+    store = Store.objects.get(id=store_id)
+    user = User.objects.get(id=user_id)
+    with job.input_file.open("rb") as f:
+        return StockEntryImportService.import_from_excel(
+            file=f,
+            supplier=supplier,
+            store=store,
+            cash_amount=Decimal(str(cash_amount or "0")),
+            card_amount=Decimal(str(card_amount or "0")),
+            user=user,
+            create_products=create_products,
+            max_rows=None,
+        )
+
+
+@extend_schema(
+    tags=["Stock Entry"],
+    summary="Excel orqali omborga kirim qilish",
+    request={
+        "multipart/form-data": {
+            "type": "object",
+            "properties": {
+                "supplier": {"type": "integer", "description": "Yetkazib beruvchi ID (majburiy)"},
+                "store": {"type": "integer", "description": "Do'kon ID (ixtiyoriy — berilmasa asosiy do'kon type='b' olinadi)"},
+                "cash_amount": {"type": "string", "description": "Naqd to'lov (ixtiyoriy, default 0)"},
+                "card_amount": {"type": "string", "description": "Karta to'lovi (ixtiyoriy, default 0)"},
+                "create_products": {"type": "boolean", "description": "Bazada yo'q mahsulotlarni yaratib kirim qilish (default false — bunday satrlar o'tkazib yuboriladi)"},
+                "file": {"type": "string", "format": "binary", "description": "Kirim Excel fayli (.xlsx)"},
+                "async": {"type": "boolean", "description": "Fon rejimida qayta ishlash (katta fayllar uchun tavsiya etiladi)"},
+            },
+            "required": ["supplier", "file"],
+        }
+    },
+    responses={201: OpenApiTypes.OBJECT, 202: OpenApiTypes.OBJECT},
+)
 class StockEntryImportAPIView(APIView):
     permission_classes = [IsSuperUser]
     parser_classes = [MultiPartParser, FormParser]
 
     def post(self, request):
-        # ⚠️ MUAMMO [KRITIK]: Bitta requestda cheklovsiz katta Excel (~48k qator hajmiga yaqin) yuklanishi mumkin.
-        # Butun fayl xizmatda list(ws.iter_rows()) orqali xotiraga o'qiladi (stock_entry_import_service.py:208),
-        # so'ng barcha satrlar bitta @transaction.atomic ichida INSERT qilinadi. Natijada:
-        #   - katta faylda RAM portlashi va sekin/uzoq HTTP request (timeout xavfi),
-        #   - uzun tranzaksiya butun jadvalga lock/tiqilinch keltiradi.
-        # ✅ YECHIM: fayl hajmi/satr soniga limit (masalan MAX_ROWS=5000, file.size tekshiruvi),
-        #   katta importni Celery background taskka o'tkazish, xizmatda bulk_create(batch_size=...) bilan chunk commit.
         file, file_error = _extract_xlsx(request)
         if file_error:
             return file_error
+
+        # File size check
+        if file.size > StockEntryImportService.MAX_FILE_SIZE:
+            return Response(
+                {"detail": f"Fayl hajmi {StockEntryImportService.MAX_FILE_SIZE // (1024*1024)}MB dan oshmasligi kerak."},
+                status=400,
+            )
 
         serializer = StockEntryImportSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -95,6 +137,49 @@ class StockEntryImportAPIView(APIView):
             if store_error:
                 return Response({"detail": store_error}, status=400)
 
+        # Check async mode requested
+        is_async = (
+            request.query_params.get("async") in ("true", "1")
+            or request.headers.get("X-Async") in ("true", "1")
+            or str(request.data.get("async", "")).lower() in ("true", "1")
+        )
+
+        if is_async:
+            from apps.common.models import AsyncJob
+            from apps.common.services.async_job_service import AsyncJobService
+            job = AsyncJobService.create_and_submit(
+                job_type=AsyncJob.JobType.STOCK_ENTRY_IMPORT,
+                user=request.user,
+                store=store,
+                payload={
+                    "supplier_id": data["supplier"].id,
+                    "store_id": store.id,
+                    "cash_amount": str(data["cash_amount"]),
+                    "card_amount": str(data["card_amount"]),
+                    "create_products": data["create_products"],
+                    "filename": file.name,
+                },
+                input_file=file,
+                task_func=_async_stock_entry_import_worker,
+                task_args=(
+                    data["supplier"].id,
+                    store.id,
+                    str(data["cash_amount"]),
+                    str(data["card_amount"]),
+                    request.user.id,
+                    data["create_products"],
+                ),
+            )
+            return Response(
+                {
+                    "job_id": str(job.id),
+                    "status": job.status,
+                    "message": "Kirim fayli fon rejimida qayta ishlanmoqda. Holatni /api/jobs/<job_id>/status/ orqali kuzatib boring.",
+                    "status_url": f"/api/jobs/{job.id}/status/",
+                },
+                status=202,
+            )
+
         try:
             result = StockEntryImportService.import_from_excel(
                 file=file,
@@ -104,6 +189,7 @@ class StockEntryImportAPIView(APIView):
                 card_amount=data["card_amount"],
                 user=request.user,
                 create_products=data["create_products"],
+                max_rows=StockEntryImportService.MAX_SYNC_ROWS,
             )
         except ValidationError as e:
             return Response({"detail": e.messages[0] if hasattr(e, "messages") else str(e)}, status=400)
@@ -120,16 +206,12 @@ class StockEntryImportAPIView(APIView):
     @staticmethod
     def _resolve_base_store():
         """Do'kon tanlanmagan bo'lsa fallback: asosiy do'kon (type='b') avtomatik aniqlanadi."""
-        # YAXSHI: type va is_active boyicha filtr indekslangan (Store.Meta.indexes) - full-scan yoq.
-        # MUAMMO [PERF]: count() + first() = 2 query. Dokon jadvali kichik, xavf past, lekin
-        # list(base_qs[:2]) bilan bitta queryda hal qilsa boladi.
-        base_qs = Store.objects.filter(is_active=True, type=Store.StoreType.BASE)
-        count = base_qs.count()
-        if count == 0:
+        base_stores = list(Store.objects.filter(is_active=True, type=Store.StoreType.BASE)[:2])
+        if len(base_stores) == 0:
             return None, "Asosiy do'kon (type='b') topilmadi."
-        if count > 1:
+        if len(base_stores) > 1:
             return None, "Bir nechta faol asosiy do'kon mavjud — sozlamalarda bittasini qoldiring."
-        return base_qs.first(), None
+        return base_stores[0], None
 
 
 @extend_schema(
@@ -160,8 +242,17 @@ class StockEntryImportAnalyzeAPIView(APIView):
         if file_error:
             return file_error
 
+        if file.size > StockEntryImportService.MAX_FILE_SIZE:
+            return Response(
+                {"detail": f"Fayl hajmi {StockEntryImportService.MAX_FILE_SIZE // (1024*1024)}MB dan oshmasligi kerak."},
+                status=400,
+            )
+
         try:
-            result = StockEntryImportService.analyze_from_excel(file=file)
+            result = StockEntryImportService.analyze_from_excel(
+                file=file,
+                max_rows=StockEntryImportService.MAX_SYNC_ROWS,
+            )
         except ValidationError as e:
             return Response({"detail": e.messages[0] if hasattr(e, "messages") else str(e)}, status=400)
 

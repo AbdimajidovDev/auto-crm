@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 
-from datetime import timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -16,17 +16,12 @@ from apps.common.i18n import tr
 from apps.common.paginations import StandardPagination
 from apps.debts.models import CustomerDebt
 from apps.sales.models import Sale, SaleItem, Payment, SaleReturn, SaleReturnItem
-from apps.sales.profit import partial_cost_filter, sum_item_profit
 from apps.sales.serializers import SaleCreateSerializer, SaleListSerializer, CustomerDebtListSerializer
-from apps.sales.services import SaleService
-from django.db.models import Q
-
-from apps.sales.services import CustomerDebtService
+from apps.sales.services import SaleService, CustomerDebtService
 from apps.sales.filters import SaleFilter
-
 from django.db.models import (
-    Case, Count, DecimalField, F, OuterRef,
-    Prefetch, Subquery, Sum, Value, When,
+    Case, Count, DecimalField, ExpressionWrapper, F, OuterRef,
+    Prefetch, Q, Subquery, Sum, Value, When,
 )
 from django.db.models.functions import Coalesce
 from django_filters import rest_framework as filters
@@ -216,6 +211,45 @@ class SaleListAPIView(generics.ListAPIView):
 #         return qs.order_by("-created_at")
 
 
+def _parse_date_bounds(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+    """
+    Sana oralig'ini [start, end) yarim-ochiq datetime chegaralarga aylantiradi.
+    created_at indeksi to'liq ishlashi (sargable) va kun oxiri to'liq qamrab olinishi uchun.
+    """
+    tz = timezone.get_current_timezone()
+    start_dt = None
+    end_dt = None
+    if date_from:
+        if isinstance(date_from, datetime):
+            start_dt = date_from
+        elif isinstance(date_from, date):
+            start_dt = datetime.combine(date_from, time.min)
+        else:
+            try:
+                d = date.fromisoformat(str(date_from).strip())
+                start_dt = datetime.combine(d, time.min)
+            except (ValueError, TypeError):
+                start_dt = None
+        if start_dt and timezone.is_naive(start_dt):
+            start_dt = timezone.make_aware(start_dt, tz)
+
+    if date_to:
+        if isinstance(date_to, datetime):
+            end_dt = date_to
+        elif isinstance(date_to, date):
+            end_dt = datetime.combine(date_to + timedelta(days=1), time.min)
+        else:
+            try:
+                d = date.fromisoformat(str(date_to).strip())
+                end_dt = datetime.combine(d + timedelta(days=1), time.min)
+            except (ValueError, TypeError):
+                end_dt = None
+        if end_dt and timezone.is_naive(end_dt):
+            end_dt = timezone.make_aware(end_dt, tz)
+
+    return start_dt, end_dt
+
+
 @extend_schema(
     tags=["Sales"],
     summary="Sotuv statistikasi (filtrlangan davr bo'yicha jami)",
@@ -227,48 +261,117 @@ class SaleListAPIView(generics.ListAPIView):
 )
 class SaleStatisticsAPIView(APIView):
     """
-    Sotuvlar ro'yxati sahifasidagi statistika kartalari uchun.
+    Sotuvlar ro'yxati sahifasidagi statistika kartalari uchun (Period Transactional Accounting).
 
     Ro'yxatdan farqi: paginatsiyasiz, BUTUN filtrlangan davr bo'yicha
-    yig'indilar qaytadi (avval frontend faqat joriy sahifadagi 10 ta
-    yozuvdan hisoblab noto'g'ri ko'rsatardi).
-
-    Do'kon cheklovi ro'yxat bilan bir xil: superuser hammasini,
-    oddiy user faqat o'z do'kon(lar)ini ko'radi.
+    yig'indilar qaytadi. Sotuvlar va qaytarimlar mustaqil tranzaksiyalar oqimi
+    (dual transaction streams) orqali hisoblanadi.
     """
 
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        qs = _scope_to_user_stores(Sale.objects.all(), request.user)
-
         params = request.query_params
         store = params.get("store")
+        date_from = params.get("date_from")
+        date_to = params.get("date_to")
+
+        start_dt, end_dt = _parse_date_bounds(date_from, date_to)
+
+        # 1. SALES STREAM (Sotuvlar oqimi)
+        # Soft-deleted sotuvlar chiqarib tashlanadi, ammo Sale.Status.RETURNED
+        # sotuv davri hisobidan CHIQARILMAYDI (mustaqil tranzaksiya oqimi).
+        qs = _scope_to_user_stores(Sale.objects.filter(deleted_at__isnull=True), request.user)
         if store:
             qs = qs.filter(store_id=store)
-        date_from = params.get("date_from")
-        if date_from:
+        if start_dt:
+            qs = qs.filter(created_at__gte=start_dt)
+        elif date_from:
             qs = qs.filter(created_at__date__gte=date_from)
-        date_to = params.get("date_to")
-        if date_to:
+        if end_dt:
+            qs = qs.filter(created_at__lt=end_dt)
+        elif date_to:
             qs = qs.filter(created_at__date__lte=date_to)
 
         totals = qs.aggregate(
             total_sales=Count("id"),
-            total_amount=Coalesce(Sum("total_amount"), Value(0, output_field=DecimalField())),
-            total_paid=Coalesce(Sum("paid_amount"), Value(0, output_field=DecimalField())),
+            total_amount=Coalesce(Sum("total_amount"), Value(Decimal("0.00")), output_field=DecimalField()),
+            total_paid=Coalesce(Sum("paid_amount"), Value(Decimal("0.00")), output_field=DecimalField()),
+        )
+        sold_revenue = totals["total_amount"]
+
+        # Sotilgan tovarlar tannarxi (COGS) va yalpi foyda
+        sale_items = SaleItem.objects.filter(sale__in=qs)
+        sold_cogs = sale_items.aggregate(
+            cost=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("quantity") * Coalesce(F("purchase_price"), Value(Decimal("0.00")), output_field=DecimalField()),
+                        output_field=DecimalField(),
+                    )
+                ),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(),
+            )
+        )["cost"]
+        sold_profit = sold_revenue - sold_cogs
+
+        # 2. RETURNS STREAM (Qaytarimlar oqimi — aynan shu davrda amalga oshirilgan SaleReturn)
+        returns_qs = _scope_to_user_stores(
+            SaleReturn.objects.filter(sale__deleted_at__isnull=True),
+            request.user,
+        )
+        if store:
+            returns_qs = returns_qs.filter(store_id=store)
+        if start_dt:
+            returns_qs = returns_qs.filter(created_at__gte=start_dt)
+        elif date_from:
+            returns_qs = returns_qs.filter(created_at__date__gte=date_from)
+        if end_dt:
+            returns_qs = returns_qs.filter(created_at__lt=end_dt)
+        elif date_to:
+            returns_qs = returns_qs.filter(created_at__date__lte=date_to)
+
+        returned = returns_qs.aggregate(
+            total=Coalesce(Sum("total_refund"), Value(Decimal("0.00")), output_field=DecimalField())
+        )
+        return_items = SaleReturnItem.objects.filter(sale_return__in=returns_qs)
+
+        # total_refund 0 bo'lsa SaleReturnItem.total_price ga fallback
+        if returned["total"] == Decimal("0.00"):
+            ret_items_total = return_items.aggregate(
+                total=Coalesce(Sum("total_price"), Value(Decimal("0.00")), output_field=DecimalField())
+            )["total"]
+            if ret_items_total > Decimal("0.00"):
+                returned["total"] = ret_items_total
+
+        # Qaytarilgan tovarlar tannarxi (tarixiy COGS: SaleReturnItem.sale_item.purchase_price)
+        return_cogs = return_items.aggregate(
+            cost=Coalesce(
+                Sum(
+                    ExpressionWrapper(
+                        F("quantity") * Coalesce(F("sale_item__purchase_price"), Value(Decimal("0.00")), output_field=DecimalField()),
+                        output_field=DecimalField(),
+                    )
+                ),
+                Value(Decimal("0.00")),
+                output_field=DecimalField(),
+            )
+        )["cost"]
+
+        return_revenue = returned["total"]
+        return_lost_profit = return_revenue - return_cogs
+
+        # 3. PERIOD TRANSACTIONAL NETTING
+        total_profit = (sold_profit - return_lost_profit).quantize(Decimal("0.01"))
+
+        # Tannarxi yozilmagan qatorlar bo'lsa foyda taxminiy ekanligini belgilash
+        profit_partial = (
+            sale_items.filter(Q(purchase_price__isnull=True) | Q(purchase_price=0)).exists()
+            or return_items.filter(Q(sale_item__purchase_price__isnull=True) | Q(sale_item__purchase_price=0)).exists()
         )
 
-        # Sof foyda — apps.sales.profit dagi yagona formula (hisobotlar bilan bir xil):
-        # (sotuv narxi - tannarx) × (miqdor - qaytarilgan) - chegirma ulushi
-        profit_items = SaleItem.objects.filter(sale__in=qs.values("id")).exclude(
-            sale__status=Sale.Status.RETURNED
-        )
-        total_profit = profit_items.aggregate(profit=sum_item_profit())["profit"]
-        # Tannarxi yozilmagan qatorlar bo'lsa foyda oshiq ko'rinadi — UI ogohlantiradi
-        profit_partial = profit_items.filter(partial_cost_filter()).exists()
-
-        # Qarz — ledger bo'yicha (kirim 'i' minus to'lov 'd'), xuddi ro'yxatdagi kabi
+        # 4. CUSTOMER DEBT (Ledger bo'yicha: kirim 'i' minus to'lov 'd')
         debt = CustomerDebt.objects.filter(sale__in=qs.values("id")).aggregate(
             total=Coalesce(
                 Sum(
@@ -283,9 +386,7 @@ class SaleStatisticsAPIView(APIView):
             )
         )
 
-        # To'langan summaning taqsimoti: naqd + har bir bank kartasi bo'yicha
-        # (filtrlangan sotuvlarning to'lovlari, qaytarimlar NET ayiriladi).
-        # Eski to'lovlarda bank_card=NULL bo'lishi mumkin — frontend "Noma'lum karta" deb ko'rsatadi.
+        # 5. PAYMENT BREAKDOWN (To'langan summaning taqsimoti: naqd + har bir karta)
         paid_rows = (
             Payment.objects
             .filter(sale__in=qs.values("id"))
@@ -313,17 +414,10 @@ class SaleStatisticsAPIView(APIView):
             for row in paid_rows
             if row["amount"]
         ]
-
-        # To'langan — NET (qaytarimlar ayirilgan), breakdown bilan bir manbadan.
-        # Sum(sale.paid_amount) ishlatilmaydi: qaytarim paid_amount ni
-        # kamaytirmaydi, shuning uchun u breakdown yig'indisiga mos kelmasdi.
         total_paid_net = sum((row["amount"] for row in paid_rows), Decimal("0"))
 
-        # Oxirgi qarz to'lovlari — "Jami qarzdorlik" kartasi ostida ko'rsatiladi.
-        # Sana filtriga bog'liq EMAS (eng oxirgilari), do'kon cheklovi saqlanadi.
-        # Bitta to'lov harakati (payment_group) bitta yozuv: jami summa + qismlari
-        # (naqd / har bir karta: Humo, Uzcard, ...).
-        debt_scope = _scope_to_user_stores(Sale.objects.all(), request.user)
+        # 6. RECENT DEBT PAYMENTS
+        debt_scope = _scope_to_user_stores(Sale.objects.filter(deleted_at__isnull=True), request.user)
         if store:
             debt_scope = debt_scope.filter(store_id=store)
         recent_rows = list(
@@ -357,45 +451,40 @@ class SaleStatisticsAPIView(APIView):
             for group_rows in (recent_groups[k] for k in recent_order[:4])
         ]
 
-        # Qaytarilgan summa — davr ichida rasmiylashtirilgan qaytarimlar (SaleReturn).
-        # Sotuv sanasiga emas, QAYTARIM sanasiga qarab hisoblanadi: o'tgan oygi sotuv
-        # bugun qaytarilsa, bugungi statistikada ko'rinadi. Do'kon cheklovi/filtri bir xil.
-        returns_qs = _scope_to_user_stores(SaleReturn.objects.all(), request.user)
-        if store:
-            returns_qs = returns_qs.filter(store_id=store)
-        if date_from:
-            returns_qs = returns_qs.filter(created_at__date__gte=date_from)
-        if date_to:
-            returns_qs = returns_qs.filter(created_at__date__lte=date_to)
-        returned = returns_qs.aggregate(
-            total=Coalesce(Sum("total_refund"), Value(0, output_field=DecimalField()))
-        )
-
-        # Davrga bog'liq BO'LMAGAN jami qaytarim (do'kon cheklovi saqlanadi) —
-        # frontend kartada "Hammasi" sifatida ko'rsatiladi: tanlangan davrda
-        # qaytarim bo'lmasa ham umumiy summa ko'rinib turadi
+        # 7. ALL-TIME RETURNS (Frontend kartada "Hammasi" ko'rsatkichi uchun)
         if date_from or date_to:
-            returned_all_qs = _scope_to_user_stores(SaleReturn.objects.all(), request.user)
+            returned_all_qs = _scope_to_user_stores(
+                SaleReturn.objects.filter(sale__deleted_at__isnull=True),
+                request.user,
+            )
             if store:
                 returned_all_qs = returned_all_qs.filter(store_id=store)
             returned_all = returned_all_qs.aggregate(
-                total=Coalesce(Sum("total_refund"), Value(0, output_field=DecimalField()))
+                total=Coalesce(Sum("total_refund"), Value(Decimal("0.00")), output_field=DecimalField())
             )
+            if returned_all["total"] == Decimal("0.00"):
+                all_ret_items_total = SaleReturnItem.objects.filter(sale_return__in=returned_all_qs).aggregate(
+                    total=Coalesce(Sum("total_price"), Value(Decimal("0.00")), output_field=DecimalField())
+                )["total"]
+                if all_ret_items_total > Decimal("0.00"):
+                    returned_all["total"] = all_ret_items_total
         else:
             returned_all = returned
 
-        # Qaytarib berilgan PULning taqsimoti: naqd + har bir karta (Uzcard/Humo/...) bo'yicha.
-        # Davr/do'kon filtri qaytarim to'lovi sanasiga qarab — "Qaytarilgan summa" bilan bir xil mantiq.
-        # Eslatma: qaytarim qarzni kamaytirishga ketgan qismi pul harakati emas,
-        # shuning uchun bu taqsimot yig'indisi total_returned'dan kichik bo'lishi mumkin.
+        # 8. REFUND BREAKDOWN
         refund_rows_qs = Payment.objects.filter(
             is_refund=True,
             sale__in=debt_scope.values("id"),
         )
-        if date_from:
+        if start_dt:
+            refund_rows_qs = refund_rows_qs.filter(created_at__gte=start_dt)
+        elif date_from:
             refund_rows_qs = refund_rows_qs.filter(created_at__date__gte=date_from)
-        if date_to:
+        if end_dt:
+            refund_rows_qs = refund_rows_qs.filter(created_at__lt=end_dt)
+        elif date_to:
             refund_rows_qs = refund_rows_qs.filter(created_at__date__lte=date_to)
+
         refund_rows = (
             refund_rows_qs
             .values("type", "bank_card__name")
@@ -412,6 +501,7 @@ class SaleStatisticsAPIView(APIView):
             if row["amount"]
         ]
 
+        # 9. RESPONSE CONTRACT
         return Response(
             {
                 "total_sales": totals["total_sales"],
@@ -550,31 +640,21 @@ class CustomerDebtListAPIView(generics.ListAPIView):
 # SOTUVLARNI O'CHIRISH (ARXIV, faqat superadmin)
 # ─────────────────────────────────────────────
 
-# Arxivda saqlash muddati — shu muddatdan keyin purge butunlay o'chiradi
-SALE_ARCHIVE_RETENTION_DAYS = 30
+# Arxivda saqlash muddati — Indefinite soft-delete retention (fizik o'chirilmaydi).
+# Tarixiy buxgalteriya, FIFO va StockAllocation daxlsizligini saqlash uchun
+# sotuvlar bazadan BUTUNLAY O'CHIRILMAYDI.
+SALE_ARCHIVE_RETENTION_DAYS = None
 
 
 def purge_expired_deleted_sales() -> int:
     """
-    30 kundan oshgan arxivdagi sotuvlarni BUTUNLAY o'chiradi.
-    Arxiv/o'chirish so'rovlarida chaqiriladi (lazy purge) + cron uchun
-    `manage.py purge_deleted_sales` buyrug'i ham shu funksiyani ishlatadi.
+    Indefinite Soft-Delete Retention Policy:
+    Tarixiy hisobotlar, FIFO va StockAllocation daxlsizligini saqlash maqsadida
+    arxivlangan (soft-deleted) sotuvlar bazadan BUTUNLAY O'CHIRILMAYDI.
+    Ular deleted_at orqali operatsion so'rovlardan chiqarilgan holda daxlsiz saqlanadi.
+    Backward-compatibility uchun 0 qaytaradi.
     """
-    cutoff = timezone.now() - timedelta(days=SALE_ARCHIVE_RETENTION_DAYS)
-    expired_ids = list(
-        Sale.all_objects.filter(deleted_at__lt=cutoff).values_list("id", flat=True)
-    )
-    if not expired_ids:
-        return 0
-    with transaction.atomic():
-        # PROTECT zanjiri (SaleReturnItem → SaleItem): avval qaytarim yozuvlari o'chiriladi
-        SaleReturnItem.objects.filter(sale_return__sale_id__in=expired_ids).delete()
-        SaleReturn.objects.filter(sale_id__in=expired_ids).delete()
-        # Qarz ledgeri SET_NULL — yetim yozuv qolmasligi uchun sotuv bilan birga o'chadi
-        CustomerDebt.objects.filter(sale_id__in=expired_ids).delete()
-        # items/payments — CASCADE
-        Sale.all_objects.filter(id__in=expired_ids).delete()
-    return len(expired_ids)
+    return 0
 
 
 @extend_schema(
@@ -621,10 +701,8 @@ class SaleArchiveListAPIView(APIView):
             .select_related("store", "customer")
             .order_by("-deleted_at")
         )
-        now = timezone.now()
         results = []
         for sale in qs:
-            elapsed_days = (now - sale.deleted_at).days
             results.append({
                 "id": sale.id,
                 "store_name": sale.store.name if sale.store_id else None,
@@ -633,10 +711,10 @@ class SaleArchiveListAPIView(APIView):
                 "paid_amount": str(sale.paid_amount),
                 "created_at": sale.created_at,
                 "deleted_at": sale.deleted_at,
-                "days_left": max(0, SALE_ARCHIVE_RETENTION_DAYS - elapsed_days),
+                "days_left": None,
             })
         return Response(
-            {"results": results, "retention_days": SALE_ARCHIVE_RETENTION_DAYS},
+            {"results": results, "retention_days": None},
             status=status.HTTP_200_OK,
         )
 

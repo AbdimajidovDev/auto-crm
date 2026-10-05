@@ -4,41 +4,30 @@ from decimal import Decimal
 from django.db import transaction
 # DRF ValidationError — view'da avtomatik 400 qaytadi (django'niki 500 berardi)
 from rest_framework.exceptions import ValidationError
-from django.db.models import Case, DecimalField, F, Sum, Value, When
+from django.db.models import Case, DecimalField, F, Q, Sum, Value, When
 
 from apps.debts.models import CustomerDebt
 from apps.sales.models import Sale, Payment
+from apps.sales.payment_rules import compute_payment_type
 
 
 class DebtService:
 
     @staticmethod
     def get_sale_debt(sale):
-        # ⚠️ MUAMMO [PERFORMANCE]: Qarz balansi uchun ikki alohida aggregate query ishlatilgan.
-        # Sabab: increase va decrease alohida `filter().aggregate()` bilan hisoblanadi.
-        # Natija: `pay_debt` har chaqirilganda ortiqcha DB round-trip paydo bo'ladi.
-        # ✅ YECHIM:
-        # balance = CustomerDebt.objects.filter(sale=sale).aggregate(
-        #     total=Sum(Case(
-        #         When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
-        #         When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
-        #         default=0,
-        #         output_field=DecimalField(),
-        #     ))
-        # )["total"] or 0
-        # OPTIMIZATION: ikki alohida `filter().aggregate()` o'rniga bitta querysetda `Case/When`
-        # bilan bitta aggregate qilish DB yukini kamaytiradi.
-        increases = CustomerDebt.objects.filter(
-            sale=sale,
-            type=CustomerDebt.Type.INCREASE
-        ).aggregate(total=Sum("amount"))["total"] or 0
-
-        decreases = CustomerDebt.objects.filter(
-            sale=sale,
-            type=CustomerDebt.Type.DECREASE
-        ).aggregate(total=Sum("amount"))["total"] or 0
-
-        return increases - decreases
+        # OPTIMIZATION: Bitta aggregate so'rov orqali INCREASE va DECREASE farqini hisoblash
+        sale_id = sale.id if hasattr(sale, "id") else sale
+        result = CustomerDebt.objects.filter(sale_id=sale_id).aggregate(
+            net_debt=Sum(
+                Case(
+                    When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
+                    When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
+                    default=Value(Decimal("0")),
+                    output_field=DecimalField(max_digits=20, decimal_places=2),
+                )
+            )
+        )
+        return result["net_debt"] or Decimal("0")
 
     @staticmethod
     def _normalize_payment_chunks(*, payments=None, amount=None, payment_type=None, bank_card=None):
@@ -109,31 +98,31 @@ class DebtService:
           2. CustomerDebt DECREASE (qarz balansi jami summaga kamayadi)
           3. sale.paid_amount / status yangilanadi — ro'yxat va mijoz modalidagi
              (total - paid) formulasi to'lovdan keyin ham to'g'ri ko'rsatishi uchun
-          4. payment_type qayta hisoblanadi (masalan, debt → cash/mixed)
+          4. payment_type qayta hisoblanadi (masalan, debt → card/mixed)
 
         chunks: [{"type": "cash"|"card", "amount": Decimal, "bank_card": BankCard|None}, ...]
         Qaytaradi: yaratilgan Payment yozuvlari ro'yxati.
         """
         total = sum((c["amount"] for c in chunks), Decimal("0"))
 
-        # Bitta to'lov harakati — barcha split qatorlar bitta guruhda
-        # (UI tarixda bitta blok qilib, qismlarini ichida ko'rsatadi)
         payment_group = uuid.uuid4()
-        created_payments = [
-            Payment.objects.create(
-                customer=sale.customer,
+        created_payments = []
+        for c in chunks:
+            bank_card_val = c.get("bank_card")
+            card_kwargs = {"bank_card": bank_card_val} if isinstance(bank_card_val, Payment._meta.get_field("bank_card").remote_field.model) else ({"bank_card_id": bank_card_val} if bank_card_val is not None else {"bank_card": None})
+            p = Payment.objects.create(
+                customer_id=sale.customer_id,
                 amount=c["amount"],
                 type=c["type"],
-                bank_card=c.get("bank_card"),
                 sale=sale,
                 payment_group=payment_group,
                 is_debt_payment=True,
+                **card_kwargs,
             )
-            for c in chunks
-        ]
+            created_payments.append(p)
 
         CustomerDebt.objects.create(
-            customer=sale.customer,
+            customer_id=sale.customer_id,
             sale=sale,
             amount=total,
             type=CustomerDebt.Type.DECREASE,
@@ -141,10 +130,8 @@ class DebtService:
 
         sale.paid_amount = (sale.paid_amount or Decimal("0")) + total
         sale.status = Sale.Status.PAID if total >= sale_debt else Sale.Status.PARTIAL
-        sale.save(update_fields=["paid_amount", "status"])
-
-        # Qarz to'lovi sotuvning to'lov tarkibini o'zgartiradi (masalan, debt → card/mixed)
-        sale.recalculate_payment_type()
+        sale.recalculate_payment_type(save=False)
+        sale.save(update_fields=["paid_amount", "status", "payment_type"])
 
         return created_payments
 
@@ -161,10 +148,6 @@ class DebtService:
         kiritganiga aynan teng bo'ladi, har bir sotuvda esa aniq qaysi usuldan
         qancha to'langani Payment qatorlarida qoladi.
 
-        Misol: mijozda 2 ta 50 so'mlik qarzli buyurtma bor (jami 100). 90 so'm
-        to'lasa — birinchi (eski) buyurtma to'liq yopiladi (50), ikkinchisiga
-        40 yoziladi, 10 so'm qarz qoladi.
-
         Umumiy qarzdan ortiq to'lov rad etiladi.
         """
         chunks = DebtService._normalize_payment_chunks(
@@ -178,18 +161,38 @@ class DebtService:
         # Mijozning barcha sotuvlari qulflanadi — parallel ikki to'lov
         # bir qarzni ikki marta yopib yubormasligi uchun.
         # Diqqat: select_related("customer") qo'shib bo'lmaydi — customer nullable FK,
-        # Postgres "FOR UPDATE cannot be applied to the nullable side of an outer join" beradi
-        # (xuddi pay_debt dagi kabi, 82-qatorga qarang).
+        # Postgres "FOR UPDATE cannot be applied to the nullable side of an outer join" beradi.
         sales = list(
             Sale.objects.select_for_update()
             .filter(customer_id=customer_id)
             .order_by("created_at", "id")
         )
 
+        if not sales:
+            raise ValidationError("Mijozda qarz yo'q")
+
+        # N+1 OPTIMIZATION: Barcha sotuvlarning qarzlarini bitta aggregate so'rov bilan olish
+        sale_ids = [s.id for s in sales]
+        debt_rows = (
+            CustomerDebt.objects.filter(sale_id__in=sale_ids)
+            .values("sale_id")
+            .annotate(
+                net_debt=Sum(
+                    Case(
+                        When(type=CustomerDebt.Type.INCREASE, then=F("amount")),
+                        When(type=CustomerDebt.Type.DECREASE, then=-F("amount")),
+                        default=Value(Decimal("0")),
+                        output_field=DecimalField(max_digits=20, decimal_places=2),
+                    )
+                )
+            )
+        )
+        debt_map = {row["sale_id"]: (row["net_debt"] or Decimal("0")) for row in debt_rows}
+
         debt_sales = []
         total_debt = Decimal("0")
         for sale in sales:
-            sale_debt = DebtService.get_sale_debt(sale)
+            sale_debt = debt_map.get(sale.id, Decimal("0"))
             if sale_debt > 0:
                 debt_sales.append((sale, sale_debt))
                 total_debt += sale_debt
@@ -206,7 +209,7 @@ class DebtService:
         pool_idx = 0
 
         remaining = total_payment
-        allocations = []
+        allocated_items = []
         for sale, sale_debt in debt_sales:
             if remaining <= 0:
                 break
@@ -229,11 +232,87 @@ class DebtService:
                 if pool["amount"] <= 0:
                     pool_idx += 1
 
-            created = DebtService._apply_sale_payment(
-                sale=sale,
-                sale_debt=sale_debt,
-                chunks=sale_chunks,
+            allocated_items.append((sale, sale_debt, alloc, sale_chunks))
+            remaining -= alloc
+
+        # N+1 OPTIMIZATION: Taqsimlanayotgan sotuvlarning oldingi to'lovlarini
+        # bitta guruhlangan so'rov bilan yig'ish (recalculate_payment_type uchun)
+        allocated_sale_ids = [s.id for s, _, _, _ in allocated_items]
+        existing_payments = (
+            Payment.objects.filter(sale_id__in=allocated_sale_ids)
+            .values("sale_id")
+            .annotate(
+                cash_in=Sum("amount", filter=Q(type=Payment.Type.CASH, is_refund=False)),
+                cash_out=Sum("amount", filter=Q(type=Payment.Type.CASH, is_refund=True)),
+                card_in=Sum("amount", filter=Q(type=Payment.Type.CARD, is_refund=False)),
+                card_out=Sum("amount", filter=Q(type=Payment.Type.CARD, is_refund=True)),
             )
+        )
+        existing_map = {p["sale_id"]: p for p in existing_payments}
+
+        payments_to_create = []
+        debts_to_create = []
+        sales_to_update = []
+        sale_created_payments = {}
+
+        bank_card_model = Payment._meta.get_field("bank_card").remote_field.model
+
+        for sale, sale_debt, alloc, sale_chunks in allocated_items:
+            payment_group = uuid.uuid4()
+            sale_payments = []
+            for c in sale_chunks:
+                bank_card_val = c.get("bank_card")
+                card_kwargs = (
+                    {"bank_card": bank_card_val}
+                    if isinstance(bank_card_val, bank_card_model)
+                    else ({"bank_card_id": bank_card_val} if bank_card_val is not None else {"bank_card": None})
+                )
+                p = Payment(
+                    customer_id=sale.customer_id,
+                    amount=c["amount"],
+                    type=c["type"],
+                    sale=sale,
+                    payment_group=payment_group,
+                    is_debt_payment=True,
+                    **card_kwargs,
+                )
+                p.clean()
+                sale_payments.append(p)
+                payments_to_create.append(p)
+
+            sale_created_payments[sale.id] = sale_payments
+
+            d = CustomerDebt(
+                customer_id=sale.customer_id,
+                sale=sale,
+                amount=alloc,
+                type=CustomerDebt.Type.DECREASE,
+            )
+            debts_to_create.append(d)
+
+            exist = existing_map.get(sale.id, {})
+            zero = Decimal("0")
+            cash_net = (exist.get("cash_in") or zero) - (exist.get("cash_out") or zero)
+            card_net = (exist.get("card_in") or zero) - (exist.get("card_out") or zero)
+            for c in sale_chunks:
+                if c["type"] == Payment.Type.CASH:
+                    cash_net += c["amount"]
+                elif c["type"] == Payment.Type.CARD:
+                    card_net += c["amount"]
+
+            sale.paid_amount = (sale.paid_amount or zero) + alloc
+            sale.status = Sale.Status.PAID if alloc >= sale_debt else Sale.Status.PARTIAL
+            sale.payment_type = compute_payment_type(cash_net, card_net)
+            sales_to_update.append(sale)
+
+        # Bulk write operations: O(1) query count
+        Payment.objects.bulk_create(payments_to_create)
+        CustomerDebt.objects.bulk_create(debts_to_create)
+        Sale.objects.bulk_update(sales_to_update, fields=["paid_amount", "status", "payment_type"])
+
+        allocations = []
+        for sale, sale_debt, alloc, _ in allocated_items:
+            created = sale_created_payments[sale.id]
             allocations.append({
                 "sale": sale.id,
                 "payment_id": created[0].id,
@@ -242,7 +321,6 @@ class DebtService:
                 "closed": alloc >= sale_debt,
                 "sale_debt_left": f"{(sale_debt - alloc):.2f}",
             })
-            remaining -= alloc
 
         return {
             "paid": f"{total_payment:.2f}",

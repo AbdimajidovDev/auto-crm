@@ -104,12 +104,15 @@ class SaleService:
 
         subtotal = Decimal("0")
 
-        sorted_pids = sorted(list({item["product"] for item in items_data}))
+        sorted_pids = sorted(
+            list({p.id if hasattr(p, "id") else p for p in (item["product"] for item in items_data)})
+        )
         # Deadlock prevention: lock product batches in deterministic ASC order
-        ProductBatch.objects.select_for_update().filter(
-            store=store,
-            product_id__in=sorted_pids
-        ).order_by("product_id")
+        list(
+            ProductBatch.objects.select_for_update()
+            .filter(store=store, product_id__in=sorted_pids)
+            .order_by("product_id")
+        )
 
         for item in items_data:
             product_id = item["product"]

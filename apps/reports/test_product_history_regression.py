@@ -5,10 +5,13 @@ entry_return, inventory) render without schema mismatch errors (such as missing
 attributes like StockTransfer.note or WriteOff.note).
 """
 
+from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
+
+from apps.reports.services.product_movement_report_service import ProductMovementReportService
 
 from apps.contract.models import (
     StockEntry,
@@ -282,3 +285,260 @@ class ProductHistoryRegressionTest(TestCase):
         p3_docs = {(r["event"], r["doc_id"]) for r in resp_p3.data["rows"]}
         self.assertEqual(len(p1_docs.intersection(p2_docs)), 0)
         self.assertEqual(len(p2_docs.intersection(p3_docs)), 0)
+
+
+class ProductHistorySummaryProfitPeriodAccountingTest(TestCase):
+    """
+    Regression test suite for Product History summary profit under Period Transactional Accounting.
+
+    Formula:
+    profit = net_sold_amount - net_cost_amount
+    where:
+    net_sold_amount = sold_amount - sale_returned_amount
+    net_cost_amount = cost_amount - sale_returned_cost_amount
+
+    Tested cases:
+    1. Oddiy sale: sold=100, cost=60, profit=40
+    2. Partial return: sale=100, cost=60, return revenue=40, return cost=24 -> net_sold=60, net_cost=36, profit=24
+       (va return_revenue=60, return_cost=36 bo'lganda net_sold=40, net_cost=24, profit=16)
+    3. Full return: sale=100, cost=60, full return -> profit=0
+    4. Cross-period return:
+       - Sale period: profit saqlanadi (+40)
+       - Return period: transactional summary manfiy effect ko'rsatadi (-16)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.store = Store.objects.create(name="Store Test", address="Test", phone_number="+998901234500")
+        cls.role = Role.objects.create(name="Admin Role", permissions=["*"])
+        cls.admin = User.objects.create(
+            phone_number="+998901234501",
+            email="admin_summary_test@example.com",
+            full_name="Admin Test",
+            is_superuser=True,
+            is_staff=True,
+            role=cls.role,
+        )
+        StoreUser.objects.create(store=cls.store, user=cls.admin, role=cls.role)
+
+        cls.supplier = Supplier.objects.create(name="Supplier Test", phone_number="+998901234502")
+        cls.category = Category.objects.create(name="Kategoriya")
+        cls.unit = ProductUnitMeasurement.objects.create(measurement="dona")
+
+    def _create_product(self, name="Test Mahsulot"):
+        return Product.objects.create(
+            name=name,
+            category=self.category,
+            unit_measurement=self.unit,
+            min_stock=1,
+            status=Product.ProductStatus.ACTIVE,
+        )
+
+    def test_1_normal_sale(self):
+        """
+        1. Oddiy sale:
+           sold = 100
+           cost = 60
+           profit = 40
+        """
+        prod = self._create_product("Normal Sale Product")
+        # 10 dona x 10 = 100 sotuv, tannarx 6 (jami cost = 60)
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("100.00"), paid_amount=Decimal("100.00"),
+            status=Sale.Status.PAID,
+        )
+        SaleItem.objects.create(
+            sale=sale, product=prod, quantity=Decimal("10"),
+            unit_price=Decimal("10.00"), purchase_price=Decimal("6.00"),
+            total_price=Decimal("100.00"),
+        )
+
+        service = ProductMovementReportService(prod, self.admin)
+        by_store = service.build_by_store()
+        totals = service.build_summary(by_store)
+
+        self.assertEqual(totals["sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals["cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals["sale_returned_amount"], Decimal("0.00"))
+        self.assertEqual(totals["sale_returned_cost_amount"], Decimal("0.00"))
+        self.assertEqual(totals["net_sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals["net_cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals["profit"], Decimal("40.00"))
+
+    def test_2_partial_return(self):
+        """
+        2. Partial return:
+           sale = 100
+           cost = 60
+           return revenue = 40
+           return cost = 24
+           Qolgan tovar bo'yicha sof sotuv = 60, sof tannarx = 36, expected profit = 24.
+           Agar 6 dona qaytsa (return revenue = 60, return cost = 36):
+           sof sotuv = 40, sof tannarx = 24, expected profit = 16.
+        """
+        prod = self._create_product("Partial Return Product")
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("100.00"), paid_amount=Decimal("100.00"),
+            status=Sale.Status.PAID,
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=prod, quantity=Decimal("10"),
+            unit_price=Decimal("10.00"), purchase_price=Decimal("6.00"),
+            total_price=Decimal("100.00"),
+        )
+
+        # 4 dona qaytarildi (return revenue = 40, return cost = 4 * 6 = 24)
+        ret = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("40.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=item, product=prod,
+            quantity=Decimal("4"), unit_price=Decimal("10.00"),
+            total_price=Decimal("40.00"),
+        )
+
+        service = ProductMovementReportService(prod, self.admin)
+        by_store = service.build_by_store()
+        totals = service.build_summary(by_store)
+
+        self.assertEqual(totals["sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals["cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals["sale_returned_amount"], Decimal("40.00"))
+        self.assertEqual(totals["sale_returned_cost_amount"], Decimal("24.00"))
+        self.assertEqual(totals["net_sold_amount"], Decimal("60.00"))
+        self.assertEqual(totals["net_cost_amount"], Decimal("36.00"))
+        # 60 - 36 = 24
+        self.assertEqual(totals["profit"], Decimal("24.00"))
+
+        # Endi qo'shimcha 2 dona qaytarilsa (jami 6 dona qaytdi: revenue=60, cost=36)
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=item, product=prod,
+            quantity=Decimal("2"), unit_price=Decimal("10.00"),
+            total_price=Decimal("20.00"),
+        )
+        totals_6 = service.build_summary(service.build_by_store())
+        self.assertEqual(totals_6["sale_returned_amount"], Decimal("60.00"))
+        self.assertEqual(totals_6["sale_returned_cost_amount"], Decimal("36.00"))
+        self.assertEqual(totals_6["net_sold_amount"], Decimal("40.00"))
+        self.assertEqual(totals_6["net_cost_amount"], Decimal("24.00"))
+        # 40 - 24 = 16
+        self.assertEqual(totals_6["profit"], Decimal("16.00"))
+
+    def test_3_full_return(self):
+        """
+        3. Full return:
+           sale = 100
+           cost = 60
+           full return (return revenue = 100, return cost = 60)
+           expected profit = 0
+        """
+        prod = self._create_product("Full Return Product")
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("100.00"), paid_amount=Decimal("100.00"),
+            status=Sale.Status.PAID,
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=prod, quantity=Decimal("10"),
+            unit_price=Decimal("10.00"), purchase_price=Decimal("6.00"),
+            total_price=Decimal("100.00"),
+        )
+
+        ret = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("100.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=item, product=prod,
+            quantity=Decimal("10"), unit_price=Decimal("10.00"),
+            total_price=Decimal("100.00"),
+        )
+
+        service = ProductMovementReportService(prod, self.admin)
+        by_store = service.build_by_store()
+        totals = service.build_summary(by_store)
+
+        self.assertEqual(totals["sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals["cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals["sale_returned_amount"], Decimal("100.00"))
+        self.assertEqual(totals["sale_returned_cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals["net_sold_amount"], Decimal("0.00"))
+        self.assertEqual(totals["net_cost_amount"], Decimal("0.00"))
+        self.assertEqual(totals["profit"], Decimal("0.00"))
+
+    def test_4_cross_period_return(self):
+        """
+        4. Cross-period return:
+           Sale periodida (Yanvar) sale profit saqlansin (+40).
+           Return periodida (Fevral) transactional summary tegishli manfiy effectni ko'rsatsin (-16).
+        """
+        dt_sale = datetime(2026, 1, 15, 12, 0, tzinfo=dt_timezone.utc)
+        dt_return = datetime(2026, 2, 10, 14, 0, tzinfo=dt_timezone.utc)
+
+        prod = self._create_product("Cross Period Product")
+        sale = Sale.objects.create(
+            store=self.store, seller=self.admin,
+            total_amount=Decimal("100.00"), paid_amount=Decimal("100.00"),
+            status=Sale.Status.PAID,
+        )
+        item = SaleItem.objects.create(
+            sale=sale, product=prod, quantity=Decimal("10"),
+            unit_price=Decimal("10.00"), purchase_price=Decimal("6.00"),
+            total_price=Decimal("100.00"),
+        )
+        Sale.objects.filter(id=sale.id).update(created_at=dt_sale)
+
+        ret = SaleReturn.objects.create(
+            sale=sale, store=self.store, seller=self.admin,
+            total_refund=Decimal("40.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=item, product=prod,
+            quantity=Decimal("4"), unit_price=Decimal("10.00"),
+            total_price=Decimal("40.00"),
+        )
+        SaleReturn.objects.filter(id=ret.id).update(created_at=dt_return)
+
+        # 4.1. Yanvar oyi hisoboti (Sale period):
+        service_jan = ProductMovementReportService(
+            prod, self.admin,
+            date_from=datetime(2026, 1, 1, 0, 0, tzinfo=dt_timezone.utc),
+            date_to=datetime(2026, 1, 31, 23, 59, 59, tzinfo=dt_timezone.utc),
+        )
+        totals_jan = service_jan.build_summary(service_jan.build_by_store())
+        self.assertEqual(totals_jan["sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals_jan["cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals_jan["sale_returned_amount"], Decimal("0.00"))
+        self.assertEqual(totals_jan["sale_returned_cost_amount"], Decimal("0.00"))
+        self.assertEqual(totals_jan["net_sold_amount"], Decimal("100.00"))
+        self.assertEqual(totals_jan["net_cost_amount"], Decimal("60.00"))
+        self.assertEqual(totals_jan["profit"], Decimal("40.00"))
+
+        # 4.2. Fevral oyi hisoboti (Return period):
+        service_feb = ProductMovementReportService(
+            prod, self.admin,
+            date_from=datetime(2026, 2, 1, 0, 0, tzinfo=dt_timezone.utc),
+            date_to=datetime(2026, 2, 28, 23, 59, 59, tzinfo=dt_timezone.utc),
+        )
+        totals_feb = service_feb.build_summary(service_feb.build_by_store())
+        self.assertEqual(totals_feb["sold_amount"], Decimal("0.00"))
+        self.assertEqual(totals_feb["cost_amount"], Decimal("0.00"))
+        self.assertEqual(totals_feb["sale_returned_amount"], Decimal("40.00"))
+        self.assertEqual(totals_feb["sale_returned_cost_amount"], Decimal("24.00"))
+        self.assertEqual(totals_feb["net_sold_amount"], Decimal("-40.00"))
+        self.assertEqual(totals_feb["net_cost_amount"], Decimal("-24.00"))
+        # -40 - (-24) = -16
+        self.assertEqual(totals_feb["profit"], Decimal("-16.00"))
+
+        # 4.3. Butun yil hisoboti (Umumiy jamlanma):
+        service_all = ProductMovementReportService(
+            prod, self.admin,
+            date_from=datetime(2026, 1, 1, 0, 0, tzinfo=dt_timezone.utc),
+            date_to=datetime(2026, 12, 31, 23, 59, 59, tzinfo=dt_timezone.utc),
+        )
+        totals_all = service_all.build_summary(service_all.build_by_store())
+        self.assertEqual(totals_all["profit"], Decimal("24.00"))
+

@@ -409,26 +409,37 @@ class SalesViewsReportTests(TestCase):
         self.assertEqual(sum_item_totals, Decimal("270.00"))
 
     def test_27_to_29_partial_and_full_returns(self):
-        # Sale: 4 units @ 100 = 400. 1 unit returned.
+        # Sale: 4 units @ 100 = 400. 1 unit returned via SaleReturn
         sale, items = self._create_sale(
-            items=[{"product": self.prod_pads, "quantity": Decimal("4"), "unit_price": Decimal("100.00"), "returned_quantity": Decimal("1")}]
+            items=[{"product": self.prod_pads, "quantity": Decimal("4"), "unit_price": Decimal("100.00")}]
+        )
+        ret = SaleReturn.objects.create(
+            sale=sale, store=sale.store, seller=sale.seller, total_refund=Decimal("100.00")
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=items[0], product=self.prod_pads,
+            quantity=Decimal("1"), unit_price=Decimal("100.00"), total_price=Decimal("100.00")
         )
         res = ReportBuilderService.generate({"report_type": "sales", "view": "items"}, self.admin)
-        row = res["rows"][0]
-        self.assertEqual(row["quantity"], "4")
-        self.assertEqual(row["returned_quantity"], "1")
-        self.assertEqual(row["net_quantity"], "3")
-        self.assertEqual(row["total"], "300.00")
+        self.assertEqual(res["total"], 2)
+        sold_row = next(r for r in res["rows"] if r["quantity"] == "4")
+        ret_row = next(r for r in res["rows"] if r["quantity"] == "0")
 
-        # Full return sale
-        sale_ret, items_ret = self._create_sale(
-            status=Sale.Status.RETURNED,
-            items=[{"product": self.prod_oil_filter, "quantity": Decimal("2"), "unit_price": Decimal("50.00"), "returned_quantity": Decimal("2")}],
-        )
-        res_ret = ReportBuilderService.generate({"report_type": "sales", "view": "items", "search": str(sale_ret.id)}, self.admin)
-        row_ret = res_ret["rows"][0]
-        self.assertEqual(row_ret["net_quantity"], "0")
-        self.assertEqual(row_ret["total"], "0.00")
+        self.assertEqual(sold_row["quantity"], "4")
+        self.assertEqual(sold_row["returned_quantity"], "0")
+        self.assertEqual(sold_row["net_quantity"], "4")
+        self.assertEqual(sold_row["total"], "400.00")
+
+        self.assertEqual(ret_row["quantity"], "0")
+        self.assertEqual(ret_row["returned_quantity"], "1")
+        self.assertEqual(ret_row["net_quantity"], "-1")
+        self.assertEqual(ret_row["total"], "-100.00")
+
+        summary = {s["label"]: s["value"] for s in res["summary"]}
+        self.assertEqual(summary["Jami sotilgan"], "4")
+        self.assertEqual(summary["Jami qaytarilgan"], "1")
+        self.assertEqual(summary["Sof sotilgan"], "3")
+        self.assertEqual(summary["Sof tushum"], "300.00")
 
     def test_30_no_double_counting_across_views(self):
         sale, items = self._create_sale(
@@ -462,8 +473,8 @@ class SalesViewsReportTests(TestCase):
                 ],
             )
 
-        # In items view, generating page of 10 items should execute constant O(1) queries (count + aggregate + items slice)
-        with self.assertNumQueries(3):
+        # In items view, generating page of 10 items executes constant O(1) queries (sold_items_qs + ret_items_qs)
+        with self.assertNumQueries(2):
             res = ReportBuilderService.generate({"report_type": "sales", "view": "items", "limit": "10"}, self.admin)
             self.assertEqual(len(res["rows"]), 10)
 
@@ -532,4 +543,297 @@ class SalesViewsReportTests(TestCase):
         )
         self.assertEqual(res_prod_asc["rows"][0]["product"], "Kolodka Bosch")
         self.assertEqual(res_prod_asc["rows"][1]["product"], "Moy filtri Mann")
+
+    # ─────────────────────────────────────────────────────────────
+    # 6. PERIOD TRANSACTIONAL ACCOUNTING TESTS
+    # ─────────────────────────────────────────────────────────────
+    def test_37_cross_period_sep_sale_oct_full_return(self):
+        """
+        Sep 30: Sale = 1,000,000, profit = 300,000, qty = 10
+        Oct 01: Full return = 1,000,000, profit loss = 300,000, qty = 10
+        Verifies September, October, and combined periods in both receipts and items views.
+        """
+        dt_sep = timezone.make_aware(datetime(2026, 9, 30, 18, 0, 0))
+        dt_oct = timezone.make_aware(datetime(2026, 10, 1, 10, 0, 0))
+
+        sale, items = self._create_sale(
+            created_at=dt_sep,
+            items=[{
+                "product": self.prod_pads,
+                "quantity": Decimal("10"),
+                "unit_price": Decimal("100.00"),
+                "purchase_price": Decimal("70.00"),
+            }],
+        )
+        ret = SaleReturn.objects.create(
+            sale=sale, store=sale.store, seller=sale.seller, total_refund=Decimal("1000.00"),
+        )
+        SaleReturn.objects.filter(id=ret.id).update(created_at=dt_oct)
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=items[0], product=self.prod_pads,
+            quantity=Decimal("10"), unit_price=Decimal("100.00"), total_price=Decimal("1000.00"),
+        )
+
+        # 1. September receipts view
+        res_sep = ReportBuilderService.generate({
+            "report_type": "sales", "view": "receipts", "from": "2026-09-01", "to": "2026-09-30"
+        }, self.admin)
+        self.assertEqual(res_sep["total"], 1)
+        self.assertEqual(res_sep["rows"][0]["total"], "1000.00")
+        self.assertEqual(res_sep["rows"][0]["profit"], "300.00")
+        summ_sep = {s["label"]: s["value"] for s in res_sep["summary"]}
+        self.assertEqual(summ_sep["Jami summa"], "1000.00")
+        self.assertEqual(summ_sep["Sof foyda"], "300.00")
+        self.assertEqual(summ_sep["Sotuvlar soni"], 1)
+
+        # 2. September items view
+        res_sep_items = ReportBuilderService.generate({
+            "report_type": "sales", "view": "items", "from": "2026-09-01", "to": "2026-09-30"
+        }, self.admin)
+        self.assertEqual(res_sep_items["total"], 1)
+        self.assertEqual(res_sep_items["rows"][0]["quantity"], "10")
+        self.assertEqual(res_sep_items["rows"][0]["returned_quantity"], "0")
+        self.assertEqual(res_sep_items["rows"][0]["net_quantity"], "10")
+        self.assertEqual(res_sep_items["rows"][0]["total"], "1000.00")
+        summ_sep_items = {s["label"]: s["value"] for s in res_sep_items["summary"]}
+        self.assertEqual(summ_sep_items["Jami sotilgan"], "10")
+        self.assertEqual(summ_sep_items["Jami qaytarilgan"], "0")
+        self.assertEqual(summ_sep_items["Sof sotilgan"], "10")
+        self.assertEqual(summ_sep_items["Sof tushum"], "1000.00")
+
+        # 3. October receipts view (return-only)
+        res_oct = ReportBuilderService.generate({
+            "report_type": "sales", "view": "receipts", "from": "2026-10-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_oct["total"], 1)
+        self.assertEqual(res_oct["rows"][0]["total"], "-1000.00")
+        self.assertEqual(res_oct["rows"][0]["profit"], "-300.00")
+        self.assertEqual(res_oct["rows"][0]["status"], "Qaytarim")
+        summ_oct = {s["label"]: s["value"] for s in res_oct["summary"]}
+        self.assertEqual(summ_oct["Jami summa"], "-1000.00")
+        self.assertEqual(summ_oct["Sof foyda"], "-300.00")
+        self.assertEqual(summ_oct["Sotuvlar soni"], 0)
+        self.assertEqual(summ_oct["Davrdagi qaytarimlar"], "1000.00")
+
+        # 4. October items view (return-only)
+        res_oct_items = ReportBuilderService.generate({
+            "report_type": "sales", "view": "items", "from": "2026-10-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_oct_items["total"], 1)
+        self.assertEqual(res_oct_items["rows"][0]["quantity"], "0")
+        self.assertEqual(res_oct_items["rows"][0]["returned_quantity"], "10")
+        self.assertEqual(res_oct_items["rows"][0]["net_quantity"], "-10")
+        self.assertEqual(res_oct_items["rows"][0]["total"], "-1000.00")
+        summ_oct_items = {s["label"]: s["value"] for s in res_oct_items["summary"]}
+        self.assertEqual(summ_oct_items["Jami sotilgan"], "0")
+        self.assertEqual(summ_oct_items["Jami qaytarilgan"], "10")
+        self.assertEqual(summ_oct_items["Sof sotilgan"], "-10")
+        self.assertEqual(summ_oct_items["Sof tushum"], "-1000.00")
+
+        # 5. Combined Sep–Oct receipts view
+        res_comb = ReportBuilderService.generate({
+            "report_type": "sales", "view": "receipts", "from": "2026-09-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_comb["total"], 2)
+        summ_comb = {s["label"]: s["value"] for s in res_comb["summary"]}
+        self.assertEqual(summ_comb["Jami summa"], "0.00")
+        self.assertEqual(summ_comb["Sof foyda"], "0.00")
+        self.assertEqual(summ_comb["Sotuvlar soni"], 1)
+        self.assertEqual(summ_comb["Davrdagi qaytarimlar"], "1000.00")
+
+        # 6. Combined Sep–Oct items view
+        res_comb_items = ReportBuilderService.generate({
+            "report_type": "sales", "view": "items", "from": "2026-09-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_comb_items["total"], 2)
+        summ_comb_items = {s["label"]: s["value"] for s in res_comb_items["summary"]}
+        self.assertEqual(summ_comb_items["Jami sotilgan"], "10")
+        self.assertEqual(summ_comb_items["Jami qaytarilgan"], "10")
+        self.assertEqual(summ_comb_items["Sof sotilgan"], "0")
+        self.assertEqual(summ_comb_items["Sof tushum"], "0.00")
+
+    def test_38_cross_period_sep_sale_oct_partial_return(self):
+        """
+        Sep 30: Sale = 1,000,000, qty = 10
+        Oct 01: Partial Return = 300,000, qty = 3
+        """
+        dt_sep = timezone.make_aware(datetime(2026, 9, 30, 18, 0, 0))
+        dt_oct = timezone.make_aware(datetime(2026, 10, 1, 10, 0, 0))
+
+        sale, items = self._create_sale(
+            created_at=dt_sep,
+            items=[{
+                "product": self.prod_pads,
+                "quantity": Decimal("10"),
+                "unit_price": Decimal("100.00"),
+                "purchase_price": Decimal("70.00"),
+            }],
+        )
+        ret = SaleReturn.objects.create(
+            sale=sale, store=sale.store, seller=sale.seller, total_refund=Decimal("300.00"),
+        )
+        SaleReturn.objects.filter(id=ret.id).update(created_at=dt_oct)
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=items[0], product=self.prod_pads,
+            quantity=Decimal("3"), unit_price=Decimal("100.00"), total_price=Decimal("300.00"),
+        )
+
+        # September receipts
+        res_sep = ReportBuilderService.generate({
+            "report_type": "sales", "view": "receipts", "from": "2026-09-01", "to": "2026-09-30"
+        }, self.admin)
+        self.assertEqual(res_sep["total"], 1)
+        self.assertEqual(res_sep["rows"][0]["total"], "1000.00")
+        self.assertEqual(res_sep["rows"][0]["profit"], "300.00")
+
+        # October receipts
+        res_oct = ReportBuilderService.generate({
+            "report_type": "sales", "view": "receipts", "from": "2026-10-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_oct["total"], 1)
+        self.assertEqual(res_oct["rows"][0]["total"], "-300.00")
+        self.assertEqual(res_oct["rows"][0]["profit"], "-90.00")
+
+        # October items
+        res_oct_items = ReportBuilderService.generate({
+            "report_type": "sales", "view": "items", "from": "2026-10-01", "to": "2026-10-31"
+        }, self.admin)
+        self.assertEqual(res_oct_items["total"], 1)
+        self.assertEqual(res_oct_items["rows"][0]["quantity"], "0")
+        self.assertEqual(res_oct_items["rows"][0]["returned_quantity"], "3")
+        self.assertEqual(res_oct_items["rows"][0]["net_quantity"], "-3")
+        self.assertEqual(res_oct_items["rows"][0]["total"], "-300.00")
+
+    def test_39_soft_deleted_parent_sale_excluded(self):
+        """
+        Soft-deleted parent sale and its returns must be excluded.
+        """
+        dt_now = timezone.now()
+        sale, items = self._create_sale(
+            items=[{"product": self.prod_pads, "quantity": Decimal("2"), "unit_price": Decimal("100.00")}],
+        )
+        ret = SaleReturn.objects.create(
+            sale=sale, store=sale.store, seller=sale.seller, total_refund=Decimal("200.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=items[0], product=self.prod_pads,
+            quantity=Decimal("2"), unit_price=Decimal("100.00"), total_price=Decimal("200.00"),
+        )
+
+        # Soft delete the sale
+        Sale.objects.filter(id=sale.id).update(deleted_at=dt_now)
+
+        res_rec = ReportBuilderService.generate({"report_type": "sales", "view": "receipts"}, self.admin)
+        self.assertEqual(res_rec["total"], 0)
+        summ_rec = {s["label"]: s["value"] for s in res_rec["summary"]}
+        self.assertEqual(summ_rec["Jami summa"], "0.00")
+        self.assertNotIn("Davrdagi qaytarimlar", summ_rec)
+
+        res_items = ReportBuilderService.generate({"report_type": "sales", "view": "items"}, self.admin)
+        self.assertEqual(res_items["total"], 0)
+        summ_items = {s["label"]: s["value"] for s in res_items["summary"]}
+        self.assertEqual(summ_items["Jami sotilgan"], "0")
+        self.assertEqual(summ_items["Sof tushum"], "0.00")
+
+    def test_40_debt_and_payment_semantics(self):
+        """
+        Sale with partial payment generates debt.
+        """
+        sale = Sale.objects.create(
+            store=self.store1, seller=self.seller1, customer=self.customer1,
+            total_amount=Decimal("1000.00"), paid_amount=Decimal("400.00"),
+            status=Sale.Status.DEBT, payment_type=Sale.PaymentType.CASH,
+        )
+        SaleItem.objects.create(
+            sale=sale, product=self.prod_pads, quantity=Decimal("10"),
+            unit_price=Decimal("100.00"), purchase_price=Decimal("60.00"),
+            total_price=Decimal("1000.00"),
+        )
+        res = ReportBuilderService.generate({"report_type": "sales", "view": "receipts"}, self.admin)
+        self.assertEqual(res["total"], 1)
+        row = res["rows"][0]
+        self.assertEqual(row["total"], "1000.00")
+        self.assertEqual(row["paid"], "400.00")
+        self.assertEqual(row["debt"], "600.00")
+        self.assertEqual(row["profit"], "400.00")
+
+        summ = {s["label"]: s["value"] for s in res["summary"]}
+        self.assertEqual(summ["Jami summa"], "1000.00")
+        self.assertEqual(summ["To'langan"], "400.00")
+        self.assertEqual(summ["Qarz"], "600.00")
+        self.assertEqual(summ["Sof foyda"], "400.00")
+
+    def test_41_pagination_across_combined_streams(self):
+        """
+        Pagination across combined sales and returns.
+        """
+        t_base = timezone.now() - timedelta(days=20)
+        # Create 6 sales and 4 returns = 10 transactions
+        for i in range(6):
+            s, items = self._create_sale(
+                created_at=t_base + timedelta(days=i),
+                items=[{"product": self.prod_pads, "quantity": Decimal("1"), "unit_price": Decimal("100.00")}],
+            )
+            if i < 4:
+                ret = SaleReturn.objects.create(
+                    sale=s, store=s.store, seller=s.seller, total_refund=Decimal("50.00"),
+                )
+                SaleReturn.objects.filter(id=ret.id).update(created_at=t_base + timedelta(days=i, hours=2))
+                SaleReturnItem.objects.create(
+                    sale_return=ret, sale_item=items[0], product=self.prod_pads,
+                    quantity=Decimal("0.5"), unit_price=Decimal("100.00"), total_price=Decimal("50.00"),
+                )
+
+        # Page 1, limit 4
+        p1 = ReportBuilderService.generate({"report_type": "sales", "view": "receipts", "page": "1", "limit": "4"}, self.admin)
+        self.assertEqual(p1["total"], 10)
+        self.assertEqual(len(p1["rows"]), 4)
+        self.assertEqual(p1["page"], 1)
+
+        # Page 2, limit 4
+        p2 = ReportBuilderService.generate({"report_type": "sales", "view": "receipts", "page": "2", "limit": "4"}, self.admin)
+        self.assertEqual(p2["total"], 10)
+        self.assertEqual(len(p2["rows"]), 4)
+        self.assertEqual(p2["page"], 2)
+
+        # Page 3, limit 4
+        p3 = ReportBuilderService.generate({"report_type": "sales", "view": "receipts", "page": "3", "limit": "4"}, self.admin)
+        self.assertEqual(len(p3["rows"]), 2)
+
+    def test_42_excel_and_csv_export_period_transactional(self):
+        """
+        Exporting to Excel and CSV preserves negative return transactions.
+        """
+        sale, items = self._create_sale(
+            items=[{"product": self.prod_pads, "quantity": Decimal("2"), "unit_price": Decimal("100.00")}],
+        )
+        ret = SaleReturn.objects.create(
+            sale=sale, store=sale.store, seller=sale.seller, total_refund=Decimal("100.00"),
+        )
+        SaleReturnItem.objects.create(
+            sale_return=ret, sale_item=items[0], product=self.prod_pads,
+            quantity=Decimal("1"), unit_price=Decimal("100.00"), total_price=Decimal("100.00"),
+        )
+
+        # Excel Export
+        req_excel = self.factory.get("/api/reports/builder/export/?report_type=sales&export_type=excel")
+        force_authenticate(req_excel, user=self.export_user)
+        res_excel = ReportBuilderExportAPIView.as_view()(req_excel)
+        self.assertEqual(res_excel.status_code, 200)
+
+        wb = openpyxl.load_workbook(io.BytesIO(res_excel.content))
+        ws_cheklar = wb["Cheklar"]
+        ws_items = wb["Mahsulotlar"]
+        # Cheklar has 1 header + 2 transactions (sale + return) = 3 rows
+        self.assertEqual(ws_cheklar.max_row, 3)
+        # Mahsulotlar has 1 header + 2 items (sale item + return item) = 3 rows
+        self.assertEqual(ws_items.max_row, 3)
+
+        # CSV Export
+        req_csv = self.factory.get("/api/reports/builder/export/?report_type=sales&export_type=csv&view=receipts")
+        force_authenticate(req_csv, user=self.export_user)
+        res_csv = ReportBuilderExportAPIView.as_view()(req_csv)
+        self.assertEqual(res_csv.status_code, 200)
+        csv_text = res_csv.content.decode("utf-8-sig")
+        self.assertIn("-100.00", csv_text)
 
