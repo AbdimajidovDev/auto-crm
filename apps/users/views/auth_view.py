@@ -18,6 +18,13 @@ from apps.users.serializers import (
     ResetPasswordSerializer,
 )
 from apps.users.services import PasswordResetService
+from apps.users.throttles import (
+    LoginIpThrottle,
+    LoginIdentifierThrottle,
+    PasswordResetRequestIpThrottle,
+    PasswordResetRequestEmailThrottle,
+    PasswordResetConfirmThrottle,
+)
 
 
 @extend_schema(tags=["Login"],
@@ -27,6 +34,7 @@ class AdminLoginAPIView(APIView):
     permission_classes = (permissions.AllowAny,)
     authentication_classes = ()
     serializer_class = AdminLoginSerializer
+    throttle_classes = [LoginIpThrottle, LoginIdentifierThrottle]
 
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
@@ -274,6 +282,7 @@ class ChangePasswordAPIView(APIView):
 class ForgotPasswordView(APIView):
     permission_classes = (permissions.AllowAny,)
     serializer_class = ForgotPasswordSerializer
+    throttle_classes = [PasswordResetRequestIpThrottle, PasswordResetRequestEmailThrottle]
 
     def post(self, request):
         serializer = self.serializer_class(data=request.data)
@@ -303,6 +312,7 @@ class ForgotPasswordView(APIView):
 class ResetPasswordView(APIView):
     permission_classes = (permissions.AllowAny,)
     serializer_class = ResetPasswordSerializer
+    throttle_classes = [PasswordResetConfirmThrottle]
 
     def post(self, request, uidb64, token):
         serializer = self.serializer_class(data=request.data)

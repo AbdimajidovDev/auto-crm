@@ -17,6 +17,7 @@ import xlsxwriter
 from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import permissions
+from rest_framework.response import Response
 from rest_framework.views import APIView
 
 
@@ -505,9 +506,7 @@ class BaseExcelExportAPIView(APIView):
         else:
             worksheet.write(row, col, str(value), text_fmt)
 
-    def get(self, request):
-        queryset = self.filter_by_date(request, self.get_queryset(request))
-
+    def generate_workbook(self, request, queryset) -> bytes:
         buffer = io.BytesIO()
         workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
         fmts = get_report_excel_formats(workbook)
@@ -534,10 +533,60 @@ class BaseExcelExportAPIView(APIView):
 
         workbook.close()
         buffer.seek(0)
+        return buffer.getvalue()
 
+    def get(self, request):
+        queryset = self.filter_by_date(request, self.get_queryset(request))
+
+        is_async = (
+            request.query_params.get("async") in ("true", "1")
+            or request.headers.get("X-Async") in ("true", "1")
+        )
+
+        if is_async:
+            from apps.common.models import AsyncJob
+            from apps.common.services.async_job_service import AsyncJobService
+            from django.core.files.base import ContentFile
+
+            def _export_job_task(job, view_cls, user_id, q_params):
+                from django.test import RequestFactory
+                from rest_framework.request import Request
+                from apps.users.models import User
+                u = User.objects.get(id=user_id)
+                rf = RequestFactory()
+                raw_req = rf.get("/export/", dict(q_params))
+                raw_req.user = u
+                drf_req = Request(raw_req)
+                drf_req.user = u
+                v = view_cls()
+                q = v.filter_by_date(drf_req, v.get_queryset(drf_req))
+                content = v.generate_workbook(drf_req, q)
+                st = timezone.localdate().strftime("%Y-%m-%d")
+                fname = f"{v.filename}_{st}.xlsx"
+                job.output_file.save(fname, ContentFile(content), save=True)
+                return {"filename": fname, "size": len(content)}
+
+            job = AsyncJobService.create_and_submit(
+                job_type=AsyncJob.JobType.EXCEL_EXPORT,
+                user=request.user,
+                payload={"filename": self.filename, "params": dict(request.query_params)},
+                task_func=_export_job_task,
+                task_args=(self.__class__, request.user.id, request.query_params),
+            )
+            return Response(
+                {
+                    "job_id": str(job.id),
+                    "status": job.status,
+                    "message": "Eksport fayli fon rejimida tayyorlanmoqda. Holatni /api/jobs/<job_id>/status/ orqali kuzatib boring.",
+                    "status_url": f"/api/jobs/{job.id}/status/",
+                },
+                status=202,
+            )
+
+        content = self.generate_workbook(request, queryset)
         stamp = timezone.localdate().strftime("%Y-%m-%d")
         response = HttpResponse(
-            buffer.getvalue(),
+            content,
             content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
         response["Content-Disposition"] = f'attachment; filename="{self.filename}_{stamp}.xlsx"'

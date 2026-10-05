@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from django.db import IntegrityError, transaction
-from django.db.models import Max, Sum
+from django.db.models import F, Max, Q, Sum, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from asgiref.sync import async_to_sync
@@ -49,79 +52,98 @@ class LowStockService:
             (sources: qayerda qancha borligi bilan, ko'pdan ozga saralangan);
           * hech qayerda bo'lmasa -> XARID kerak (yetkazib beruvchidan olish).
 
-        Bitta aggregate SQL + Python guruhlash. store filtri sources
-        hisoblangandan KEYIN qo'llanadi — boshqa do'konlardagi zaxira
-        ma'lumoti yo'qolmasligi uchun.
+        DB-LEVEL OPTIMIZATION:
+        Barcha do'kon/mahsulotlarni xotiraga yuklash o'rniga, faqat qoldig'i
+        kam qolgan (qty <= threshold) va filtrlarga (store, search) mos keladigan
+        partiyalar DB darajasida (HAVING/WHERE) filtrlanadi. Transfer manbalari (sources)
+        esa faqat shu kam qolgan mahsulotlar uchun 1 ta qo'shimcha so'rov bilan olinadi.
         """
         from apps.products.models import Product, ProductBatch
 
-        rows = (
+        candidate_qs = (
             ProductBatch.objects
             .filter(
                 product__status=Product.ProductStatus.ACTIVE,
                 store__is_active=True,
             )
+        )
+        if store_id:
+            candidate_qs = candidate_qs.filter(store_id=store_id)
+        if search:
+            needle = str(search).strip()
+            if needle:
+                candidate_qs = candidate_qs.filter(
+                    Q(product__name__icontains=needle) | Q(product__sku__icontains=needle)
+                )
+
+        candidate_rows = list(
+            candidate_qs
             .values(
                 "store_id", "store__name", "product_id",
                 "product__name", "product__sku", "product__min_stock",
             )
+            .annotate(
+                qty=Sum("quantity"),
+                threshold=Coalesce(F("product__min_stock"), Value(Decimal("0"))),
+            )
+            .filter(qty__lte=F("threshold"))
+        )
+
+        if not candidate_rows:
+            return []
+
+        # Faqat kam qolgan mahsulotlarning boshqa faol do'konlardagi musbat qoldiqlari
+        candidate_product_ids = {r["product_id"] for r in candidate_rows}
+        other_batches = list(
+            ProductBatch.objects
+            .filter(
+                product_id__in=candidate_product_ids,
+                store__is_active=True,
+                quantity__gt=0,
+            )
+            .values("store_id", "store__name", "product_id")
             .annotate(qty=Sum("quantity"))
         )
 
-        per_product = {}
-        for r in rows:
-            per_product.setdefault(r["product_id"], []).append(r)
+        sources_by_product = {}
+        for b in other_batches:
+            sources_by_product.setdefault(b["product_id"], []).append({
+                "store": b["store_id"],
+                "store_name": b["store__name"],
+                "quantity": b["qty"] or Decimal("0"),
+            })
 
         results = []
-        for product_id, prows in per_product.items():
-            for r in prows:
-                qty = r["qty"] or 0
-                # min_stock kiritilmagan (0) — "tugaganda" (qty <= 0) chiqadi
-                threshold = r["product__min_stock"] or 0
-                if qty > threshold:
-                    continue
-                sources = sorted(
-                    (
-                        {
-                            "store": o["store_id"],
-                            "store_name": o["store__name"],
-                            "quantity": o["qty"] or 0,
-                        }
-                        for o in prows
-                        if o["store_id"] != r["store_id"] and (o["qty"] or 0) > 0
-                    ),
-                    key=lambda s: -s["quantity"],
-                )
-                available = sum(s["quantity"] for s in sources)
-                results.append({
-                    "id": f"{r['store_id']}-{product_id}",
-                    "store": r["store_id"],
-                    "store_name": r["store__name"],
-                    "product": product_id,
-                    "product_name": r["product__name"],
-                    "sku": r["product__sku"] or "",
-                    "current_quantity": qty,
-                    "min_stock": threshold,
-                    "action_type": "transfer" if available > 0 else "purchase",
-                    "status": "open",
-                    "available_elsewhere": available,
-                    "sources": sources,
-                    "created_at": None,
-                    "resolved_at": None,
-                })
+        for r in candidate_rows:
+            qty = r["qty"] if r["qty"] is not None else Decimal("0")
+            threshold = r["threshold"] if r["threshold"] is not None else Decimal("0")
+            all_sources = sources_by_product.get(r["product_id"], [])
+            sources = sorted(
+                [s for s in all_sources if s["store"] != r["store_id"] and s["quantity"] > 0],
+                key=lambda s: -s["quantity"],
+            )
+            available = sum((s["quantity"] for s in sources), Decimal("0"))
+            action_type_val = "transfer" if available > 0 else "purchase"
 
-        if store_id:
-            results = [x for x in results if str(x["store"]) == str(store_id)]
-        if action_type in ("purchase", "transfer"):
-            results = [x for x in results if x["action_type"] == action_type]
-        if search:
-            needle = str(search).strip().lower()
-            if needle:
-                results = [
-                    x for x in results
-                    if needle in (x["product_name"] or "").lower()
-                    or needle in (x["sku"] or "").lower()
-                ]
+            if action_type in ("purchase", "transfer") and action_type_val != action_type:
+                continue
+
+            results.append({
+                "id": f"{r['store_id']}-{r['product_id']}",
+                "store": r["store_id"],
+                "store_name": r["store__name"],
+                "product": r["product_id"],
+                "product_name": r["product__name"],
+                "sku": r["product__sku"] or "",
+                "current_quantity": qty,
+                "min_stock": threshold,
+                "action_type": action_type_val,
+                "status": "open",
+                "available_elsewhere": available,
+                "sources": sources,
+                "created_at": None,
+                "resolved_at": None,
+            })
 
         # Eng kritigi birinchi: qoldiq/minimal nisbati o'sish tartibida
         results.sort(
